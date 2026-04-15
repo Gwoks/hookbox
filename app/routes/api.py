@@ -1,10 +1,11 @@
 """JSON API routes with user authentication"""
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 import aiosqlite
 from datetime import datetime
 import json
+from fastapi import Header
 
 from app.database import get_db, create_user_token, hash_email
 from app.models import (
@@ -20,9 +21,9 @@ router = APIRouter(prefix="/api", tags=["API"])
 
 # --- User Authentication ---
 
-def get_current_user(user_id: str = Header(...), email: str = Header(...)) -> dict:
+def get_current_user(x_user_id: str = Header(...), x_email: str = Header(...)) -> dict:
     """Validate user from headers"""
-    return {"user_id": user_id, "email": email}
+    return {"user_id": x_user_id, "email": x_email}
 
 @router.post("/register", response_model=UserResponse)
 async def register(data: UserRegister, db: aiosqlite.Connection = Depends(get_db)):
