@@ -265,7 +265,8 @@ async def set_mock_rule(
     """Set or update mock rule for endpoint"""
     # Verify ownership
     async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
-        if not await cursor.fetchone() or cursor.fetchone()['user_id'] != current_user['user_id']:
+        row = await cursor.fetchone()
+        if not row or row['user_id'] != current_user['user_id']:
             raise HTTPException(status_code=404, detail="Endpoint not found")
     
     await db.execute(
