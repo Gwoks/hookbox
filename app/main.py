@@ -7,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 import json
 import asyncio
 from datetime import datetime
+from pathlib import Path
 
 from app.database import init_db, get_db
 from app.routes.api import router as api_router
@@ -15,8 +16,10 @@ from app.utils.cleanup import start_cleanup_task
 
 app = FastAPI(title="WebhookCatch", description="Self-hosted webhook testing service", version="1.0.0")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+import os
+BASE_DIR = Path(__file__).parent.parent
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(api_router)
 app.include_router(webhook_router)
 
