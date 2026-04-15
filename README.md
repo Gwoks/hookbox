@@ -1,29 +1,137 @@
-# 🪝 HookBox
+# 📦 HookBox
 
 *"Catch every webhook. Debug with confidence."*
 
-Self-hosted webhook testing service for developers.
+Self-hosted webhook testing service with multi-user support.
 
 ## Features
 
-- ✅ Unique webhook endpoints (`/hook/<id>`)
-- ✅ Capture method, headers, body, query params
-- ✅ Web dashboard to view requests
-- ✅ Mock response configuration
-- ✅ Auto-delete expired data
-- ✅ GitHub auto-deploy ready
+- ✅ **Multi-user** - Email-based accounts, each user isolated
+- ✅ **Capture webhooks** - Method, headers, body, query params
+- ✅ **Web dashboard** - View and manage all your endpoints
+- ✅ **Mock responses** - Configure custom responses for testing
+- ✅ **Auto-reset** - Database clears daily at midnight
+- ✅ **GitHub auto-deploy** - Webhook receiver for CI/CD
 
-## Quick Start
+## Requirements
+
+- Python 3.14+ (with pip)
+- Linux server (for cronjobs)
+
+## Installation
 
 ```bash
-# Install dependencies
+# 1. Clone the repository
+git clone https://github.com/Gwoks/hookbox.git
+cd hookbox
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# Run server
+# 3. Run the server
 python -m app.main
 
-# Open in browser
+# 4. Open in browser
 http://localhost:5000
+```
+
+## First-time Setup
+
+1. Visit `http://localhost:5000/register`
+2. Enter your email to create an account
+3. Create your first webhook endpoint
+4. Share your unique webhook URL
+
+## Webhook URL Format
+
+```
+http://your-server:5000/hook/{user_id}/{endpoint_id}
+```
+
+Example:
+```
+http://localhost:5000/hook/abc123def456/xyZ8jK2d
+```
+
+## API Documentation
+
+Visit `/docs` for Swagger API documentation.
+
+## API Authentication
+
+All API endpoints (except `/api/register` and `/api/login`) require headers:
+- `X-User-ID`: Your user ID (from registration)
+- `X-Email`: Your email address
+
+### Register
+```bash
+curl -X POST http://localhost:5000/api/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com"}'
+```
+
+### Create Endpoint
+```bash
+curl -X POST http://localhost:5000/api/endpoints \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: your-user-id" \
+  -H "X-Email: you@example.com"
+```
+
+### Send Webhook
+```bash
+curl -X POST http://localhost:5000/hook/user-id/endpoint-id \
+  -H "Content-Type: application/json" \
+  -d '{"event": "test"}'
+```
+
+## Configuration
+
+Edit `config.py` to customize:
+
+```python
+HOST = "0.0.0.0"      # Server host
+PORT = 5000           # Server port
+ENDPOINT_ID_LENGTH = 8  # Random ID length
+DEFAULT_EXPIRY_HOURS = 24  # Endpoint expiry
+AUTO_DELETE_HOURS = 168    # Auto-cleanup (7 days)
+```
+
+## Production Deployment
+
+### Systemd Service
+
+Create `/etc/systemd/system/hookbox.service`:
+```ini
+[Unit]
+Description=HookBox Webhook Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/hookbox
+ExecStart=/home/linuxbrew/.linuxbrew/bin/python3.14 -m app.main
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable hookbox
+sudo systemctl start hookbox
+```
+
+### Cronjob (Auto-reset at midnight)
+
+```bash
+# Add to crontab
+crontab -e
+
+# Add this line:
+0 0 * * * /home/ubuntu/hookbox/reset_db.sh >> /home/ubuntu/hookbox/cron_reset.log 2>&1
 ```
 
 ## Tech Stack
@@ -35,26 +143,32 @@ http://localhost:5000
 | Frontend | HTML + Tailwind CSS |
 | Server | Uvicorn (ASGI) |
 
-## API Endpoints
+## Project Structure
 
-| Method | URL | Description |
-|--------|-----|-------------|
-| POST | `/api/endpoints` | Create endpoint |
-| GET | `/api/endpoints` | List endpoints |
-| GET | `/api/endpoints/<id>` | Get endpoint |
-| DELETE | `/api/endpoints/<id>` | Delete endpoint |
-| GET | `/api/endpoints/<id>/requests` | List requests |
-| GET | `/api/requests/<id>` | Get request detail |
-| PUT | `/api/endpoints/<id>/mock` | Set mock response |
-| GET | `/api/endpoints/<id>/mock` | Get mock response |
-| DELETE | `/api/endpoints/<id>/mock` | Delete mock |
+```
+hookbox/
+├── app/
+│   ├── __init__.py
+│   ├── main.py          # FastAPI app
+│   ├── database.py      # SQLite setup
+│   ├── models.py        # Pydantic models
+│   └── routes/
+│       ├── api.py       # JSON API
+│       └── webhook.py   # GitHub webhook
+├── templates/
+│   ├── base.html
+│   ├── index.html
+│   ├── dashboard.html
+│   ├── mock.html
+│   ├── login.html
+│   └── register.html
+├── data/                # SQLite database
+├── config.py
+├── requirements.txt
+├── reset_db.sh          # Daily reset script
+└── README.md
+```
 
-## Webhook URL
+## License
 
-Any request to `/hook/<endpoint_id>` will be captured and return the configured mock response (if set).
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GITHUB_WEBHOOK_SECRET` | Secret for GitHub webhook verification | (none) |
+MIT
