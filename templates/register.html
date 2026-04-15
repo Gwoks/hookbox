@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}HookBox - Register{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto">
+    <div class="card p-8">
+        <div class="text-center mb-8">
+            <div class="text-5xl mb-4">📦</div>
+            <h1 class="text-2xl font-bold">Create Your HookBox</h1>
+            <p class="text-[#8b949e] mt-2">Register to start catching webhooks</p>
+        </div>
+        
+        <form id="register-form" onsubmit="handleRegister(event)">
+            <div class="mb-6">
+                <label class="block text-sm mb-2">Email Address</label>
+                <input type="email" id="email" required
+                    class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none"
+                    placeholder="you@example.com">
+                <p class="text-xs text-[#8b949e] mt-1">We'll remember your webhooks with this email</p>
+            </div>
+            
+            <button type="submit" class="btn-primary w-full py-3 text-lg">
+                Create Account
+            </button>
+        </form>
+        
+        <div class="mt-6 text-center text-sm text-[#8b949e]">
+            Already have an account? <a href="/login" class="text-[#58a6ff] hover:underline">Sign In</a>
+        </div>
+    </div>
+</div>
+
+<script>
+async function handleRegister(event) {
+    event.preventDefault();
+    const email = document.getElementById('email').value;
+    
+    try {
+        const response = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        
+        if (!response.ok) {
+            alert('Registration failed');
+            return;
+        }
+        
+        const userData = await response.json();
+        localStorage.setItem('hookbox_user', JSON.stringify(userData));
+        showToast('Account created!');
+        window.location.href = '/';
+    } catch (err) {
+        console.error('Registration error:', err);
+        alert('Registration failed. Please try again.');
+    }
+}
+
+// Check if already logged in
+const stored = localStorage.getItem('hookbox_user');
+if (stored) {
+    window.location.href = '/';
+}
+</script>
+{% endblock %}

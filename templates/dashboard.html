@@ -3,103 +3,171 @@
 {% block title %}HookBox - Dashboard{% endblock %}
 
 {% block content %}
-<div id="dashboard"><div class="text-[#8b949e]">Loading...</div></div>
+<div id="dashboard">
+    <div class="flex items-center gap-2 text-sm text-[#8b949e] mb-4">
+        <a href="/" class="hover:text-[#58a6ff]">Endpoints</a>
+        <span>/</span>
+        <span id="endpoint-id">Loading...</span>
+    </div>
+</div>
 
 <div id="modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
-<div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden">
-<div class="p-4 border-b border-[#30363d] flex justify-between items-center">
-<h3 class="font-bold text-lg" id="modal-title">Request Details</h3>
-<button onclick="closeModal()" class="text-2xl">&times;</button>
-</div>
-<div class="p-4 overflow-auto max-h-[70vh]" id="modal-content"></div>
-</div>
+    <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden">
+        <div class="p-4 border-b border-[#30363d] flex justify-between items-center">
+            <h3 class="font-bold text-lg" id="modal-title">Request Details</h3>
+            <button onclick="closeModal()" class="text-2xl">&times;</button>
+        </div>
+        <div class="p-4 overflow-auto max-h-[70vh]" id="modal-content"></div>
+    </div>
 </div>
 
 <script>
+let currentUser = null;
 const endpointId = window.location.pathname.split('/').pop();
 let requests = [];
 
+async function init() {
+    const stored = localStorage.getItem('hookbox_user');
+    if (!stored) {
+        window.location.href = '/login';
+        return;
+    }
+    currentUser = JSON.parse(stored);
+    await loadDashboard();
+}
+
 async function loadDashboard() {
     try {
-        const epResponse = await fetch(`/api/endpoints/${endpointId}`);
-        if (!epResponse.ok) { document.getElementById('dashboard').innerHTML = '<div class="card p-8 text-center"><p class="text-red-500">Endpoint not found</p></div>'; return; }
+        const epResponse = await fetch(`/api/endpoints/${endpointId}`, {
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
+        
+        if (!epResponse.ok) {
+            document.getElementById('dashboard').innerHTML = '<div class="card p-8 text-center"><p class="text-red-500">Endpoint not found</p></div>';
+            return;
+        }
+        
         const endpoint = await epResponse.json();
-        const reqResponse = await fetch(`/api/endpoints/${endpointId}/requests`);
+        document.getElementById('endpoint-id').textContent = endpoint.id;
+        
+        const reqResponse = await fetch(`/api/endpoints/${endpointId}/requests`, {
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
         requests = await reqResponse.json();
+        
         renderDashboard(endpoint);
-    } catch (err) { console.error('Error loading dashboard:', err); }
+    } catch (err) {
+        console.error('Error loading dashboard:', err);
+    }
 }
 
 function renderDashboard(endpoint) {
     const container = document.getElementById('dashboard');
     container.innerHTML = `
-    <div class="mb-6">
-    <div class="flex items-center gap-2 text-sm text-[#8b949e] mb-2">
-    <a href="/" class="hover:text-[#58a6ff]">Endpoints</a><span>/</span><span>${endpoint.id}</span>
+    <div class="flex justify-between items-start mb-6">
+        <div>
+            <h1 class="text-2xl font-bold font-mono text-[#58a6ff]">${endpoint.id}</h1>
+            ${endpoint.name ? `<p class="text-[#8b949e]">${endpoint.name}</p>` : ''}
+        </div>
+        <div class="flex gap-2">
+            <a href="/m/${endpoint.id}" class="btn-secondary">Mock</a>
+            <button onclick="deleteEndpoint('${endpoint.id}')" class="btn-danger">Delete</button>
+        </div>
     </div>
-    <div class="flex justify-between items-start">
-    <div>
-    <h1 class="text-2xl font-bold font-mono text-[#58a6ff]">${endpoint.id}</h1>
-    ${endpoint.name ? `<p class="text-[#8b949e]">${endpoint.name}</p>` : ''}
-    </div>
-    <div class="flex gap-2">
-    <a href="/m/${endpoint.id}" class="btn-secondary">Mock</a>
-    <button onclick="deleteEndpoint('${endpoint.id}')" class="btn-danger">Delete</button>
-    </div>
-    </div>
-    </div>
+    
     <div class="card p-4 mb-6">
-    <label class="text-sm text-[#8b949e] mb-2 block">Webhook URL</label>
-    <div class="flex items-center gap-2">
-    <code class="flex-1 bg-[#0d1117] p-3 rounded font-mono text-sm truncate">${window.location.origin}/hook/${endpoint.id}</code>
-    <button onclick="copyToClipboard('${window.location.origin}/hook/${endpoint.id}')" class="btn-secondary">Copy</button>
+        <label class="text-sm text-[#8b949e] mb-2 block">Webhook URL</label>
+        <div class="flex items-center gap-2">
+            <code class="flex-1 bg-[#0d1117] p-3 rounded font-mono text-sm truncate">${window.location.origin}/hook/${currentUser.id}/${endpoint.id}</code>
+            <button onclick="copyToClipboard('${window.location.origin}/hook/${currentUser.id}/${endpoint.id}')" class="btn-secondary">Copy</button>
+        </div>
     </div>
-    </div>
+    
     <div class="grid grid-cols-3 gap-4 mb-6">
-    <div class="card p-4 text-center"><div class="text-2xl font-bold text-[#58a6ff]">${requests.length}</div><div class="text-sm text-[#8b949e]">Total Requests</div></div>
-    <div class="card p-4 text-center"><div class="text-2xl font-bold text-[#3fb950]">${endpoint.mock_enabled ? 'On' : 'Off'}</div><div class="text-sm text-[#8b949e]">Mock Response</div></div>
-    <div class="card p-4 text-center"><div class="text-2xl font-bold">${formatDate(endpoint.created_at)}</div><div class="text-sm text-[#8b949e]">Created</div></div>
+        <div class="card p-4 text-center">
+            <div class="text-2xl font-bold text-[#58a6ff]">${requests.length}</div>
+            <div class="text-sm text-[#8b949e]">Total Requests</div>
+        </div>
+        <div class="card p-4 text-center">
+            <div class="text-2xl font-bold text-[#3fb950]">${endpoint.mock_enabled ? 'On' : 'Off'}</div>
+            <div class="text-sm text-[#8b949e]">Mock Response</div>
+        </div>
+        <div class="card p-4 text-center">
+            <div class="text-2xl font-bold">${formatDate(endpoint.created_at)}</div>
+            <div class="text-sm text-[#8b949e]">Created</div>
+        </div>
     </div>
+    
     <div class="card">
-    <div class="p-4 border-b border-[#30363d]"><h2 class="font-bold">Captured Requests</h2></div>
-    <div id="requests-list">${renderRequestsList()}</div>
+        <div class="p-4 border-b border-[#30363d]"><h2 class="font-bold">Captured Requests</h2></div>
+        <div id="requests-list">${renderRequestsList()}</div>
     </div>`;
 }
 
 function renderRequestsList() {
-    if (requests.length === 0) return `<div class="p-12 text-center text-[#8b949e]"><p>No requests captured yet</p><p class="text-sm mt-2">Send a webhook to the URL above</p></div>`;
-    return `<table class="w-full"><thead><tr class="text-left text-sm text-[#8b949e] border-b border-[#30363d]"><th class="p-3">Method</th><th class="p-3">Path</th><th class="p-3">Content-Type</th><th class="p-3">Time</th><th class="p-3">Actions</th></tr></thead><tbody>
-    ${requests.map(req => `<tr class="border-b border-[#21262d] hover:bg-[#21262d] cursor-pointer" onclick="showRequestDetail(${req.id})">
-    <td class="p-3"><span class="badge badge-method">${req.method}</span></td>
-    <td class="p-3 font-mono text-sm">${req.path}</td>
-    <td class="p-3 text-sm text-[#8b949e]">${req.content_type || '-'}</td>
-    <td class="p-3 text-sm text-[#8b949e]">${formatDate(req.timestamp)}</td>
-    <td class="p-3"><button onclick="event.stopPropagation(); showRequestDetail(${req.id})" class="btn-secondary text-sm">View</button></td></tr>`).join('')}
-    </tbody></table>`;
+    if (requests.length === 0) return `<div class="p-12 text-center text-[#8b949e]"><p>No requests captured yet</p></div>`;
+    return `<table class="w-full">
+        <thead><tr class="text-left text-sm text-[#8b949e] border-b border-[#30363d]">
+            <th class="p-3">Method</th><th class="p-3">Path</th><th class="p-3">Content-Type</th>
+            <th class="p-3">Time</th><th class="p-3">Actions</th>
+        </tr></thead>
+        <tbody>${requests.map(req => `<tr class="border-b border-[#21262d] hover:bg-[#21262d] cursor-pointer" onclick="showRequestDetail(${req.id})">
+            <td class="p-3"><span class="badge badge-method">${req.method}</span></td>
+            <td class="p-3 font-mono text-sm">${req.path}</td>
+            <td class="p-3 text-sm text-[#8b949e]">${req.content_type || '-'}</td>
+            <td class="p-3 text-sm text-[#8b949e]">${formatDate(req.timestamp)}</td>
+            <td class="p-3"><button onclick="event.stopPropagation(); showRequestDetail(${req.id})" class="btn-secondary text-sm">View</button></td>
+        </tr>`).join('')}</tbody></table>`;
 }
 
 async function showRequestDetail(requestId) {
     try {
-        const response = await fetch(`/api/requests/${requestId}`);
+        const response = await fetch(`/api/requests/${requestId}`, {
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
         const req = await response.json();
         document.getElementById('modal-title').textContent = `${req.method} ${req.path}`;
         document.getElementById('modal-content').innerHTML = `
         <div class="space-y-6">
-        <div><label class="text-sm text-[#8b949e]">Timestamp</label><p>${new Date(req.timestamp).toLocaleString()}</p></div>
-        <div><label class="text-sm text-[#8b949e] mb-2 block">Headers</label><pre><code>${JSON.stringify(req.headers, null, 2)}</code></pre></div>
-        ${Object.keys(req.query_params || {}).length > 0 ? `<div><label class="text-sm text-[#8b949e] mb-2 block">Query Parameters</label><pre><code>${JSON.stringify(req.query_params, null, 2)}</code></pre></div>` : ''}
-        <div><label class="text-sm text-[#8b949e] mb-2 block">Body</label>${req.body ? `<pre><code>${prettyJson(req.body)}</code></pre>` : '<p class="text-[#8b949e]">No body</p>'}</div>
+            <div><label class="text-sm text-[#8b949e]">Timestamp</label><p>${new Date(req.timestamp).toLocaleString()}</p></div>
+            <div><label class="text-sm text-[#8b949e] mb-2 block">Headers</label><pre><code>${JSON.stringify(req.headers, null, 2)}</code></pre></div>
+            ${Object.keys(req.query_params || {}).length > 0 ? `<div><label class="text-sm text-[#8b949e] mb-2 block">Query Parameters</label><pre><code>${JSON.stringify(req.query_params, null, 2)}</code></pre></div>` : ''}
+            <div><label class="text-sm text-[#8b949e] mb-2 block">Body</label>${req.body ? `<pre><code>${prettyJson(req.body)}</code></pre>` : '<p class="text-[#8b949e]">No body</p>'}</div>
         </div>`;
         document.getElementById('modal').classList.remove('hidden');
         document.getElementById('modal').classList.add('flex');
     } catch (err) { console.error('Error loading request:', err); }
 }
 
+async function deleteEndpoint(id) {
+    if (!confirm('Delete this endpoint?')) return;
+    try {
+        await fetch(`/api/endpoints/${id}`, {
+            method: 'DELETE',
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
+        window.location.href = '/';
+    } catch (err) { console.error('Error deleting endpoint:', err); }
+}
+
 function closeModal() { document.getElementById('modal').classList.add('hidden'); document.getElementById('modal').classList.remove('flex'); }
 function prettyJson(str) { try { return JSON.stringify(JSON.parse(str), null, 2); } catch (e) { return escapeHtml(str); } }
 function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
-function formatDate(dateStr) { if (!dateStr) return '-'; const date = new Date(dateStr); const now = new Date(); const diff = (now - date) / 1000; if (diff < 60) return 'just now'; if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; return date.toLocaleDateString() + ' ' + date.toLocaleTimeString(); }
+function formatDate(dateStr) { if (!dateStr) return '-'; const date = new Date(dateStr); const diff = (now - date) / 1000; if (diff < 60) return 'just now'; if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; return date.toLocaleDateString(); }
+const now = new Date();
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
-loadDashboard();
+init();
 </script>
 {% endblock %}

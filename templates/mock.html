@@ -3,87 +3,124 @@
 {% block title %}HookBox - Mock Configuration{% endblock %}
 
 {% block content %}
-<div id="mock-config"><div class="text-[#8b949e]">Loading...</div></div>
+<div id="mock-config">
+    <div class="flex items-center gap-2 text-sm text-[#8b949e] mb-4">
+        <a href="/" class="hover:text-[#58a6ff]">Endpoints</a>
+        <span>/</span>
+        <a href="/d/${endpointId}" class="hover:text-[#58a6ff]">${endpointId}</a>
+        <span>/</span>
+        <span>Mock Configuration</span>
+    </div>
+</div>
 
 <script>
 const endpointId = window.location.pathname.split('/').pop();
+let currentUser = null;
 let mockRule = null;
+
+async function init() {
+    const stored = localStorage.getItem('hookbox_user');
+    if (!stored) {
+        window.location.href = '/login';
+        return;
+    }
+    currentUser = JSON.parse(stored);
+    await loadMockConfig();
+}
 
 async function loadMockConfig() {
     try {
-        const epResponse = await fetch(`/api/endpoints/${endpointId}`);
+        const epResponse = await fetch(`/api/endpoints/${endpointId}`, {
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
         const endpoint = await epResponse.json();
+        
         try {
-            const mockResponse = await fetch(`/api/endpoints/${endpointId}/mock`);
+            const mockResponse = await fetch(`/api/endpoints/${endpointId}/mock`, {
+                headers: {
+                    'X-User-ID': currentUser.id,
+                    'X-Email': currentUser.email
+                }
+            });
             if (mockResponse.ok) mockRule = await mockResponse.json();
         } catch (e) { mockRule = null; }
+        
         renderMockConfig();
-    } catch (err) { console.error('Error loading mock config:', err); document.getElementById('mock-config').innerHTML = '<div class="text-red-500">Error loading configuration</div>'; }
+    } catch (err) {
+        console.error('Error loading mock config:', err);
+        document.getElementById('mock-config').innerHTML = '<div class="text-red-500">Error loading configuration</div>';
+    }
 }
 
 function renderMockConfig() {
     const container = document.getElementById('mock-config');
     container.innerHTML = `
-    <div class="mb-6">
-    <div class="flex items-center gap-2 text-sm text-[#8b949e] mb-2">
-    <a href="/">Endpoints</a><span>/</span><a href="/d/${endpointId}" class="hover:text-[#58a6ff]">${endpointId}</a><span>/</span><span>Mock Configuration</span>
-    </div>
-    <h1 class="text-2xl font-bold">Mock Configuration</h1>
-    <p class="text-[#8b949e] mt-1">Configure custom response for ${endpointId}</p>
-    </div>
+    <h1 class="text-2xl font-bold mb-1">Mock Configuration</h1>
+    <p class="text-[#8b949e] mt-1 mb-6">Configure custom response for ${endpointId}</p>
+    
     <div class="card p-4 mb-6">
-    <label class="text-sm text-[#8b949e] mb-2 block">Webhook URL</label>
-    <div class="flex items-center gap-2">
-    <code class="flex-1 bg-[#0d1117] p-3 rounded font-mono text-sm">${window.location.origin}/hook/${endpointId}</code>
-    <button onclick="copyToClipboard('${window.location.origin}/hook/${endpointId}')" class="btn-secondary">Copy</button>
+        <label class="text-sm text-[#8b949e] mb-2 block">Webhook URL</label>
+        <div class="flex items-center gap-2">
+            <code class="flex-1 bg-[#0d1117] p-3 rounded font-mono text-sm">${window.location.origin}/hook/${currentUser.id}/${endpointId}</code>
+            <button onclick="copyToClipboard('${window.location.origin}/hook/${currentUser.id}/${endpointId}')" class="btn-secondary">Copy</button>
+        </div>
     </div>
-    </div>
+    
     <div class="card p-6">
-    <form id="mock-form" onsubmit="saveMock(event)">
-    <div class="flex items-center justify-between mb-6 pb-4 border-b border-[#30363d]">
-    <div><label class="font-bold">Enable Mock Response</label><p class="text-sm text-[#8b949e]">Return custom response instead of default</p></div>
-    <label class="relative inline-flex items-center cursor-pointer">
-    <input type="checkbox" id="mock-enabled" class="sr-only peer" ${mockRule?.enabled !== false ? 'checked' : ''}>
-    <div class="w-11 h-6 bg-[#30363d] rounded-full peer peer-checked:bg-[#238636] peer-focus:ring-2 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-    </label>
+        <form id="mock-form" onsubmit="saveMock(event)">
+            <div class="flex items-center justify-between mb-6 pb-4 border-b border-[#30363d]">
+                <div><label class="font-bold">Enable Mock Response</label><p class="text-sm text-[#8b949e]">Return custom response instead of default</p></div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="mock-enabled" class="sr-only peer" ${mockRule?.enabled !== false ? 'checked' : ''}>
+                    <div class="w-11 h-6 bg-[#30363d] rounded-full peer peer-checked:bg-[#238636] peer-focus:ring-2 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                </label>
+            </div>
+            
+            <div class="mb-4">
+                <label class="block text-sm mb-2">Status Code</label>
+                <input type="number" id="status-code" min="100" max="599" value="${mockRule?.status_code || 200}" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
+            </div>
+            
+            <div class="mb-4">
+                <label class="block text-sm mb-2">Content-Type</label>
+                <select id="content-type" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
+                    <option value="application/json" ${(mockRule?.content_type || 'application/json') === 'application/json' ? 'selected' : ''}>application/json</option>
+                    <option value="text/plain" ${mockRule?.content_type === 'text/plain' ? 'selected' : ''}>text/plain</option>
+                    <option value="text/html" ${mockRule?.content_type === 'text/html' ? 'selected' : ''}>text/html</option>
+                </select>
+            </div>
+            
+            <div class="mb-4">
+                <label class="block text-sm mb-2">Response Delay (ms)</label>
+                <input type="number" id="delay-ms" min="0" max="30000" value="${mockRule?.delay_ms || 0}" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
+            </div>
+            
+            <div class="mb-4">
+                <label class="block text-sm mb-2">Custom Headers (JSON)</label>
+                <textarea id="response-headers" rows="3" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 font-mono text-sm focus:border-[#58a6ff] focus:outline-none">${mockRule?.response_headers ? JSON.stringify(mockRule.response_headers, null, 2) : '{}'}</textarea>
+            </div>
+            
+            <div class="mb-6">
+                <label class="block text-sm mb-2">Response Body</label>
+                <textarea id="response-body" rows="10" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 font-mono text-sm focus:border-[#58a6ff] focus:outline-none">${mockRule?.response_body || ''}</textarea>
+            </div>
+            
+            <div class="flex gap-4">
+                <button type="submit" class="btn-primary">Save Configuration</button>
+                <button type="button" onclick="deleteMockRule()" class="btn-danger">Delete Mock</button>
+                <a href="/d/${endpointId}" class="btn-secondary">Back to Dashboard</a>
+            </div>
+        </form>
     </div>
-    <div class="mb-4">
-    <label class="block text-sm mb-2">Status Code</label>
-    <input type="number" id="status-code" min="100" max="599" value="${mockRule?.status_code || 200}" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
-    </div>
-    <div class="mb-4">
-    <label class="block text-sm mb-2">Content-Type</label>
-    <select id="content-type" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
-    <option value="application/json" ${(mockRule?.content_type || 'application/json') === 'application/json' ? 'selected' : ''}>application/json</option>
-    <option value="text/plain" ${mockRule?.content_type === 'text/plain' ? 'selected' : ''}>text/plain</option>
-    <option value="text/html" ${mockRule?.content_type === 'text/html' ? 'selected' : ''}>text/html</option>
-    <option value="application/xml" ${mockRule?.content_type === 'application/xml' ? 'selected' : ''}>application/xml</option>
-    </select>
-    </div>
-    <div class="mb-4">
-    <label class="block text-sm mb-2">Response Delay (ms)</label>
-    <input type="number" id="delay-ms" min="0" max="30000" value="${mockRule?.delay_ms || 0}" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
-    </div>
-    <div class="mb-4">
-    <label class="block text-sm mb-2">Custom Headers (JSON)</label>
-    <textarea id="response-headers" rows="3" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 font-mono text-sm focus:border-[#58a6ff] focus:outline-none">${mockRule?.response_headers ? JSON.stringify(mockRule.response_headers, null, 2) : '{}'}</textarea>
-    </div>
-    <div class="mb-6">
-    <label class="block text-sm mb-2">Response Body</label>
-    <textarea id="response-body" rows="10" class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 font-mono text-sm focus:border-[#58a6ff] focus:outline-none">${mockRule?.response_body || ''}</textarea>
-    </div>
-    <div class="flex gap-4">
-    <button type="submit" class="btn-primary">Save Configuration</button>
-    <button type="button" onclick="deleteMockRule()" class="btn-danger">Delete Mock</button>
-    <a href="/d/${endpointId}" class="btn-secondary">Back to Dashboard</a>
-    </div>
-    </form>
-    </div>
+    
     <div class="card p-6 mt-6">
-    <h2 class="font-bold mb-4">Test Your Mock</h2>
-    <p class="text-sm text-[#8b949e] mb-4">Send a test request to see your mock response.</p>
-    <button onclick="sendTestRequest()" class="btn-secondary">Send Test Request</button>
-    <div id="test-result" class="mt-4 hidden"><h3 class="text-sm font-bold mb-2">Response:</h3><pre id="test-result-content" class="text-sm"></pre></div>
+        <h2 class="font-bold mb-4">Test Your Mock</h2>
+        <p class="text-sm text-[#8b949e] mb-4">Send a test request to see your mock response.</p>
+        <button onclick="sendTestRequest()" class="btn-secondary">Send Test Request</button>
+        <div id="test-result" class="mt-4 hidden"><h3 class="text-sm font-bold mb-2">Response:</h3><pre id="test-result-content" class="text-sm"></pre></div>
     </div>`;
 }
 
@@ -94,35 +131,54 @@ async function saveMock(event) {
     const contentType = document.getElementById('content-type').value;
     const delayMs = parseInt(document.getElementById('delay-ms').value);
     let responseHeaders = {};
-    try { responseHeaders = JSON.parse(document.getElementById('response-headers').value || '{}'); } catch (e) { alert('Invalid JSON in response headers'); return; }
+    try { responseHeaders = JSON.parse(document.getElementById('response-headers').value || '{}'); } catch (e) { alert('Invalid JSON'); return; }
     const responseBody = document.getElementById('response-body').value;
+    
     try {
-        const response = await fetch(`/api/endpoints/${endpointId}/mock`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, status_code: statusCode, content_type: contentType, delay_ms: delayMs, response_headers: responseHeaders, response_body: responseBody }) });
-        if (response.ok) { showToast('Mock configuration saved!'); loadMockConfig(); } else { alert('Error saving mock configuration'); }
-    } catch (err) { console.error('Error saving mock:', err); alert('Error saving mock configuration'); }
+        const response = await fetch(`/api/endpoints/${endpointId}/mock`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            },
+            body: JSON.stringify({ enabled, status_code: statusCode, content_type: contentType, delay_ms: delayMs, response_headers: responseHeaders, response_body: responseBody })
+        });
+        if (response.ok) { showToast('Saved!'); loadMockConfig(); } else { alert('Error'); }
+    } catch (err) { console.error('Error:', err); alert('Error saving'); }
 }
 
 async function deleteMockRule() {
     if (!confirm('Delete mock configuration?')) return;
-    try { await fetch(`/api/endpoints/${endpointId}/mock`, { method: 'DELETE' }); showToast('Mock configuration deleted'); loadMockConfig(); } catch (err) { console.error('Error deleting mock:', err); }
+    try {
+        await fetch(`/api/endpoints/${endpointId}/mock`, {
+            method: 'DELETE',
+            headers: { 'X-User-ID': currentUser.id, 'X-Email': currentUser.email }
+        });
+        showToast('Deleted');
+        loadMockConfig();
+    } catch (err) { console.error('Error:', err); }
 }
 
 async function sendTestRequest() {
     const resultDiv = document.getElementById('test-result');
     const contentDiv = document.getElementById('test-result-content');
     resultDiv.classList.remove('hidden');
-    contentDiv.textContent = 'Sending request...';
+    contentDiv.textContent = 'Sending...';
+    
     try {
         const start = Date.now();
-        const response = await fetch(`/hook/${endpointId}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Test-Header': 'HookBox Test' }, body: JSON.stringify({ test: true, timestamp: new Date().toISOString() }) });
+        const response = await fetch(`/hook/${currentUser.id}/${endpointId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ test: true })
+        });
         const elapsed = Date.now() - start;
         const body = await response.text();
-        const headers = {};
-        response.headers.forEach((v, k) => headers[k] = v);
-        contentDiv.innerHTML = `Status: ${response.status} ${response.statusText}\nTime: ${elapsed}ms\n\nHeaders:\n${JSON.stringify(headers, null, 2)}\n\nBody:\n${body}`;
+        contentDiv.textContent = `Status: ${response.status}\nTime: ${elapsed}ms\n\nBody:\n${body}`;
     } catch (err) { contentDiv.textContent = `Error: ${err.message}`; }
 }
 
-loadMockConfig();
+init();
 </script>
 {% endblock %}

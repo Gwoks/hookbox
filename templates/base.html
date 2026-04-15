@@ -29,9 +29,9 @@ code { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
 <nav class="border-b border-[#30363d] px-6 py-4">
 <div class="max-w-6xl mx-auto flex justify-between items-center">
 <a href="/" class="text-xl font-bold text-[#58a6ff]">📦 HookBox</a>
-<div class="flex gap-4">
-<a href="/" class="btn-secondary">Endpoints</a>
-<button onclick="createEndpoint()" class="btn-primary">+ New Endpoint</button>
+<div class="flex gap-4" id="nav-buttons">
+<a href="/login" class="btn-secondary">Login</a>
+<a href="/register" class="btn-primary">Register</a>
 </div>
 </div>
 </nav>
@@ -49,17 +49,24 @@ function showToast(message) {
 async function copyToClipboard(text) {
     try { await navigator.clipboard.writeText(text); showToast('Copied!'); } catch (err) { console.error('Failed to copy:', err); }
 }
-async function createEndpoint() {
-    const name = prompt('Endpoint name (optional):');
+
+// Check if user is logged in and update nav
+const stored = localStorage.getItem('hookbox_user');
+if (stored) {
     try {
-        const response = await fetch('/api/endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name || null }) });
-        const data = await response.json();
-        window.location.href = `/d/${data.id}`;
-    } catch (err) { console.error('Error creating endpoint:', err); }
+        const user = JSON.parse(stored);
+        document.getElementById('nav-buttons').innerHTML = `
+            <span class="text-sm text-[#8b949e]">${user.email}</span>
+            <button onclick="logout()" class="btn-secondary text-sm">Logout</button>
+        `;
+    } catch (e) {
+        localStorage.removeItem('hookbox_user');
+    }
 }
-async function deleteEndpoint(id) {
-    if (!confirm('Delete this endpoint and all requests?')) return;
-    try { await fetch(`/api/endpoints/${id}`, { method: 'DELETE' }); window.location.reload(); } catch (err) { console.error('Error deleting endpoint:', err); }
+
+function logout() {
+    localStorage.removeItem('hookbox_user');
+    window.location.href = '/login';
 }
 </script>
 {% block scripts %}{% endblock %}

@@ -4,20 +4,62 @@
 
 {% block content %}
 <div class="mb-8">
-<h1 class="text-2xl font-bold mb-2">Your Endpoints</h1>
-<p class="text-[#8b949e]">Manage your webhook endpoints and view captured requests</p>
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold mb-1">Your Endpoints</h1>
+            <p class="text-[#8b949e]">Manage your webhook endpoints</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <span class="text-sm text-[#8b949e]" id="user-email"></span>
+            <button onclick="logout()" class="btn-secondary text-sm">Logout</button>
+        </div>
+    </div>
 </div>
-<div id="endpoints-list" class="space-y-4"><div class="text-[#8b949e]">Loading...</div></div>
+
+<div id="endpoints-list" class="space-y-4">
+    <div class="text-[#8b949e]">Loading...</div>
+</div>
 
 <script>
+let currentUser = null;
+
+async function init() {
+    const stored = localStorage.getItem('hookbox_user');
+    if (!stored) {
+        window.location.href = '/login';
+        return;
+    }
+    
+    currentUser = JSON.parse(stored);
+    document.getElementById('user-email').textContent = currentUser.email;
+    await loadEndpoints();
+}
+
 async function loadEndpoints() {
     try {
-        const response = await fetch('/api/endpoints');
+        const response = await fetch('/api/endpoints', {
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
+        
+        if (!response.ok) {
+            localStorage.removeItem('hookbox_user');
+            window.location.href = '/login';
+            return;
+        }
+        
         const endpoints = await response.json();
         const container = document.getElementById('endpoints-list');
         
         if (endpoints.length === 0) {
-            container.innerHTML = `<div class="card p-12 text-center"><div class="text-6xl mb-4">📦</div><h2 class="text-xl font-bold mb-2">No endpoints yet</h2><p class="text-[#8b949e] mb-6">Create your first webhook endpoint to start capturing HTTP requests.</p><button onclick="createEndpoint()" class="btn-primary text-lg px-6 py-3">+ Create Endpoint</button></div>`;
+            container.innerHTML = `<div class="card p-12 text-center">
+                <div class="text-6xl mb-4">📦</div>
+                <h2 class="text-xl font-bold mb-2">No endpoints yet</h2>
+                <p class="text-[#8b949e] mb-6">Create your first webhook endpoint</p>
+                <button onclick="createEndpoint()" class="btn-primary text-lg px-6 py-3">+ Create Endpoint</button>
+            </div>`;
             return;
         }
         
@@ -41,14 +83,54 @@ async function loadEndpoints() {
         </div>
         </div>
         <div class="flex items-center gap-2 bg-[#0d1117] p-3 rounded">
-        <code class="flex-1 text-sm truncate">${window.location.origin}/hook/${ep.id}</code>
-        <button onclick="copyToClipboard('${window.location.origin}/hook/${ep.id}')" class="copy-btn text-[#8b949e]" title="Copy URL">📋</button>
+        <code class="flex-1 text-sm truncate">${window.location.origin}/hook/${currentUser.id}/${ep.id}</code>
+        <button onclick="copyToClipboard('${window.location.origin}/hook/${currentUser.id}/${ep.id}')" class="copy-btn text-[#8b949e]">📋</button>
         </div>
         </div>`).join('');
     } catch (err) {
         console.error('Error loading endpoints:', err);
         document.getElementById('endpoints-list').innerHTML = '<div class="text-red-500">Error loading endpoints</div>';
     }
+}
+
+async function createEndpoint() {
+    const name = prompt('Endpoint name (optional):');
+    try {
+        const response = await fetch('/api/endpoints', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            },
+            body: JSON.stringify({ name: name || null })
+        });
+        const data = await response.json();
+        window.location.href = `/d/${data.id}`;
+    } catch (err) {
+        console.error('Error creating endpoint:', err);
+    }
+}
+
+async function deleteEndpoint(id) {
+    if (!confirm('Delete this endpoint and all requests?')) return;
+    try {
+        await fetch(`/api/endpoints/${id}`, {
+            method: 'DELETE',
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
+        window.location.reload();
+    } catch (err) {
+        console.error('Error deleting endpoint:', err);
+    }
+}
+
+function logout() {
+    localStorage.removeItem('hookbox_user');
+    window.location.href = '/login';
 }
 
 function formatDate(dateStr) {
@@ -61,6 +143,6 @@ function formatDate(dateStr) {
     return date.toLocaleDateString();
 }
 
-loadEndpoints();
+init();
 </script>
 {% endblock %}

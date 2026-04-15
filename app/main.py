@@ -1,6 +1,6 @@
 """FastAPI main application"""
 
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request, Depends, Header
 from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -11,25 +11,22 @@ from pathlib import Path
 
 from app.database import init_db, get_db
 from app.routes.api import router as api_router
-from app.routes.webhook import router as webhook_router
-from app.utils.cleanup import start_cleanup_task
 
 app = FastAPI(title="HookBox", description="Self-hosted webhook testing service", version="1.0.0")
 
-import os
 BASE_DIR = Path(__file__).parent.parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(api_router)
-app.include_router(webhook_router)
 
 @app.on_event("startup")
 async def startup():
     await init_db()
-    start_cleanup_task()
 
-@app.api_route("/hook/{endpoint_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def receive_webhook(endpoint_id: str, request: Request, db = Depends(get_db)):
+@app.api_route("/hook/{user_id}/{endpoint_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+async def receive_webhook(user_id: str, endpoint_id: str, request: Request, db = Depends(get_db)):
+    """Receive webhook for a specific user's endpoint"""
+    # Get mock rule first
     async with db.execute(
         "SELECT * FROM mock_rules WHERE endpoint_id = ? AND enabled = 1",
         (endpoint_id,)
@@ -74,6 +71,14 @@ async def dashboard(request: Request, endpoint_id: str):
 @app.get("/m/{endpoint_id}", response_class=HTMLResponse)
 async def mock_config(request: Request, endpoint_id: str):
     return templates.TemplateResponse("mock.html", {"request": request})
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    return templates.TemplateResponse("register.html", {"request": request})
 
 if __name__ == "__main__":
     import uvicorn

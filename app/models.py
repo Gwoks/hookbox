@@ -1,8 +1,30 @@
 """Pydantic models for request/response validation"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, Dict, Any
 from datetime import datetime
+
+# --- User Models ---
+
+class UserRegister(BaseModel):
+    email: EmailStr
+
+class UserLogin(BaseModel):
+    email: EmailStr
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    created_at: datetime
+    last_login: Optional[datetime]
+    token: str
+
+class UserSession(BaseModel):
+    user_id: str
+    email: str
+    token: str
+
+# --- Endpoint Models ---
 
 class EndpointCreate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
@@ -23,6 +45,7 @@ class EndpointResponse(BaseModel):
     last_hit: Optional[datetime]
     request_count: int
     webhook_url: str
+    user_id: str
 
 class EndpointDetail(EndpointResponse):
     expires_at: Optional[datetime]
