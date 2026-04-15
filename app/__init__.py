@@ -1,0 +1,1 @@
+"""WebhookCatch application"""

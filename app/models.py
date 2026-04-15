@@ -1,0 +1,56 @@
+"""Pydantic models for request/response validation"""
+
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+from datetime import datetime
+
+class EndpointCreate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    expires_in_hours: Optional[int] = Field(24, ge=1, le=720)
+
+class MockRuleCreate(BaseModel):
+    status_code: int = Field(200, ge=100, le=599)
+    response_body: str = Field("", max_length=1_000_000)
+    response_headers: Dict[str, str] = {}
+    content_type: str = "application/json"
+    enabled: bool = True
+    delay_ms: int = Field(0, ge=0, le=30000)
+
+class EndpointResponse(BaseModel):
+    id: str
+    name: Optional[str]
+    created_at: datetime
+    last_hit: Optional[datetime]
+    request_count: int
+    webhook_url: str
+
+class EndpointDetail(EndpointResponse):
+    expires_at: Optional[datetime]
+    is_active: bool
+    mock_enabled: bool
+
+class RequestResponse(BaseModel):
+    id: int
+    endpoint_id: str
+    method: str
+    path: str
+    timestamp: datetime
+    content_type: Optional[str]
+
+class RequestDetail(RequestResponse):
+    headers: Dict[str, str]
+    query_params: Dict[str, Any]
+    body: Optional[str]
+
+class MockRuleResponse(BaseModel):
+    endpoint_id: str
+    status_code: int
+    response_body: str
+    response_headers: Dict[str, str]
+    content_type: str
+    enabled: bool
+    delay_ms: int
+
+class MessageResponse(BaseModel):
+    message: str
+    success: bool = True

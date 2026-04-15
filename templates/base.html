@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}WebhookCatch{% endblock %}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body { background-color: #0d1117; color: #e6edf3; }
+.card { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+.btn-primary { background-color: #238636; color: white; padding: 8px 16px; border-radius: 6px; transition: background-color 0.2s; }
+.btn-primary:hover { background-color: #2ea043; }
+.btn-secondary { background-color: #21262d; color: #c9d1d9; padding: 8px 16px; border-radius: 6px; border: 1px solid #30363d; transition: all 0.2s; }
+.btn-secondary:hover { background-color: #30363d; }
+.btn-danger { background-color: #da3633; color: white; padding: 8px 16px; border-radius: 6px; }
+.btn-danger:hover { background-color: #f85149; }
+.badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+.badge-method { background-color: #388bfd; color: white; }
+pre { background-color: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+code { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
+.copy-btn { cursor: pointer; transition: all 0.2s; }
+.copy-btn:hover { color: #58a6ff; }
+.toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 24px; background-color: #238636; color: white; border-radius: 8px; opacity: 0; transition: opacity 0.3s; z-index: 1000; }
+.toast.show { opacity: 1; }
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body class="min-h-screen">
+<nav class="border-b border-[#30363d] px-6 py-4">
+<div class="max-w-6xl mx-auto flex justify-between items-center">
+<a href="/" class="text-xl font-bold text-[#58a6ff]">🪝 WebhookCatch</a>
+<div class="flex gap-4">
+<a href="/" class="btn-secondary">Endpoints</a>
+<button onclick="createEndpoint()" class="btn-primary">+ New Endpoint</button>
+</div>
+</div>
+</nav>
+<main class="max-w-6xl mx-auto px-6 py-8">
+{% block content %}{% endblock %}
+</main>
+<div id="toast" class="toast"></div>
+<script>
+function showToast(message) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 3000);
+}
+async function copyToClipboard(text) {
+    try { await navigator.clipboard.writeText(text); showToast('Copied!'); } catch (err) { console.error('Failed to copy:', err); }
+}
+async function createEndpoint() {
+    const name = prompt('Endpoint name (optional):');
+    try {
+        const response = await fetch('/api/endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name || null }) });
+        const data = await response.json();
+        window.location.href = `/d/${data.id}`;
+    } catch (err) { console.error('Error creating endpoint:', err); }
+}
+async function deleteEndpoint(id) {
+    if (!confirm('Delete this endpoint and all requests?')) return;
+    try { await fetch(`/api/endpoints/${id}`, { method: 'DELETE' }); window.location.reload(); } catch (err) { console.error('Error deleting endpoint:', err); }
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

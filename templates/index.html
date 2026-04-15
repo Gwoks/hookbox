@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}WebhookCatch - Your Endpoints{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+<h1 class="text-2xl font-bold mb-2">Your Endpoints</h1>
+<p class="text-[#8b949e]">Manage your webhook endpoints and view captured requests</p>
+</div>
+<div id="endpoints-list" class="space-y-4"><div class="text-[#8b949e]">Loading...</div></div>
+
+<script>
+async function loadEndpoints() {
+    try {
+        const response = await fetch('/api/endpoints');
+        const endpoints = await response.json();
+        const container = document.getElementById('endpoints-list');
+        
+        if (endpoints.length === 0) {
+            container.innerHTML = `<div class="card p-12 text-center"><div class="text-6xl mb-4">🪝</div><h2 class="text-xl font-bold mb-2">No endpoints yet</h2><p class="text-[#8b949e] mb-6">Create your first webhook endpoint to start capturing HTTP requests.</p><button onclick="createEndpoint()" class="btn-primary text-lg px-6 py-3">+ Create Endpoint</button></div>`;
+            return;
+        }
+        
+        container.innerHTML = endpoints.map(ep => `
+        <div class="card p-4">
+        <div class="flex justify-between items-start mb-3">
+        <div>
+        <div class="flex items-center gap-3">
+        <span class="text-lg font-mono text-[#58a6ff]">${ep.id}</span>
+        ${ep.name ? `<span class="text-[#8b949e]">${ep.name}</span>` : ''}
+        </div>
+        <div class="text-sm text-[#8b949e] mt-1">
+        ${ep.request_count} request${ep.request_count !== 1 ? 's' : ''} • Created ${formatDate(ep.created_at)}
+        ${ep.last_hit ? ` • Last hit ${formatDate(ep.last_hit)}` : ''}
+        </div>
+        </div>
+        <div class="flex gap-2">
+        <a href="/d/${ep.id}" class="btn-secondary">View</a>
+        <a href="/m/${ep.id}" class="btn-secondary">Mock</a>
+        <button onclick="deleteEndpoint('${ep.id}')" class="btn-danger">Delete</button>
+        </div>
+        </div>
+        <div class="flex items-center gap-2 bg-[#0d1117] p-3 rounded">
+        <code class="flex-1 text-sm truncate">${window.location.origin}/hook/${ep.id}</code>
+        <button onclick="copyToClipboard('${window.location.origin}/hook/${ep.id}')" class="copy-btn text-[#8b949e]" title="Copy URL">📋</button>
+        </div>
+        </div>`).join('');
+    } catch (err) {
+        console.error('Error loading endpoints:', err);
+        document.getElementById('endpoints-list').innerHTML = '<div class="text-red-500">Error loading endpoints</div>';
+    }
+}
+
+function formatDate(dateStr) {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diff = (now - date) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return date.toLocaleDateString();
+}
+
+loadEndpoints();
+</script>
+{% endblock %}
