@@ -16,9 +16,26 @@ Self-hosted webhook testing service with multi-user support.
 ## Requirements
 
 - Python 3.14+ (with pip)
+- Docker & Docker Compose (optional)
 - Linux server (for cronjobs)
 
 ## Installation
+
+### Option 1: Docker (Recommended)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Gwoks/hookbox.git
+cd hookbox
+
+# 2. Run with Docker Compose
+docker-compose up -d
+
+# 3. Open in browser
+http://localhost:5000
+```
+
+### Option 2: Manual
 
 ```bash
 # 1. Clone the repository
@@ -132,6 +149,22 @@ crontab -e
 
 # Add this line:
 0 0 * * * /home/ubuntu/hookbox/reset_db.sh >> /home/ubuntu/hookbox/cron_reset.log 2>&1
+```
+
+### Docker Management
+
+```bash
+# View logs
+docker-compose logs -f
+
+# Restart
+docker-compose restart
+
+# Stop
+docker-compose down
+
+# Update and restart
+git pull origin main && docker-compose up -d --force-recreate
 ```
 
 ## Tech Stack

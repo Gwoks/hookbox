@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  hookbox:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - hookbox_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  hookbox_data:
