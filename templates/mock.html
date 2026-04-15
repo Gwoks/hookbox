@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}WebhookCatch - Mock Configuration{% endblock %}
+{% block title %}HookBox - Mock Configuration{% endblock %}
 
 {% block content %}
 <div id="mock-config"><div class="text-[#8b949e]">Loading...</div></div>
@@ -114,7 +114,7 @@ async function sendTestRequest() {
     contentDiv.textContent = 'Sending request...';
     try {
         const start = Date.now();
-        const response = await fetch(`/hook/${endpointId}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Test-Header': 'WebhookCatch Test' }, body: JSON.stringify({ test: true, timestamp: new Date().toISOString() }) });
+        const response = await fetch(`/hook/${endpointId}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Test-Header': 'HookBox Test' }, body: JSON.stringify({ test: true, timestamp: new Date().toISOString() }) });
         const elapsed = Date.now() - start;
         const body = await response.text();
         const headers = {};

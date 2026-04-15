@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}WebhookCatch - Your Endpoints{% endblock %}
+{% block title %}HookBox - Your Endpoints{% endblock %}
 
 {% block content %}
 <div class="mb-8">
@@ -17,7 +17,7 @@ async function loadEndpoints() {
         const container = document.getElementById('endpoints-list');
         
         if (endpoints.length === 0) {
-            container.innerHTML = `<div class="card p-12 text-center"><div class="text-6xl mb-4">🪝</div><h2 class="text-xl font-bold mb-2">No endpoints yet</h2><p class="text-[#8b949e] mb-6">Create your first webhook endpoint to start capturing HTTP requests.</p><button onclick="createEndpoint()" class="btn-primary text-lg px-6 py-3">+ Create Endpoint</button></div>`;
+            container.innerHTML = `<div class="card p-12 text-center"><div class="text-6xl mb-4">📦</div><h2 class="text-xl font-bold mb-2">No endpoints yet</h2><p class="text-[#8b949e] mb-6">Create your first webhook endpoint to start capturing HTTP requests.</p><button onclick="createEndpoint()" class="btn-primary text-lg px-6 py-3">+ Create Endpoint</button></div>`;
             return;
         }
         

@@ -14,7 +14,7 @@ from app.routes.api import router as api_router
 from app.routes.webhook import router as webhook_router
 from app.utils.cleanup import start_cleanup_task
 
-app = FastAPI(title="WebhookCatch", description="Self-hosted webhook testing service", version="1.0.0")
+app = FastAPI(title="HookBox", description="Self-hosted webhook testing service", version="1.0.0")
 
 import os
 BASE_DIR = Path(__file__).parent.parent

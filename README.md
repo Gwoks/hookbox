@@ -1,4 +1,4 @@
-# 🪝 WebhookCatch
+# 🪝 HookBox
 
 *"Catch every webhook. Debug with confidence."*
 
