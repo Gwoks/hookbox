@@ -12,6 +12,7 @@ from pathlib import Path
 from app.database import init_db, get_db
 from app.routes.api import router as api_router
 from app.routes.backup import router as backup_router
+from app.websocket import manager
 
 app = FastAPI(title="HookBox", description="Self-hosted webhook testing service", version="1.0.0")
 
@@ -24,6 +25,18 @@ app.include_router(backup_router)
 @app.on_event("startup")
 async def startup():
     await init_db()
+
+@app.websocket_async("/ws/{endpoint_id}")
+async def websocket_endpoint(websocket, endpoint_id: str):
+    await manager.connect(websocket, endpoint_id)
+    try:
+        while True:
+            # Keep connection alive, wait for close
+            data = await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        manager.disconnect(websocket, endpoint_id)
 
 @app.api_route("/hook/{user_id}/{endpoint_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def receive_webhook(user_id: str, endpoint_id: str, request: Request, db = Depends(get_db)):
@@ -47,6 +60,14 @@ async def receive_webhook(user_id: str, endpoint_id: str, request: Request, db =
     )
     await db.execute("UPDATE endpoints SET request_count = request_count + 1, last_hit = ? WHERE id = ?", (now, endpoint_id))
     await db.commit()
+    
+    # Broadcast to WebSocket clients
+    await manager.broadcast_new_request(endpoint_id, {
+        "method": request.method,
+        "path": str(request.url.path),
+        "content_type": content_type,
+        "timestamp": now
+    })
     
     if mock:
         delay_ms = mock['delay_ms'] or 0

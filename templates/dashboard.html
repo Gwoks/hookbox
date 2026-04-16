@@ -8,6 +8,7 @@
         <a href="/" class="hover:text-[#58a6ff]">Endpoints</a>
         <span>/</span>
         <span id="endpoint-id">Loading...</span>
+        <span id="ws-status" class="ml-2 text-xs"></span>
     </div>
 </div>
 
@@ -25,6 +26,8 @@
 let currentUser = null;
 const endpointId = window.location.pathname.split('/').pop();
 let requests = [];
+let ws = null;
+let wsConnected = false;
 
 async function init() {
     const stored = localStorage.getItem('hookbox_user');
@@ -34,6 +37,71 @@ async function init() {
     }
     currentUser = JSON.parse(stored);
     await loadDashboard();
+    connectWebSocket();
+}
+
+function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/${endpointId}`;
+    
+    updateWsStatus('Connecting...', 'text-yellow-500');
+    
+    ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+        console.log('WebSocket connected');
+        wsConnected = true;
+        updateWsStatus('Live', 'text-green-500');
+    };
+    
+    ws.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'new_request') {
+                console.log('New request received:', msg.data);
+                // Refresh the requests list
+                loadRequests();
+                // Show notification
+                showToast('New request received!');
+            }
+        } catch (err) {
+            console.error('WebSocket message error:', err);
+        }
+    };
+    
+    ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        wsConnected = false;
+        updateWsStatus('Disconnected', 'text-red-500');
+        // Try to reconnect after 3 seconds
+        setTimeout(connectWebSocket, 3000);
+    };
+    
+    ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        ws.close();
+    };
+}
+
+function updateWsStatus(text, colorClass) {
+    const el = document.getElementById('ws-status');
+    el.textContent = text;
+    el.className = `ml-2 text-xs ${colorClass}`;
+}
+
+async function loadRequests() {
+    try {
+        const reqResponse = await fetch(`/api/endpoints/${endpointId}/requests`, {
+            headers: {
+                'X-User-ID': currentUser.id,
+                'X-Email': currentUser.email
+            }
+        });
+        requests = await reqResponse.json();
+        updateRequestsList();
+    } catch (err) {
+        console.error('Error loading requests:', err);
+    }
 }
 
 async function loadDashboard() {
@@ -67,6 +135,18 @@ async function loadDashboard() {
     }
 }
 
+function updateRequestsList() {
+    const listContainer = document.getElementById('requests-list');
+    if (listContainer) {
+        listContainer.innerHTML = renderRequestsList();
+    }
+    // Update count
+    const countEl = document.getElementById('request-count');
+    if (countEl) {
+        countEl.textContent = requests.length;
+    }
+}
+
 function renderDashboard(endpoint) {
     const container = document.getElementById('dashboard');
     container.innerHTML = `
@@ -91,7 +171,7 @@ function renderDashboard(endpoint) {
     
     <div class="grid grid-cols-3 gap-4 mb-6">
         <div class="card p-4 text-center">
-            <div class="text-2xl font-bold text-[#58a6ff]">${requests.length}</div>
+            <div class="text-2xl font-bold text-[#58a6ff]" id="request-count">${requests.length}</div>
             <div class="text-sm text-[#8b949e]">Total Requests</div>
         </div>
         <div class="card p-4 text-center">
@@ -153,10 +233,7 @@ async function deleteEndpoint(id) {
     try {
         await fetch(`/api/endpoints/${id}`, {
             method: 'DELETE',
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
-            }
+            headers: { 'X-User-ID': currentUser.id, 'X-Email': currentUser.email }
         });
         window.location.href = '/';
     } catch (err) { console.error('Error deleting endpoint:', err); }
@@ -168,6 +245,12 @@ function escapeHtml(text) { const div = document.createElement('div'); div.textC
 function formatDate(dateStr) { if (!dateStr) return '-'; const date = new Date(dateStr); const diff = (now - date) / 1000; if (diff < 60) return 'just now'; if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; return date.toLocaleDateString(); }
 const now = new Date();
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (ws) ws.close();
+});
+
 init();
 </script>
 {% endblock %}
