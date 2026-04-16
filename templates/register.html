@@ -7,8 +7,8 @@
     <div class="card p-8">
         <div class="text-center mb-8">
             <div class="text-5xl mb-4">📦</div>
-            <h1 class="text-2xl font-bold">Create Your HookBox</h1>
-            <p class="text-[#8b949e] mt-2">Register to start catching webhooks</p>
+            <h1 class="text-2xl font-bold">Get Started with HookBox</h1>
+            <p class="text-[#8b949e] mt-2">Enter your email to create your webhook space</p>
         </div>
         
         <div id="error-message" class="hidden mb-4 p-3 bg-red-900/50 border border-red-500 rounded text-red-200 text-sm"></div>
@@ -28,7 +28,7 @@
         </form>
         
         <div class="mt-6 text-center text-sm text-[#8b949e]">
-            Already have an account? <a href="/login" class="text-[#58a6ff] hover:underline">Sign In</a>
+            <p>Already have an account? <a href="/login" class="text-[#58a6ff] hover:underline">Sign in</a></p>
         </div>
     </div>
 </div>
@@ -41,13 +41,10 @@ async function handleRegister(event) {
     const errorDiv = document.getElementById('error-message');
     const successDiv = document.getElementById('success-message');
     
-    // Clear previous messages
     errorDiv.classList.add('hidden');
     successDiv.classList.add('hidden');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Creating...';
-    
-    console.log('Registering with email:', email);
     
     try {
         const response = await fetch('/api/register', {
@@ -56,11 +53,8 @@ async function handleRegister(event) {
             body: JSON.stringify({ email })
         });
         
-        console.log('Response status:', response.status);
-        const data = await response.json();
-        console.log('Response data:', data);
-        
         if (!response.ok) {
+            const data = await response.json();
             errorDiv.textContent = 'Registration failed: ' + (data.detail || JSON.stringify(data));
             errorDiv.classList.remove('hidden');
             submitBtn.disabled = false;
@@ -68,11 +62,11 @@ async function handleRegister(event) {
             return;
         }
         
+        const userData = await response.json();
         successDiv.textContent = 'Account created! Redirecting...';
         successDiv.classList.remove('hidden');
         
-        localStorage.setItem('hookbox_user', JSON.stringify(data));
-        console.log('Stored user data:', data);
+        localStorage.setItem('hookbox_user', JSON.stringify(userData));
         
         setTimeout(() => {
             window.location.href = '/';
@@ -89,7 +83,6 @@ async function handleRegister(event) {
 // Check if already logged in
 const stored = localStorage.getItem('hookbox_user');
 if (stored) {
-    console.log('Already logged in, redirecting...');
     window.location.href = '/';
 }
 </script>

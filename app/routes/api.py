@@ -60,14 +60,27 @@ async def register(data: UserRegister, db: aiosqlite.Connection = Depends(get_db
 
 @router.post("/login", response_model=UserResponse)
 async def login(data: UserLogin, db: aiosqlite.Connection = Depends(get_db)):
-    """Login with email"""
+    """Login with email - auto-register if not found"""
     user_id = hash_email(data.email)
     
     async with db.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cursor:
         row = await cursor.fetchone()
     
     if not row:
-        raise HTTPException(status_code=404, detail="User not found. Please register first.")
+        # Auto-register the user
+        await db.execute(
+            "INSERT INTO users (id, email) VALUES (?, ?)",
+            (user_id, data.email.lower().strip())
+        )
+        await db.commit()
+        token = create_user_token()
+        return UserResponse(
+            id=user_id,
+            email=data.email.lower().strip(),
+            created_at=datetime.utcnow(),
+            last_login=None,
+            token=token
+        )
     
     # Update last login
     await db.execute("UPDATE users SET last_login = ? WHERE id = ?", 

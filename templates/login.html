@@ -8,7 +8,8 @@
         <div class="text-center mb-8">
             <div class="text-5xl mb-4">📦</div>
             <h1 class="text-2xl font-bold">Welcome to HookBox</h1>
-            <p class="text-[#8b949e] mt-2">Sign in to access your webhooks</p>
+            <p class="text-[#8b949e] mt-2">Enter your email to access your webhooks</p>
+            <p class="text-xs text-[#8b949e] mt-1">(New users will be automatically registered)</p>
         </div>
         
         <div id="error-message" class="hidden mb-4 p-3 bg-red-900/50 border border-red-500 rounded text-red-200 text-sm"></div>
@@ -23,12 +24,12 @@
             </div>
             
             <button type="submit" id="submit-btn" class="btn-primary w-full py-3 text-lg">
-                Sign In
+                Continue
             </button>
         </form>
         
         <div class="mt-6 text-center text-sm text-[#8b949e]">
-            Don't have an account? <a href="/register" class="text-[#58a6ff] hover:underline">Register</a>
+            <p>No account needed - just enter your email to get started</p>
         </div>
     </div>
 </div>
@@ -46,9 +47,7 @@ async function handleLogin(event) {
     errorDiv.classList.add('hidden');
     successDiv.classList.add('hidden');
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Signing in...';
-    
-    console.log('Login with email:', email);
+    submitBtn.textContent = 'Processing...';
     
     try {
         const response = await fetch('/api/login', {
@@ -57,24 +56,21 @@ async function handleLogin(event) {
             body: JSON.stringify({ email })
         });
         
-        console.log('Response status:', response.status);
         const data = await response.json();
-        console.log('Response data:', data);
         
         if (!response.ok) {
-            errorDiv.textContent = 'Login failed: ' + (data.detail || JSON.stringify(data));
+            errorDiv.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
             errorDiv.classList.remove('hidden');
             submitBtn.disabled = false;
-            submitBtn.textContent = 'Sign In';
+            submitBtn.textContent = 'Continue';
             return;
         }
         
-        successDiv.textContent = 'Login successful! Redirecting...';
+        successDiv.textContent = 'Welcome! Redirecting...';
         successDiv.classList.remove('hidden');
         
         userData = data;
         localStorage.setItem('hookbox_user', JSON.stringify(userData));
-        console.log('Stored user data:', userData);
         
         setTimeout(() => {
             window.location.href = '/';
@@ -84,14 +80,13 @@ async function handleLogin(event) {
         errorDiv.textContent = 'Network error: ' + err.message;
         errorDiv.classList.remove('hidden');
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Sign In';
+        submitBtn.textContent = 'Continue';
     }
 }
 
 // Check if already logged in
 const stored = localStorage.getItem('hookbox_user');
 if (stored) {
-    console.log('Already logged in, redirecting...');
     window.location.href = '/';
 }
 </script>
