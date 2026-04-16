@@ -1,6 +1,6 @@
 """FastAPI main application"""
 
-from fastapi import FastAPI, Request, Depends, Header
+from fastapi import FastAPI, Request, Depends, Header, WebSocket
 from fastapi.responses import JSONResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,7 +26,7 @@ app.include_router(backup_router)
 async def startup():
     await init_db()
 
-@app.websocket_async("/ws/{endpoint_id}")
+@app.websocket("/ws/{endpoint_id}")
 async def websocket_endpoint(websocket, endpoint_id: str):
     await manager.connect(websocket, endpoint_id)
     try:

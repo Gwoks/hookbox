@@ -1,6 +1,7 @@
 """Utility functions"""
 
 import secrets
+from typing import Dict, Optional
 import string
 from datetime import datetime, timedelta
 from config import ENDPOINT_ID_LENGTH, DEFAULT_EXPIRY_HOURS

@@ -12,7 +12,7 @@ from app.models import (
     UserRegister, UserLogin, UserResponse, UserSession,
     EndpointCreate, EndpointResponse, EndpointDetail,
     RequestResponse, RequestDetail, 
-    MockRuleCreate, MockRuleResponse,
+    MockRuleCreate, MockRuleResponse, MockRuleListResponse,
     MessageResponse
 )
 from app.utils import generate_endpoint_id, calculate_expiry

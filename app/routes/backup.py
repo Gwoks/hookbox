@@ -1,6 +1,6 @@
 """Backup/Restore API routes"""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header as FastAPIHeader, Request
 from fastapi.responses import JSONResponse
 import aiosqlite
 from datetime import datetime
@@ -9,14 +9,14 @@ import email as email_lib
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.header import Header
+from email.header import Header as EmailHeader
 
 from app.database import get_db, hash_email
 from app.models import MessageResponse
 
 router = APIRouter(prefix="/api/backup", tags=["Backup"])
 
-def get_current_user(x_user_id: str = Header(...), x_email: str = Header(...)) -> dict:
+def get_current_user(x_user_id: str = FastAPIHeader(...), x_email: str = FastAPIHeader(...)) -> dict:
     return {"user_id": x_user_id, "email": x_email}
 
 @router.get("/export")
