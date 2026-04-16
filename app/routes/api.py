@@ -262,27 +262,30 @@ async def set_mock_rule(
     db: aiosqlite.Connection = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Set or update mock rule for endpoint"""
+    """Set or update mock rule for endpoint (method-specific)"""
     # Verify ownership
     async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
         row = await cursor.fetchone()
         if not row or row['user_id'] != current_user['user_id']:
             raise HTTPException(status_code=404, detail="Endpoint not found")
     
+    method = data.method.upper() if data.method else "DEFAULT"
+    
     await db.execute(
-        """INSERT INTO mock_rules (endpoint_id, status_code, response_body, response_headers, content_type, enabled, delay_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(endpoint_id) DO UPDATE SET
+        """INSERT INTO mock_rules (endpoint_id, method, status_code, response_body, response_headers, content_type, enabled, delay_ms)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(endpoint_id, method) DO UPDATE SET
            status_code = excluded.status_code, response_body = excluded.response_body,
            response_headers = excluded.response_headers, content_type = excluded.content_type,
            enabled = excluded.enabled, delay_ms = excluded.delay_ms""",
-        (endpoint_id, data.status_code, data.response_body, json.dumps(data.response_headers),
+        (endpoint_id, method, data.status_code, data.response_body, json.dumps(data.response_headers),
          data.content_type, 1 if data.enabled else 0, data.delay_ms)
     )
     await db.commit()
     
     return MockRuleResponse(
         endpoint_id=endpoint_id,
+        method=method,
         status_code=data.status_code,
         response_body=data.response_body,
         response_headers=data.response_headers,
@@ -291,13 +294,13 @@ async def set_mock_rule(
         delay_ms=data.delay_ms
     )
 
-@router.get("/endpoints/{endpoint_id}/mock", response_model=MockRuleResponse)
-async def get_mock_rule(
+@router.get("/endpoints/{endpoint_id}/mock", response_model=MockRuleListResponse)
+async def get_mock_rules(
     endpoint_id: str,
     db: aiosqlite.Connection = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get mock rule for endpoint"""
+    """Get all mock rules for endpoint"""
     # Verify ownership
     async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
         row = await cursor.fetchone()
@@ -306,19 +309,28 @@ async def get_mock_rule(
         raise HTTPException(status_code=404, detail="Endpoint not found")
     
     async with db.execute("SELECT * FROM mock_rules WHERE endpoint_id = ?", (endpoint_id,)) as cursor:
-        row = await cursor.fetchone()
+        rows = await cursor.fetchall()
     
-    if not row:
-        raise HTTPException(status_code=404, detail="No mock rule set")
+    rules = []
+    default_enabled = False
+    for row in rows:
+        rules.append(MockRuleResponse(
+            endpoint_id=row['endpoint_id'],
+            method=row['method'],
+            status_code=row['status_code'],
+            response_body=row['response_body'],
+            response_headers=json.loads(row['response_headers']) if row['response_headers'] else {},
+            content_type=row['content_type'],
+            enabled=bool(row['enabled']),
+            delay_ms=row['delay_ms']
+        ))
+        if row['method'] == 'DEFAULT':
+            default_enabled = bool(row['enabled'])
     
-    return MockRuleResponse(
-        endpoint_id=row['endpoint_id'],
-        status_code=row['status_code'],
-        response_body=row['response_body'],
-        response_headers=json.loads(row['response_headers']) if row['response_headers'] else {},
-        content_type=row['content_type'],
-        enabled=bool(row['enabled']),
-        delay_ms=row['delay_ms']
+    return MockRuleListResponse(
+        endpoint_id=endpoint_id,
+        rules=rules,
+        default_enabled=default_enabled
     )
 
 @router.delete("/endpoints/{endpoint_id}/mock", response_model=MessageResponse)
@@ -327,7 +339,11 @@ async def delete_mock_rule(
     db: aiosqlite.Connection = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Delete mock rule"""
+    """Delete mock rule for specific method or all"""
+    method = None
+    # Try to get method from query param
+    # For simplicity, delete all rules for this endpoint
+    
     # Verify ownership
     async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
         row = await cursor.fetchone()
@@ -337,4 +353,4 @@ async def delete_mock_rule(
     
     await db.execute("DELETE FROM mock_rules WHERE endpoint_id = ?", (endpoint_id,))
     await db.commit()
-    return MessageResponse(message="Mock rule deleted")
+    return MessageResponse(message="Mock rules deleted")

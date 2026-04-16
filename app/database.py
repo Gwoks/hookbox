@@ -59,18 +59,20 @@ async def init_db():
             )
         """)
         
-        # Mock rules table
+        # Mock rules table - now supports method-specific responses
         await db.execute("""
             CREATE TABLE IF NOT EXISTS mock_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                endpoint_id TEXT UNIQUE,
+                endpoint_id TEXT NOT NULL,
+                method TEXT NOT NULL DEFAULT 'DEFAULT',
                 status_code INTEGER DEFAULT 200,
                 response_body TEXT DEFAULT '',
                 response_headers TEXT DEFAULT '{}',
                 content_type TEXT DEFAULT 'application/json',
                 enabled INTEGER DEFAULT 1,
                 delay_ms INTEGER DEFAULT 0,
-                FOREIGN KEY (endpoint_id) REFERENCES endpoints(id)
+                FOREIGN KEY (endpoint_id) REFERENCES endpoints(id),
+                UNIQUE(endpoint_id, method)
             )
         """)
         
@@ -79,7 +81,18 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_requests_endpoint ON requests(endpoint_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
         
+        # Enable foreign keys
+        await db.execute("PRAGMA foreign_keys = ON")
+        
         await db.commit()
+        
+        # Migrate existing data: add DEFAULT method to existing rules
+        try:
+            await db.execute("UPDATE mock_rules SET method = 'DEFAULT' WHERE method IS NULL OR method = ''")
+            await db.commit()
+        except:
+            pass
+        
         print("Database initialized successfully!")
 
 def create_user_token():

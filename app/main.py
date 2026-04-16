@@ -40,11 +40,21 @@ async def websocket_endpoint(websocket, endpoint_id: str):
 
 @app.api_route("/hook/{user_id}/{endpoint_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def receive_webhook(user_id: str, endpoint_id: str, request: Request, db = Depends(get_db)):
+    # Try method-specific mock first, then fall back to DEFAULT
+    mock = None
     async with db.execute(
-        "SELECT * FROM mock_rules WHERE endpoint_id = ? AND enabled = 1",
-        (endpoint_id,)
+        "SELECT * FROM mock_rules WHERE endpoint_id = ? AND method = ? AND enabled = 1",
+        (endpoint_id, request.method)
     ) as cursor:
         mock = await cursor.fetchone()
+    
+    # Fall back to DEFAULT if no method-specific rule
+    if not mock:
+        async with db.execute(
+            "SELECT * FROM mock_rules WHERE endpoint_id = ? AND method = 'DEFAULT' AND enabled = 1",
+            (endpoint_id,)
+        ) as cursor:
+            mock = await cursor.fetchone()
     
     headers = dict(request.headers)
     query_params = dict(request.query_params)

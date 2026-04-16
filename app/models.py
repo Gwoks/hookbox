@@ -1,7 +1,7 @@
 """Pydantic models for request/response validation"""
 
 from pydantic import BaseModel, Field, EmailStr
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 # --- User Models ---
@@ -31,6 +31,7 @@ class EndpointCreate(BaseModel):
     expires_in_hours: Optional[int] = Field(24, ge=1, le=720)
 
 class MockRuleCreate(BaseModel):
+    method: str = Field("DEFAULT", max_length=20)
     status_code: int = Field(200, ge=100, le=599)
     response_body: str = Field("", max_length=1_000_000)
     response_headers: Dict[str, str] = {}
@@ -67,12 +68,18 @@ class RequestDetail(RequestResponse):
 
 class MockRuleResponse(BaseModel):
     endpoint_id: str
+    method: str
     status_code: int
     response_body: str
     response_headers: Dict[str, str]
     content_type: str
     enabled: bool
     delay_ms: int
+
+class MockRuleListResponse(BaseModel):
+    endpoint_id: str
+    rules: List[MockRuleResponse]
+    default_enabled: bool
 
 class MessageResponse(BaseModel):
     message: str
