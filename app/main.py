@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.database import init_db, get_db
 from app.routes.api import router as api_router
+from app.routes.backup import router as backup_router
 
 app = FastAPI(title="HookBox", description="Self-hosted webhook testing service", version="1.0.0")
 
@@ -18,6 +19,7 @@ BASE_DIR = Path(__file__).parent.parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(api_router)
+app.include_router(backup_router)
 
 @app.on_event("startup")
 async def startup():
@@ -25,8 +27,6 @@ async def startup():
 
 @app.api_route("/hook/{user_id}/{endpoint_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def receive_webhook(user_id: str, endpoint_id: str, request: Request, db = Depends(get_db)):
-    """Receive webhook for a specific user's endpoint"""
-    # Get mock rule first
     async with db.execute(
         "SELECT * FROM mock_rules WHERE endpoint_id = ? AND enabled = 1",
         (endpoint_id,)
