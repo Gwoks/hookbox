@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}HookBox - Login{% endblock %}
+{% block title %}HookBox - Sign In{% endblock %}
 
 {% block content %}
 <div class="max-w-md mx-auto">
@@ -8,8 +8,8 @@
         <div class="text-center mb-8">
             <div class="text-5xl mb-4">📦</div>
             <h1 class="text-2xl font-bold">Welcome to HookBox</h1>
-            <p class="text-[#8b949e] mt-2">Enter your email to access your webhooks</p>
-            <p class="text-xs text-[#8b949e] mt-1">(New users will be automatically registered)</p>
+            <p class="text-[#8b949e] mt-2">Enter your email to get started</p>
+            <p class="text-xs text-[#8b949e] mt-1">No account needed - we'll create one for you</p>
         </div>
         
         <div id="error-message" class="hidden mb-4 p-3 bg-red-900/50 border border-red-500 rounded text-red-200 text-sm"></div>
@@ -27,10 +27,6 @@
                 Continue
             </button>
         </form>
-        
-        <div class="mt-6 text-center text-sm text-[#8b949e]">
-            <p>No account needed - just enter your email to get started</p>
-        </div>
     </div>
 </div>
 
