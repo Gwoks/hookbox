@@ -59,10 +59,21 @@ function connectWebSocket() {
             const msg = JSON.parse(event.data);
             if (msg.type === 'new_request') {
                 console.log('New request received:', msg.data);
-                // Refresh the requests list
-                loadRequests();
-                // Show notification
-                showToast('New request received!');
+                // Add to beginning of requests array
+                requests.unshift({
+                    id: msg.data.id,
+                    method: msg.data.method,
+                    path: msg.data.path,
+                    content_type: msg.data.content_type,
+                    timestamp: msg.data.timestamp
+                });
+                // Update the list immediately without full re-render
+                updateRequestsList();
+                // Also update total count
+                const countEl = document.getElementById('request-count');
+                if (countEl) countEl.textContent = requests.length;
+                // Show toast
+                showToast(`New ${msg.data.method} request!`);
             }
         } catch (err) {
             console.error('WebSocket message error:', err);

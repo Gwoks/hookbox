@@ -28,14 +28,27 @@ code { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
 <body class="min-h-screen">
 <nav class="border-b border-[#30363d] px-6 py-4">
 <div class="max-w-6xl mx-auto flex justify-between items-center">
-<a href="/" class="text-xl font-bold text-[#58a6ff]">📦 HookBox</a>
-<div class="flex gap-4" id="nav-buttons">
-<a href="/login" class="btn-secondary">Login</a>
-<a href="/register" class="btn-primary">Register</a>
-<a href="/backup" class="btn-secondary">Backup</a>
+<div class="flex items-center gap-6">
+    <a href="/" class="text-xl font-bold text-[#58a6ff]">📦 HookBox</a>
+    <div class="flex gap-4 text-sm">
+        <a href="/" class="text-[#8b949e] hover:text-[#c9d1d9]">Endpoints</a>
+        <a href="/backup" class="text-[#8b949e] hover:text-[#c9d1d9]">Backup</a>
+        <a href="/status" class="text-[#8b949e] hover:text-[#c9d1d9]">Trading Bot</a>
+    </div>
 </div>
+<div class="flex gap-4" id="nav-buttons"></div>
 </div>
 </nav>
+<script>
+// Update nav based on login state
+const stored = localStorage.getItem('hookbox_user');
+if (stored) {
+    const user = JSON.parse(stored);
+    document.getElementById('nav-buttons').innerHTML = 
+        `<span class="text-sm text-[#8b949e]">${user.email}</span>
+         <button onclick="localStorage.removeItem('hookbox_user'); window.location.reload();" class="btn-secondary text-sm">Logout</button>`;
+}
+</script>
 <main class="max-w-6xl mx-auto px-6 py-8">
 {% block content %}{% endblock %}
 </main>
