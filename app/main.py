@@ -80,6 +80,10 @@ async def login_page(request: Request):
 async def register_page(request: Request):
     return templates.TemplateResponse("register.html", {"request": request})
 
+@app.get("/backup", response_class=HTMLResponse)
+async def backup_page(request: Request):
+    return templates.TemplateResponse("backup.html", {"request": request})
+
 if __name__ == "__main__":
     import uvicorn
     from config import HOST, PORT
