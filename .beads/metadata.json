@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "hookbox",
+  "project_id": "beaf6bfb-53d4-434c-8a45-1e67888bc066"
+}

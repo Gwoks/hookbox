@@ -1,9 +1,5 @@
-__pycache__/
-*.pyc
-*.db
-data/
-.env
-*.log
 
-# Exclude FEATURES.md from secret scanning
-FEATURES.md
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
