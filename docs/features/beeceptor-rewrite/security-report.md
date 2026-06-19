@@ -23,9 +23,22 @@ running app and the relevant modules. **An exhaustive line-by-line audit of all
 | F10 | Tunnel slug hijack | bind capability-gated (owner_secret over WS); cross-owner bind refused (close 4401); last-authed-bind-wins takeover | `app/routes/tunnel.py` (AC-S27) |
 | F11 | Legacy insecure surface | `X-User-Id` header-trust, `/status` crypto route, GitHub auto-deploy webhook, SMTP backup all **removed** | `git` deletions; grep shows only doc-comment references |
 
+## Deep audit (pass 1) — one finding, fixed
+Confirmed: no eval/exec/SQLi/shell/pickle; **atomic Lua** rate-limiter (CRUD via
+MULTI/EXEC); **no ReDoS** (path patterns `re.escape` user input); valid Compose
+config. One finding, now **fixed & closed**:
+
+- **DNS-rebinding TOCTOU in the MITM SSRF guard** (`hookbox-zqd`): the guard
+  resolved+checked the hostname's IPs but httpx re-resolved at connect, so a
+  rebinding record could swap in an internal address between check and connect. Fixed
+  in `app/interceptor/proxy.py` by **pinning the connection to the validated IP**
+  while preserving the `Host` header + TLS SNI / certificate verification for the
+  hostname. Verified 7/7 (real-HTTPS TLS preserved, metadata/loopback still blocked,
+  connection pinned to the checked IP, Host/SNI intact).
+
 ## Residual / follow-up
-- **`hookbox-ej9`** — exhaustive line-by-line audit across all modules (depth beyond
-  the prioritized-threat verification above): rate-limit Lua atomicity, redirect-hop
-  re-validation under DNS-rebinding, WS backpressure, multipart/upload edge cases,
-  dependency CVE scan. Recommended before any public/multi-tenant deployment.
+- **`hookbox-ej9`** — remaining exhaustive pass: WS/SSE backpressure under slow
+  consumers, multipart/upload edges, dependency CVE scan, line-by-line
+  crud/conditions/middleware/database. Recommended before any public/multi-tenant
+  deployment.
 - No critical/high finding is left open from `security.md`'s threat model.

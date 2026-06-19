@@ -13,6 +13,10 @@ SSRF guard (AC-S7/S8, security §4.3) — the core of this module:
     reserved / the cloud-metadata address ``169.254.169.254``). A match is refused
     with ``502`` and logged — evaluated on the **resolved IP**, not the hostname
     string, unless ``MITM_ALLOW_PRIVATE=true``.
+  * The connection is then **pinned to that validated IP** (we connect to the IP
+    literal, preserving the ``Host`` header + TLS SNI / certificate verification for
+    the original hostname), so a rebinding DNS record cannot swap in an internal
+    address between the check and the TCP connect (DNS-rebinding TOCTOU, hookbox-zqd).
   * If redirect-following is enabled (``MITM_FOLLOW_REDIRECTS``), redirects are
     followed manually up to ``MITM_MAX_REDIRECTS`` and **AC-S7 is re-applied to
     every hop's resolved IP** (AC-S8). By default redirects are **not** followed.
@@ -167,16 +171,38 @@ def _resolve_and_check(host: str) -> List[str]:
     return resolved
 
 
-def _validate_url(url: str) -> str:
-    """Validate scheme + SSRF for ``url``. Returns the (normalized) url or raises
-    :class:`SSRFBlocked`."""
+def _validate_url(url: str) -> List[str]:
+    """Validate scheme + host and SSRF-check the **resolved IPs**. Returns the list
+    of validated (block-list-passed) IP literals so the caller can PIN the
+    connection to one of them — closing the DNS-rebinding TOCTOU between this check
+    and httpx's connect-time re-resolution (hookbox-zqd)."""
     parts = urlsplit(url)
     if parts.scheme.lower() not in _ALLOWED_SCHEMES:
         raise SSRFBlocked(f"scheme {parts.scheme!r} not allowed")
     if not parts.hostname:
         raise SSRFBlocked("target has no host")
-    _resolve_and_check(parts.hostname)
-    return url
+    return _resolve_and_check(parts.hostname)
+
+
+def _pin_target(url: str, ip: str) -> Tuple[str, str, Optional[str]]:
+    """Rewrite ``url`` to connect to the pre-validated ``ip`` literal while keeping
+    the original hostname for the upstream ``Host`` header and (https) the TLS SNI /
+    certificate verification. Returns ``(ip_url, host_header, sni_hostname)``.
+
+    Because httpx connects to the URL host verbatim, putting the checked IP there
+    means no second DNS resolution can occur — a rebinding record cannot swap in an
+    internal address between :func:`_validate_url` and the TCP connect.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port
+    ip_host = f"[{ip}]" if ":" in ip else ip                 # bracket IPv6 literals
+    netloc = f"{ip_host}:{port}" if port else ip_host
+    ip_url = urlunsplit((parts.scheme, netloc, parts.path or "/", parts.query, ""))
+    disp_host = f"[{host}]" if ":" in host else host          # bracket IPv6 in Host
+    host_header = f"{disp_host}:{port}" if port else disp_host
+    sni_hostname = host if parts.scheme.lower() == "https" else None
+    return ip_url, host_header, sni_hostname
 
 
 # --- URL assembly -------------------------------------------------------------
@@ -242,10 +268,10 @@ async def forward(
 
     try:
         while True:
-            # SSRF guard on the (initial or redirected) target — checks the
-            # resolved IP, re-applied on every hop (AC-S7 / AC-S8).
+            # SSRF guard on the (initial or redirected) target — checks every
+            # resolved IP, re-applied on each hop (AC-S7 / AC-S8).
             try:
-                _validate_url(current_url)
+                validated_ips = _validate_url(current_url)
             except SSRFBlocked as exc:
                 logger.warning("MITM SSRF block: %s (url=%s)", exc, current_url)
                 return JSONResponse(
@@ -254,12 +280,20 @@ async def forward(
                              "detail": "Upstream target is not permitted."},
                 )
 
-            resp = await client.request(
+            # PIN to a pre-validated IP so httpx cannot re-resolve the hostname to a
+            # different (internal) address between the check above and the connect —
+            # a DNS-rebinding TOCTOU bypass (hookbox-zqd). Host header + (https) TLS
+            # SNI / cert verification still use the original hostname.
+            ip_url, host_header, sni_hostname = _pin_target(current_url, validated_ips[0])
+            req = client.build_request(
                 current_method,
-                current_url,
-                headers=fwd_headers,
+                ip_url,
+                headers={**fwd_headers, "host": host_header},
                 content=current_body if current_body else None,
             )
+            if sni_hostname:
+                req.extensions["sni_hostname"] = sni_hostname
+            resp = await client.send(req)
 
             # Manual redirect handling so each hop is re-validated (AC-S8).
             if resp.is_redirect and redirects_left > 0:
