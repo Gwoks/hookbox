@@ -20,7 +20,16 @@
 >
     <div class="card p-8">
         <div class="mb-6 text-center">
-            <h1 class="text-2xl font-bold mb-2">HookBox</h1>
+            {# Brand lockup (a1): inline-SVG hook mark (no external asset) + wordmark
+               + a 1px --link accent rule under the lockup. Presentational only. #}
+            <div class="inline-flex items-center gap-2 mb-2">
+                <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M8 4v8a4 4 0 0 0 8 0" stroke="#58a6ff" stroke-width="2.4" stroke-linecap="round"/>
+                    <circle cx="8" cy="4" r="2" fill="#58a6ff"/>
+                </svg>
+                <h1 class="text-2xl font-bold">HookBox</h1>
+            </div>
+            <div class="brand-accent w-16 mx-auto mb-3" aria-hidden="true"></div>
             <p class="text-[#8b949e] text-sm">
                 Self-hosted API mocking, interception &amp; real-time debugging.
                 Enter your email to create or resume an endpoint — no password.
@@ -29,7 +38,7 @@
 
         {# Storage-unavailable (private mode): no infinite redirect — explain + still allow entry. #}
         <template x-if="!storageAvailable">
-            <div class="bg-[#d29922]/15 border border-[#d29922] text-[#e6edf3] text-sm rounded px-3 py-2 mb-4" role="alert">
+            <div class="alert alert--warn mb-4" role="alert">
                 Browser storage is unavailable (private mode?). Enable storage or
                 re-enter your email each visit — your session can't be remembered here.
             </div>
@@ -37,7 +46,7 @@
 
         {# Network / unexpected error banner (AC-46 landing). Never reveals email-exists. #}
         <template x-if="errorBanner">
-            <div class="bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2 mb-4" role="alert">
+            <div class="alert alert--danger mb-4" role="alert">
                 <span x-text="errorBanner"></span>
             </div>
         </template>
@@ -73,6 +82,26 @@
         <p class="text-xs text-[#8b949e] mt-4 text-center">
             Your email is the recovery key — it maps to your endpoints. We never send a password.
         </p>
+    </div>
+
+    {# Value-prop strip (a2) — presentational, non-interactive. Inside the centered
+       column so the lockup stays centered. Glyphs are unicode (no external asset). #}
+    <div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 text-center" aria-hidden="true">
+        <div>
+            <div class="text-[#58a6ff] text-lg leading-none mb-1">◆</div>
+            <div class="text-sm text-[#c9d1d9]">Mock</div>
+            <div class="text-xs text-[#8b949e]">instant REST responses</div>
+        </div>
+        <div>
+            <div class="text-[#58a6ff] text-lg leading-none mb-1">▸</div>
+            <div class="text-sm text-[#c9d1d9]">Intercept</div>
+            <div class="text-xs text-[#8b949e]">proxy &amp; capture real APIs</div>
+        </div>
+        <div>
+            <div class="text-[#58a6ff] text-lg leading-none mb-1">●</div>
+            <div class="text-sm text-[#c9d1d9]">Inspect</div>
+            <div class="text-xs text-[#8b949e]">live feed + deep trace</div>
+        </div>
     </div>
 </div>
 

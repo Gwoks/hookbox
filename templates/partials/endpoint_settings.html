@@ -45,16 +45,19 @@
                 <div class="text-[#8b949e] text-sm py-6 text-center" role="status" aria-busy="true">Loading settings…</div>
             </template>
             <template x-if="$store.endpoint.error && !$store.endpoint.loading">
-                <div class="bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="$store.endpoint.error"></div>
+                <div class="alert alert--danger" role="alert" x-text="$store.endpoint.error"></div>
             </template>
 
             <template x-if="!$store.endpoint.loading && $store.endpoint.detail">
                 <div class="space-y-5">
 
-                    {# Save error banner (AC-46 settings error) #}
+                    {# Save error banner (AC-46 settings error / g4 unified .alert) #}
                     <template x-if="$store.endpoint.saveError">
-                        <div class="bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="$store.endpoint.saveError"></div>
+                        <div class="alert alert--danger" role="alert" x-text="$store.endpoint.saveError"></div>
                     </template>
+
+                    {# ===== Identity (f1) ===== #}
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e]">Identity</h3>
 
                     {# Name #}
                     <div>
@@ -63,6 +66,10 @@
                                class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none"
                                placeholder="My mock API">
                     </div>
+
+                    <hr class="border-[#30363d]">
+                    {# ===== Behavior (f1) ===== #}
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e]">Behavior</h3>
 
                     {# Auto-CRUD toggle (AC-11 FE) #}
                     <div class="flex items-center justify-between gap-4">
@@ -140,6 +147,7 @@
                         </label>
                         <input id="set-chaos" type="range" min="0" max="100" step="1" x-model.number="form.chaos_pct"
                                class="w-full" aria-describedby="set-chaos-help">
+                        <div class="flex justify-between text-[10px] text-[#6e7681]"><span>0</span><span>100%</span></div>
                         <p id="set-chaos-help" class="text-xs text-[#8b949e]">Percent of requests that return a random 5xx (502/503/504). Clamped 0–100.</p>
                     </div>
 

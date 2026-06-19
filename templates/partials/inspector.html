@@ -50,15 +50,16 @@
     <template x-if="$store.inspector.isReady">
         <div class="flex-1 flex flex-col min-h-0">
 
-            {# Header strip (design.md §3.4): method · path · status · served-by · latency #}
+            {# Header strip (design.md §3.4 / d1): repeats the selected row's method
+               color · path · status · served-by · latency — "one subject, one color." #}
             <div class="panel-flush px-4 py-2 flex flex-wrap items-center gap-3 sticky top-0 z-10">
                 <span class="badge" :class="$store.inspector.methodBadge" x-text="d().method"></span>
                 <span class="font-mono text-sm break-all flex-1 min-w-[8rem]" x-text="d().path"></span>
-                <span class="font-bold font-mono" :class="$store.inspector.statusClass" x-text="d().status_code"></span>
+                <span class="font-bold font-mono tabular" :class="$store.inspector.statusClass" x-text="d().status_code"></span>
                 <template x-if="d().served_by">
                     <span class="served-chip" :class="$store.inspector.servedClass" x-text="$store.inspector.servedLabel"></span>
                 </template>
-                <span class="text-xs text-[#8b949e]" x-text="d().duration_ms + 'ms'"></span>
+                <span class="text-xs text-[#8b949e] tabular" x-text="d().duration_ms + 'ms'"></span>
             </div>
 
             {# Tab strip — role=tablist with arrow-key navigation (AC-47) #}
@@ -133,10 +134,25 @@
                     <template x-if="$store.inspector.reqBodyKind === 'binary'">
                         <p class="text-xs text-[#8b949e] py-1 font-mono">[binary, truncated]</p>
                     </template>
-                    {# JSON → collapsible tree #}
+                    {# JSON → collapsible tree + local Body controls (d5) #}
                     <template x-if="$store.inspector.reqBodyKind === 'json'">
                         <div x-data="bodyTree(() => $store.inspector.reqBodyTree)">
-                            {% include "partials/inspector_body_tree.html" %}
+                            <div class="flex items-center gap-2 mb-2 flex-wrap">
+                                <button type="button" class="btn-secondary text-xs px-2 py-1" @click="expandAll()" x-show="!raw">Expand all</button>
+                                <button type="button" class="btn-secondary text-xs px-2 py-1" @click="collapseAll()" x-show="!raw">Collapse all</button>
+                                <button type="button" class="btn-secondary text-xs px-2 py-1" @click="copyToClipboard($store.inspector.reqBodyRaw)" aria-label="Copy request body">Copy</button>
+                                <span class="inline-flex rounded overflow-hidden border border-[#30363d] ml-auto" role="group" aria-label="Body view mode">
+                                    <button type="button" class="text-xs px-2 py-1"
+                                            :class="!raw ? 'text-[#58a6ff] bg-[#21262d]' : 'text-[#8b949e]'"
+                                            :aria-pressed="!raw ? 'true' : 'false'" @click="raw = false">Pretty</button>
+                                    <button type="button" class="text-xs px-2 py-1 border-l border-[#30363d]"
+                                            :class="raw ? 'text-[#58a6ff] bg-[#21262d]' : 'text-[#8b949e]'"
+                                            :aria-pressed="raw ? 'true' : 'false'" @click="raw = true">Raw</button>
+                                </span>
+                            </div>
+                            <div x-show="!raw">{% include "partials/inspector_body_tree.html" %}</div>
+                            {# Raw fallback uses x-text (text node) — never innerHTML on captured data. #}
+                            <pre x-show="raw" class="whitespace-pre-wrap break-all"><code x-text="$store.inspector.reqBodyRaw"></code></pre>
                         </div>
                     </template>
                     {# XML / text → raw <pre> (textContent via x-text — inert) #}
@@ -192,7 +208,21 @@
                     </template>
                     <template x-if="$store.inspector.resBodyKind === 'json'">
                         <div x-data="bodyTree(() => $store.inspector.resBodyTree)">
-                            {% include "partials/inspector_body_tree.html" %}
+                            <div class="flex items-center gap-2 mb-2 flex-wrap">
+                                <button type="button" class="btn-secondary text-xs px-2 py-1" @click="expandAll()" x-show="!raw">Expand all</button>
+                                <button type="button" class="btn-secondary text-xs px-2 py-1" @click="collapseAll()" x-show="!raw">Collapse all</button>
+                                <button type="button" class="btn-secondary text-xs px-2 py-1" @click="copyToClipboard($store.inspector.resBodyRaw)" aria-label="Copy response body">Copy</button>
+                                <span class="inline-flex rounded overflow-hidden border border-[#30363d] ml-auto" role="group" aria-label="Body view mode">
+                                    <button type="button" class="text-xs px-2 py-1"
+                                            :class="!raw ? 'text-[#58a6ff] bg-[#21262d]' : 'text-[#8b949e]'"
+                                            :aria-pressed="!raw ? 'true' : 'false'" @click="raw = false">Pretty</button>
+                                    <button type="button" class="text-xs px-2 py-1 border-l border-[#30363d]"
+                                            :class="raw ? 'text-[#58a6ff] bg-[#21262d]' : 'text-[#8b949e]'"
+                                            :aria-pressed="raw ? 'true' : 'false'" @click="raw = true">Raw</button>
+                                </span>
+                            </div>
+                            <div x-show="!raw">{% include "partials/inspector_body_tree.html" %}</div>
+                            <pre x-show="raw" class="whitespace-pre-wrap break-all"><code x-text="$store.inspector.resBodyRaw"></code></pre>
                         </div>
                     </template>
                     <template x-if="$store.inspector.resBodyKind === 'xml' || $store.inspector.resBodyKind === 'text'">
@@ -288,6 +318,7 @@ function inspectorPanel() {
 function bodyTree(getNodes) {
     return {
         openState: {},   // id -> bool (override of node.open default)
+        raw: false,      // d5 — Raw (<pre> fallback) vs Pretty (tree); default Pretty
         _initFor: null,
 
         nodesRaw() {
@@ -300,6 +331,16 @@ function bodyTree(getNodes) {
         },
         toggle(node) {
             this.openState[node.id] = !this.isOpen(node);
+        },
+        /* d5 — local Expand-all / Collapse-all over the (already-capped, ≤5000) flat
+         * node list. Sets openState for every container node; touches no store. */
+        expandAll() {
+            const ns = this.nodesRaw();
+            for (let i = 0; i < ns.length; i++) { if (ns[i].hasChildren) this.openState[ns[i].id] = true; }
+        },
+        collapseAll() {
+            const ns = this.nodesRaw();
+            for (let i = 0; i < ns.length; i++) { if (ns[i].hasChildren) this.openState[ns[i].id] = false; }
         },
         get visibleNodes() {
             const nodes = this.nodesRaw();

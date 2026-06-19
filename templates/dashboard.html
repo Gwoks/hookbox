@@ -52,30 +52,45 @@
     <template x-if="!notFound">
         <div class="flex flex-col flex-1 min-h-0">
 
-            {# ================= ENDPOINT BAR (AC-3b switcher · settings · Auto-CRUD) ================= #}
-            <div class="panel-flush px-4 py-2 flex items-center justify-between gap-3 flex-wrap sticky top-0 z-10">
+            {# ================= ENDPOINT BAR (AC-3b switcher · settings · Auto-CRUD) =================
+               Two clusters (design §2.2 / b1): LEFT = identity (Endpoint switcher ·
+               + New endpoint · lg+ mock chip); RIGHT = actions (Auto-CRUD · Rules ·
+               + New Rule [the one green] · Settings) behind a hairline divider. #}
+            <div class="panel-flush px-4 py-2 flex items-center justify-between gap-3 flex-wrap sticky top-0 z-10"
+                 :class="barScrolled ? 'is-scrolled' : ''">
                 <div class="flex items-center gap-2 min-w-0">
                     {# Multi-endpoint switcher: lists GET /api/endpoints; select → /d/<token> (AC-3b). #}
-                    <label for="ep-switcher" class="sr-only">Switch endpoint</label>
-                    <select id="ep-switcher"
-                            class="bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-sm focus:border-[#58a6ff] focus:outline-none max-w-[220px]"
-                            @change="switchEndpoint($event.target.value)">
-                        {# Current token is always present even before the list loads. #}
-                        <template x-if="$store.endpoint.list.length === 0">
-                            <option :value="token" x-text="endpointName || token" selected></option>
-                        </template>
-                        <template x-for="ep in $store.endpoint.list" :key="ep.token">
-                            <option :value="ep.token" :selected="ep.token === token" x-text="(ep.name || ep.token)"></option>
-                        </template>
-                    </select>
+                    <div class="flex flex-col">
+                        <label for="ep-switcher" class="text-[10px] uppercase tracking-wide text-[#6e7681] leading-none mb-1">Endpoint</label>
+                        <select id="ep-switcher"
+                                class="bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-sm focus:border-[#3d444d] focus:outline-none max-w-[220px]"
+                                @change="switchEndpoint($event.target.value)">
+                            {# Current token is always present even before the list loads. #}
+                            <template x-if="$store.endpoint.list.length === 0">
+                                <option :value="token" x-text="endpointName || token" selected></option>
+                            </template>
+                            <template x-for="ep in $store.endpoint.list" :key="ep.token">
+                                <option :value="ep.token" :selected="ep.token === token" x-text="(ep.name || ep.token)"></option>
+                            </template>
+                        </select>
+                    </div>
                     <button type="button" class="btn-secondary text-xs px-2 py-1"
                             :class="$store.endpoint.creating ? 'is-disabled' : ''"
                             :disabled="$store.endpoint.creating"
                             @click="newEndpoint()"
                             x-text="$store.endpoint.creating ? 'Creating…' : '+ New endpoint'"></button>
+                    {# Wide-screen primary mock-URL chip (b2): copy-only, neutral, lg+ only. #}
+                    <template x-if="mockUrl">
+                        <div class="mock-chip hidden lg:inline-flex max-w-[320px]">
+                            <code class="flex-1" x-text="mockUrl"></code>
+                            <button type="button" class="copy-btn text-[#8b949e] text-xs"
+                                    :aria-label="'Copy mock URL ' + mockUrl"
+                                    @click="copyToClipboard(mockUrl)">Copy</button>
+                        </div>
+                    </template>
                 </div>
 
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3 pl-3 border-l border-[#30363d]">
                     {# Inline Auto-CRUD quick toggle (optimistic; AC-11 FE). #}
                     <template x-if="$store.endpoint.detail">
                         <label class="flex items-center gap-2 text-xs text-[#8b949e] cursor-pointer">
@@ -101,8 +116,9 @@
             {# ================= LEFT: live feed ================= #}
             <section class="flex flex-col w-full md:w-[40%] md:min-w-[360px] border-b md:border-b-0 md:border-r border-[#30363d] min-h-0">
 
-                {# Feed header bar #}
-                <div class="panel-flush px-4 py-2 flex items-center justify-between gap-3 sticky top-0 z-10">
+                {# Feed header bar — sticky-depth shadow appears once the feed scrolls (b3). #}
+                <div class="panel-flush px-4 py-2 flex items-center justify-between gap-3 sticky top-0 z-10"
+                     :class="feedScrolled ? 'is-scrolled' : ''">
                     <div class="flex items-center gap-2 min-w-0">
                         <span class="font-bold text-sm truncate" x-text="endpointName || 'Live feed'"></span>
                     </div>
@@ -156,30 +172,53 @@
                      role="listbox"
                      aria-label="Live request feed"
                      :aria-live="$store.feed.paused ? 'off' : 'polite'"
+                     @scroll="onFeedScroll($event)"
                      @keydown.arrow-down.prevent="moveSelection(1)"
                      @keydown.arrow-up.prevent="moveSelection(-1)"
                      tabindex="0">
 
-                    {# Loading skeleton (AC-46). Static under reduced-motion via app.css. #}
+                    {# Loading skeleton (AC-46 / g1) — shaped like the real feed grid:
+                       a 52px badge block + a flexible path bar + a short right cluster.
+                       Static under reduced-motion via app.css. #}
                     <template x-if="loading">
-                        <div class="p-2 space-y-2" aria-hidden="true">
-                            <template x-for="i in 5" :key="i">
-                                <div class="skeleton" style="height: 34px;"></div>
+                        <div aria-hidden="true">
+                            <template x-for="i in 6" :key="i">
+                                <div class="flex items-center gap-[10px] px-3 py-2 border-b border-[#21262d]">
+                                    <div class="skeleton" style="width: 44px; height: 18px;"></div>
+                                    <div class="skeleton flex-1" style="height: 12px;"></div>
+                                    <div class="skeleton" style="width: 28px; height: 12px;"></div>
+                                    <div class="skeleton" style="width: 40px; height: 12px;"></div>
+                                </div>
                             </template>
                         </div>
                     </template>
 
-                    {# Empty state — turns a dead screen into the first-call funnel (AC-46). #}
+                    {# Empty state (AC-46 / g2) — the first-call funnel: muted glyph, copy,
+                       the copyable mock-URL chip, and a copy-only sample request. The
+                       sample is STATIC TEXT bound via x-text — never executed, and it is
+                       not an http asset (no src/href), so it loads offline (LOCKED). #}
                     <template x-if="!loading && $store.feed.rows.length === 0">
                         <div class="p-8 text-center text-[#8b949e] text-sm">
-                            <p class="mb-3">No requests yet.</p>
-                            <p class="mb-3 text-xs">Send a request to your mock URL and it will appear here live.</p>
+                            <div class="text-3xl text-[#30363d] mb-3" aria-hidden="true">◇</div>
+                            <p class="mb-1 text-[#e6edf3]">No requests yet.</p>
+                            <p class="mb-4 text-xs">Send a request to your mock URL and it will appear here live.</p>
                             <template x-if="mockUrl">
-                                <div class="mock-chip mx-auto inline-flex">
-                                    <code x-text="mockUrl"></code>
-                                    <button type="button" class="copy-btn text-[#8b949e] text-xs"
-                                            :aria-label="'Copy mock URL ' + mockUrl"
-                                            @click="copyToClipboard(mockUrl)">Copy</button>
+                                <div class="space-y-3">
+                                    <div class="mock-chip mx-auto inline-flex">
+                                        <code x-text="mockUrl"></code>
+                                        <button type="button" class="copy-btn text-[#8b949e] text-xs"
+                                                :aria-label="'Copy mock URL ' + mockUrl"
+                                                @click="copyToClipboard(mockUrl)">Copy</button>
+                                    </div>
+                                    <div class="text-left max-w-sm mx-auto">
+                                        <div class="flex items-center justify-between mb-1">
+                                            <span class="text-[10px] uppercase tracking-wide text-[#6e7681]">Try it</span>
+                                            <button type="button" class="copy-btn text-[#8b949e] text-xs"
+                                                    aria-label="Copy sample request"
+                                                    @click="copyToClipboard(sampleCurl)">Copy</button>
+                                        </div>
+                                        <pre class="text-left"><code class="text-[#c9d1d9]" x-text="sampleCurl"></code></pre>
+                                    </div>
                                 </div>
                             </template>
                         </div>
@@ -206,14 +245,18 @@
                                 :data-request-id="row.id"
                                 @click="$store.feed.select(row.id)"
                             >
+                                {# 5-column grid (design §3.3 c1) — span order kept 1:1 with
+                                   partials/feed_row.html so server + live rows render identically. #}
                                 <span class="badge" :class="methodBadge(row.method)" x-text="row.method"></span>
-                                <span class="flex-1 truncate" :title="row.path" x-text="row.path"></span>
-                                <span class="font-bold" :class="statusClass(row.status_code)" x-text="row.status_code"></span>
+                                <span class="truncate" :title="row.path" x-text="row.path"></span>
+                                <span class="font-bold feed-status tabular" :class="statusClass(row.status_code)" x-text="row.status_code"></span>
                                 <template x-if="row.served_by">
                                     <span class="served-chip" :class="servedClass(row.served_by)" x-text="servedLabel(row.served_by)"></span>
                                 </template>
-                                <span class="text-xs text-[#8b949e]" x-text="row.duration_ms + 'ms'"></span>
-                                <span class="text-xs text-[#6e7681]" x-text="relTime(row.timestamp)"></span>
+                                <span class="feed-meta">
+                                    <span class="text-xs text-[#8b949e] feed-latency tabular" x-text="row.duration_ms + 'ms'"></span>
+                                    <span class="text-xs text-[#6e7681] tabular" x-text="relTime(row.timestamp)"></span>
+                                </span>
                             </button>
                         </template>
                     </div>
@@ -228,14 +271,23 @@
             {# Empty state when nothing is selected; the deep inspector partial mounts
                and lazy-loads RequestDetail (GET /api/requests/{id}) once a row is
                selected. The feed store fires hb:select-request → the inspector store. #}
-            <section class="flex-1 flex flex-col min-h-0" id="inspector-root">
+            <section class="flex-1 flex flex-col min-h-0 insp-drawer" id="inspector-root"
+                     :class="$store.feed.selectedId !== null ? 'is-open' : ''">
                 <template x-if="$store.feed.selectedId === null">
-                    <div class="flex-1 flex items-center justify-center text-[#8b949e] text-sm p-8">
-                        Select a request on the left to inspect it.
+                    <div class="flex-1 flex flex-col items-center justify-center text-[#8b949e] text-sm p-8">
+                        <div class="text-3xl text-[#30363d] mb-3" aria-hidden="true">◆</div>
+                        <p>Select a request on the left to inspect it.</p>
                     </div>
                 </template>
                 <template x-if="$store.feed.selectedId !== null">
                     <div id="inspector-mount" class="flex-1 flex flex-col min-h-0">
+                        {# Mobile-only back bar (d4 / UX-L2): returns to the full-width
+                           feed via the existing feed.select(null). Inert at md+. #}
+                        <div class="md:hidden panel-flush px-4 py-2">
+                            <button type="button" class="btn-secondary text-xs px-2 py-1"
+                                    @click="$store.feed.select(null)"
+                                    aria-label="Back to feed">&larr; Feed</button>
+                        </div>
                         {% include "partials/inspector.html" %}
                     </div>
                 </template>
@@ -267,9 +319,9 @@
                     <template x-if="$store.rules.loading">
                         <div class="p-6 text-center text-[#8b949e] text-sm" role="status" aria-busy="true">Loading rules…</div>
                     </template>
-                    {# Error #}
+                    {# Error (g4 — unified .alert) #}
                     <template x-if="$store.rules.error && !$store.rules.loading">
-                        <div class="m-4 bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="$store.rules.error"></div>
+                        <div class="alert alert--danger m-4" role="alert" x-text="$store.rules.error"></div>
                     </template>
                     {# Empty (AC-46 rule list) #}
                     <template x-if="!$store.rules.loading && !$store.rules.error && $store.rules.list.length === 0">
@@ -311,9 +363,24 @@ function dashboard(serverToken) {
         rulesOpen: false,
         ruleModalOpen: false,
         editingRule: null,
+        feedScrolled: false,    /* b3 — local UI flag for sticky-bar depth (no store) */
+        barScrolled: false,     /* mirrors feedScrolled so the endpoint bar lifts too */
 
         get absolutePathUrl() {
             return this.pathUrl ? (window.location.origin + this.pathUrl) : '';
+        },
+
+        /* g2 — copy-only sample request for the empty feed. Static text rendered via
+           x-text; never executed and not an http asset. */
+        get sampleCurl() {
+            return this.mockUrl ? ('curl ' + this.mockUrl + '/ping') : '';
+        },
+
+        /* b3 — sticky-depth: flag whether the feed list has scrolled under its bars.
+           Local UI state only — touches no store and no §5 shape. */
+        onFeedScroll(e) {
+            const scrolled = !!(e && e.target && e.target.scrollTop > 0);
+            if (scrolled !== this.feedScrolled) { this.feedScrolled = scrolled; this.barScrolled = scrolled; }
         },
 
         init() {

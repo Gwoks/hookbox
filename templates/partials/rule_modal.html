@@ -36,9 +36,9 @@
             <button type="button" class="copy-btn text-[#8b949e]" aria-label="Close rule editor" @click="closeRuleModal()">&times;</button>
         </div>
 
-        {# Server-side error banner (e.g. 422 re-rendered, AC-VC14). #}
+        {# Server-side error banner (e.g. 422 re-rendered, AC-VC14 / g4 unified .alert). #}
         <template x-if="serverError">
-            <div class="mx-5 mt-3 bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="serverError"></div>
+            <div class="alert alert--danger mx-5 mt-3" role="alert" x-text="serverError"></div>
         </template>
 
         <div class="flex flex-1 min-h-0">
@@ -58,9 +58,9 @@
                             :class="tab === t.id ? 'bg-[#21262d] text-[#58a6ff] border-[#58a6ff]' : 'text-[#c9d1d9] border-transparent hover:bg-[#21262d]'"
                             @click="tab = t.id">
                         <span x-text="t.label"></span>
-                        {# rail dot: red if the tab owns a validation error (AC-VC14). #}
+                        {# rail dot: danger + faint halo if the tab owns a validation error (AC-VC14 / e1). #}
                         <template x-if="validation.tabErrors[t.id]">
-                            <span class="ml-auto w-2 h-2 rounded-full bg-[#f85149]" aria-label="has errors"></span>
+                            <span class="rule-tab-err ml-auto w-2 h-2 rounded-full" aria-label="has errors"></span>
                         </template>
                     </button>
                 </template>
@@ -213,9 +213,10 @@
                 {# ===== Templating (tag palette; inserts into the shared body) ===== #}
                 <div x-show="tab === 'templating'" role="tabpanel" id="rule-panel-templating" aria-labelledby="rule-tab-templating" class="space-y-3">
                     <p class="text-sm text-[#8b949e]">Click a tag to append it to the response body. Tags render at request time (§5.7).</p>
+                    {# e3 — tidy mono chip palette: resting --border → --border-strong on hover. #}
                     <div class="flex flex-wrap gap-2">
                         <template x-for="tag in tagPalette" :key="tag">
-                            <button type="button" class="btn-secondary text-xs px-2 py-1 font-mono"
+                            <button type="button" class="btn-secondary text-xs px-2 py-1 font-mono hover:border-[#3d444d]"
                                     @click="appendTag(tag)" x-text="tag"></button>
                         </template>
                     </div>
@@ -248,9 +249,13 @@
                         </template>
                     </div>
 
-                    {# Webhook sub-section — DISABLED but serialized (AC-33a). #}
+                    {# Webhook sub-section — DISABLED but serialized (AC-33a / e4). The
+                       "Coming soon" pill reads it as intentionally-off; fields stay disabled. #}
                     <fieldset class="border border-[#30363d] rounded p-3 opacity-60" disabled aria-disabled="true">
-                        <legend class="text-sm text-[#c9d1d9] px-1">Webhook on match</legend>
+                        <legend class="text-sm text-[#c9d1d9] px-1 inline-flex items-center gap-2">
+                            <span>Webhook on match</span>
+                            <span class="alert-pill alert--warn">Coming soon</span>
+                        </legend>
                         <p class="text-xs text-[#d29922] mb-2">Coming per spec — confirm scope. This section is disabled; no outbound request is made in v1.</p>
                         <input type="url" x-model="form.webhookUrl" placeholder="https://hooks.example.com/notify"
                                class="w-full bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-sm font-mono mb-2" disabled>

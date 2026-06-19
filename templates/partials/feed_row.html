@@ -47,12 +47,17 @@
     @click="$store.feed.select({{ r.id }})"
     aria-label="{{ _m }} {{ r.path }} responded {{ r.status_code }}"
 >
+    {# 5-column grid (design §3.3 c1): method | path | status | served | meta.
+       Span order is kept 1:1 with the dashboard.html x-for so the two first-paint
+       paths render identically (UX-C1 / VC-C1). data-cell preserved on each. #}
     <span class="badge {{ _method_badge.get(_m, 'm-any') }}" data-cell="method">{{ _m }}</span>
-    <span class="flex-1 truncate" data-cell="path" title="{{ r.path }}">{{ r.path }}</span>
-    <span class="{{ _status_cls }} font-bold" data-cell="status">{{ r.status_code }}</span>
+    <span class="truncate" data-cell="path" title="{{ r.path }}">{{ r.path }}</span>
+    <span class="{{ _status_cls }} font-bold feed-status tabular" data-cell="status">{{ r.status_code }}</span>
     {% if r.served_by %}
     <span class="served-chip {{ _served_cls.get(r.served_by, 'served-default') }}" data-cell="served">{{ _served_label.get(r.served_by, r.served_by) }}</span>
     {% endif %}
-    <span class="text-xs text-[#8b949e]" data-cell="latency">{{ r.duration_ms }}ms</span>
-    <span class="text-xs text-[#6e7681]" data-cell="time" data-ts="{{ r.timestamp }}">{{ r.timestamp }}</span>
+    <span class="feed-meta">
+        <span class="text-xs text-[#8b949e] feed-latency tabular" data-cell="latency">{{ r.duration_ms }}ms</span>
+        <span class="text-xs text-[#6e7681] tabular" data-cell="time" data-ts="{{ r.timestamp }}">{{ r.timestamp }}</span>
+    </span>
 </button>
