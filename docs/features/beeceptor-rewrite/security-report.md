@@ -23,22 +23,36 @@ running app and the relevant modules. **An exhaustive line-by-line audit of all
 | F10 | Tunnel slug hijack | bind capability-gated (owner_secret over WS); cross-owner bind refused (close 4401); last-authed-bind-wins takeover | `app/routes/tunnel.py` (AC-S27) |
 | F11 | Legacy insecure surface | `X-User-Id` header-trust, `/status` crypto route, GitHub auto-deploy webhook, SMTP backup all **removed** | `git` deletions; grep shows only doc-comment references |
 
-## Deep audit (pass 1) — one finding, fixed
-Confirmed: no eval/exec/SQLi/shell/pickle; **atomic Lua** rate-limiter (CRUD via
-MULTI/EXEC); **no ReDoS** (path patterns `re.escape` user input); valid Compose
-config. One finding, now **fixed & closed**:
+## Deep audit (2 passes) — findings & fixes
 
-- **DNS-rebinding TOCTOU in the MITM SSRF guard** (`hookbox-zqd`): the guard
-  resolved+checked the hostname's IPs but httpx re-resolved at connect, so a
-  rebinding record could swap in an internal address between check and connect. Fixed
-  in `app/interceptor/proxy.py` by **pinning the connection to the validated IP**
-  while preserving the `Host` header + TLS SNI / certificate verification for the
-  hostname. Verified 7/7 (real-HTTPS TLS preserved, metadata/loopback still blocked,
-  connection pinned to the checked IP, Host/SNI intact).
+Covered the `hookbox-ej9` scope. **Confirmed clean:** no eval/exec/SQLi/shell/pickle/
+unsafe-yaml; **atomic Lua** rate-limiter (CRUD via MULTI/EXEC); **no ReDoS** (path
+patterns `re.escape` user input); pure-ASGI plane middleware (the `Content-Length`
+desync class is structurally impossible); CRUD path segments charset-validated (no
+Redis-namespace injection); **`pip-audit`: no known vulnerabilities** in the
+dependency tree; valid Compose config; `__import__` loader uses hardcoded internal
+paths only.
 
-## Residual / follow-up
-- **`hookbox-ej9`** — remaining exhaustive pass: WS/SSE backpressure under slow
-  consumers, multipart/upload edges, dependency CVE scan, line-by-line
-  crud/conditions/middleware/database. Recommended before any public/multi-tenant
-  deployment.
-- No critical/high finding is left open from `security.md`'s threat model.
+**Two issues found and fixed:**
+- **DNS-rebinding TOCTOU in the MITM SSRF guard** (`hookbox-zqd`, fixed): the guard
+  resolved+checked the hostname's IPs but httpx re-resolved at connect, so a rebinding
+  record could swap in an internal address. Fixed in `app/interceptor/proxy.py` by
+  **pinning the connection to the validated IP** while preserving `Host` + TLS SNI /
+  certificate verification. Verified 7/7 (real-HTTPS TLS preserved, metadata/loopback
+  still blocked, connection pinned, Host/SNI intact).
+- **Feed relay stalled by slow clients** (fixed): the pub/sub relay awaits
+  `broadcast()` inline and `broadcast()` sent to WS clients **sequentially**, so one
+  endpoint's slow clients (≤ cap × `WS_SEND_TIMEOUT_S`) could delay the **global**
+  live feed. WS sends are now **concurrent** (`asyncio.gather`, per-client timeout) →
+  bounded by a single timeout regardless of client count. Feed delivery re-verified
+  over WS + SSE.
+
+**One accepted limitation (tracked, low priority):**
+- **CRUD write atomicity** — PUT/PATCH/DELETE read-modify-write the Redis list, so
+  concurrent writes to one collection can lose an update. Acceptable for an ephemeral
+  single-tenant mock store; revisit (WATCH/MULTI or Lua CAS) for high-concurrency use.
+
+## Residual
+No critical/high finding from `security.md` remains open; the `hookbox-ej9` audit
+scope is covered. Multipart/upload bodies are captured as **raw bytes bounded by
+`MAX_INGEST_BODY_BYTES` (413)** — no multipart parser is exposed to attacker input.

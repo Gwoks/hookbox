@@ -103,15 +103,22 @@ class ConnectionManager:
         Per-client send is guarded by ``WS_SEND_TIMEOUT_S``; a dead/slow client is
         dropped (R8). Never raises into the relay.
         """
-        # WS clients.
-        dead_ws = []
-        for ws in list(self._ws.get(token, ())):
-            try:
-                await asyncio.wait_for(ws.send_json(payload), timeout=config.WS_SEND_TIMEOUT_S)
-            except Exception:  # noqa: BLE001 - drop dead/slow socket
-                dead_ws.append(ws)
-        for ws in dead_ws:
-            self.remove_ws(token, ws)
+        # WS clients — sent CONCURRENTLY (each with its own timeout) so a slow socket
+        # can't serialize the fan-out. The relay loop awaits this inline for every
+        # token, so sequential sends would let one endpoint's slow clients (up to the
+        # per-endpoint cap × WS_SEND_TIMEOUT_S) stall the global feed; with gather the
+        # broadcast is bounded by a single timeout regardless of client count.
+        ws_clients = list(self._ws.get(token, ()))
+        if ws_clients:
+            async def _send(ws: WebSocket):
+                try:
+                    await asyncio.wait_for(ws.send_json(payload), timeout=config.WS_SEND_TIMEOUT_S)
+                    return None
+                except Exception:  # noqa: BLE001 - drop dead/slow socket
+                    return ws
+            for ws in await asyncio.gather(*[_send(c) for c in ws_clients]):
+                if ws is not None:
+                    self.remove_ws(token, ws)
 
         # SSE clients (non-blocking put; if a client's buffer is full, drop it).
         dead_q = []
