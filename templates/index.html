@@ -1,156 +1,169 @@
 {% extends "base.html" %}
 
-{% block title %}HookBox - Webhook Testing{% endblock %}
+{% block title %}HookBox — API mocking & interception{% endblock %}
 
 {% block content %}
-<div class="mb-8">
-    <div class="flex justify-between items-start mb-4">
-        <div class="flex items-center gap-4">
-            <div class="text-4xl">📦</div>
-            <div>
-                <h1 class="text-2xl font-bold">HookBox</h1>
-                <p class="text-[#8b949e] text-sm">Self-hosted webhook testing</p>
-            </div>
-        </div>
-        <div class="flex items-center gap-4">
-            <span class="text-sm text-[#8b949e]" id="user-email"></span>
-            <button onclick="logout()" class="btn-secondary text-sm">Logout</button>
-        </div>
-    </div>
-    <div class="flex gap-6 text-sm">
-        <a href="/" class="text-[#58a6ff] border-b-2 border-[#58a6ff] pb-1">Endpoints</a>
-        <a href="/backup" class="text-[#8b949e] hover:text-[#c9d1d9]">Backup</a>
-    </div>
-</div>
-</div>
+{#
+  Landing / email-entry screen (AC-3, AC-3a, AC-46 landing slice).
+  Flow: enter email -> POST /api/session (SessionCreate) -> 200 SessionResponse
+  -> persist {owner_id, owner_secret, token, mock_url} to localStorage hookbox_owner
+  -> route to /d/<primary.token>. Talks only to same-origin /api. No password (§5.1).
 
-<div id="endpoints-list" class="space-y-4">
-    <div class="text-[#8b949e]">Loading...</div>
+  Auto-resume + private-mode handling run in `init()` before paint so a returning
+  owner never sees the form, and a storage-disabled browser never loops.
+#}
+<div
+    x-data="landing()"
+    x-init="init()"
+    class="max-w-md mx-auto mt-12"
+    x-cloak
+>
+    <div class="card p-8">
+        <div class="mb-6 text-center">
+            <h1 class="text-2xl font-bold mb-2">HookBox</h1>
+            <p class="text-[#8b949e] text-sm">
+                Self-hosted API mocking, interception &amp; real-time debugging.
+                Enter your email to create or resume an endpoint — no password.
+            </p>
+        </div>
+
+        {# Storage-unavailable (private mode): no infinite redirect — explain + still allow entry. #}
+        <template x-if="!storageAvailable">
+            <div class="bg-[#d29922]/15 border border-[#d29922] text-[#e6edf3] text-sm rounded px-3 py-2 mb-4" role="alert">
+                Browser storage is unavailable (private mode?). Enable storage or
+                re-enter your email each visit — your session can't be remembered here.
+            </div>
+        </template>
+
+        {# Network / unexpected error banner (AC-46 landing). Never reveals email-exists. #}
+        <template x-if="errorBanner">
+            <div class="bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2 mb-4" role="alert">
+                <span x-text="errorBanner"></span>
+            </div>
+        </template>
+
+        <form @submit.prevent="submit()" novalidate>
+            <label for="hb-email" class="block text-sm mb-1 text-[#c9d1d9]">Email</label>
+            <input
+                id="hb-email"
+                type="email"
+                name="email"
+                autocomplete="email"
+                inputmode="email"
+                x-model="email"
+                :aria-invalid="fieldError ? 'true' : 'false'"
+                aria-describedby="hb-email-err"
+                placeholder="you@example.com"
+                class="w-full bg-[#0d1117] border rounded px-3 py-2 focus:outline-none focus:border-[#58a6ff]"
+                :class="fieldError ? 'border-[#f85149]' : 'border-[#30363d]'"
+                :disabled="submitting"
+            >
+            {# Inline field validation (422). Constant copy — does NOT signal whether the email already exists (AC-S5/AC-46). #}
+            <p id="hb-email-err" class="text-xs text-[#f85149] mt-1 min-h-[1rem]" x-text="fieldError"></p>
+
+            <button
+                type="submit"
+                class="btn-primary w-full mt-3"
+                :class="submitting ? 'is-disabled' : ''"
+                :disabled="submitting"
+                x-text="submitting ? 'Setting up…' : 'Get my endpoint'"
+            >Get my endpoint</button>
+        </form>
+
+        <p class="text-xs text-[#8b949e] mt-4 text-center">
+            Your email is the recovery key — it maps to your endpoints. We never send a password.
+        </p>
+    </div>
 </div>
 
 <script>
-let currentUser = null;
+function landing() {
+    return {
+        email: '',
+        submitting: false,
+        fieldError: '',
+        errorBanner: '',
+        storageAvailable: window.HookBox.storageAvailable,
 
-async function init() {
-    const stored = localStorage.getItem('hookbox_user');
-    if (!stored) {
-        window.location.href = '/login';
-        return;
-    }
-    
-    currentUser = JSON.parse(stored);
-    document.getElementById('user-email').textContent = currentUser.email;
-    await loadEndpoints();
-}
-
-async function loadEndpoints() {
-    try {
-        const response = await fetch('/api/endpoints', {
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
+        /* Auto-resume (AC-3a): a present, valid owner routes straight to its dashboard. */
+        init() {
+            const owner = window.HookBox.readOwner();
+            if (owner && owner.token) {
+                window.location.replace('/d/' + encodeURIComponent(owner.token));
             }
-        });
-        
-        if (!response.ok) {
-            localStorage.removeItem('hookbox_user');
-            window.location.href = '/login';
-            return;
-        }
-        
-        const endpoints = await response.json();
-        const container = document.getElementById('endpoints-list');
-        
-        if (endpoints.length === 0) {
-            container.innerHTML = `<div class="card p-12 text-center">
-                <div class="text-6xl mb-4">📦</div>
-                <h2 class="text-xl font-bold mb-2">No endpoints yet</h2>
-                <p class="text-[#8b949e] mb-6">Create your first webhook endpoint</p>
-                <button onclick="createEndpoint()" class="btn-primary text-lg px-6 py-3">+ Create Endpoint</button>
-            </div>`;
-            return;
-        }
-        
-        container.innerHTML = endpoints.map(ep => `
-        <div class="card p-4">
-        <div class="flex justify-between items-start mb-3">
-        <div>
-        <div class="flex items-center gap-3">
-        <span class="text-lg font-mono text-[#58a6ff]">${ep.id}</span>
-        ${ep.name ? `<span class="text-[#8b949e]">${ep.name}</span>` : ''}
-        </div>
-        <div class="text-sm text-[#8b949e] mt-1">
-        ${ep.request_count} request${ep.request_count !== 1 ? 's' : ''} • Created ${formatDate(ep.created_at)}
-        ${ep.last_hit ? ` • Last hit ${formatDate(ep.last_hit)}` : ''}
-        </div>
-        </div>
-        <div class="flex gap-2">
-        <a href="/d/${ep.id}" class="btn-secondary">View</a>
-        <a href="/m/${ep.id}" class="btn-secondary">Mock</a>
-        <button onclick="deleteEndpoint('${ep.id}')" class="btn-danger">Delete</button>
-        </div>
-        </div>
-        <div class="flex items-center gap-2 bg-[#0d1117] p-3 rounded">
-        <code class="flex-1 text-sm truncate">${window.location.origin}/hook/${currentUser.id}/${ep.id}</code>
-        <button onclick="copyToClipboard('${window.location.origin}/hook/${currentUser.id}/${ep.id}')" class="copy-btn text-[#8b949e]">📋</button>
-        </div>
-        </div>`).join('');
-    } catch (err) {
-        console.error('Error loading endpoints:', err);
-        document.getElementById('endpoints-list').innerHTML = '<div class="text-red-500">Error loading endpoints</div>';
-    }
-}
+            /* else: stay on the form. If storage is unavailable we still let them
+               submit; we just warned them it won't persist. No redirect loop. */
+        },
 
-async function createEndpoint() {
-    const name = prompt('Endpoint name (optional):');
-    try {
-        const response = await fetch('/api/endpoints', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
-            },
-            body: JSON.stringify({ name: name || null })
-        });
-        const data = await response.json();
-        window.location.href = `/d/${data.id}`;
-    } catch (err) {
-        console.error('Error creating endpoint:', err);
-    }
-}
+        validEmail(v) {
+            /* Light client-side gate only; the server's EmailStr is authoritative (422). */
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
+        },
 
-async function deleteEndpoint(id) {
-    if (!confirm('Delete this endpoint and all requests?')) return;
-    try {
-        await fetch(`/api/endpoints/${id}`, {
-            method: 'DELETE',
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
+        async submit() {
+            this.fieldError = '';
+            this.errorBanner = '';
+            const email = (this.email || '').trim();
+
+            if (!this.validEmail(email)) {
+                this.fieldError = 'Enter a valid email address.';
+                return;
             }
-        });
-        window.location.reload();
-    } catch (err) {
-        console.error('Error deleting endpoint:', err);
-    }
-}
 
-function logout() {
-    localStorage.removeItem('hookbox_user');
-    window.location.href = '/login';
-}
+            this.submitting = true;
+            try {
+                const res = await fetch('/api/session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email }),
+                });
 
-function formatDate(dateStr) {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = (now - date) / 1000;
-    if (diff < 60) return 'just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return date.toLocaleDateString();
-}
+                if (res.status === 422) {
+                    /* Bad email per the server. Constant copy regardless of new-vs-existing. */
+                    this.fieldError = 'That email looks invalid. Please check and try again.';
+                    this.submitting = false;
+                    return;
+                }
+                if (res.status === 429) {
+                    this.errorBanner = 'Too many attempts. Please wait a moment and try again.';
+                    this.submitting = false;
+                    return;
+                }
+                if (!res.ok) {
+                    this.errorBanner = 'Something went wrong setting up your session. Please try again.';
+                    this.submitting = false;
+                    return;
+                }
 
-init();
+                const data = await res.json();             /* SessionResponse (§5.3) */
+                const primary = data.primary || (data.endpoints && data.endpoints[0]);
+                if (!primary || !primary.token) {
+                    this.errorBanner = 'Session created but no endpoint was returned. Please try again.';
+                    this.submitting = false;
+                    return;
+                }
+
+                /* Persist exactly the §5.1 localStorage shape (+ email for the nav). */
+                const owner = {
+                    owner_id: data.owner_id,
+                    owner_secret: data.owner_secret,
+                    token: primary.token,
+                    mock_url: primary.mock_url,
+                    email: email,
+                };
+                window.HookBox.writeOwner(owner);
+
+                /* Keep the live Alpine store in sync if present (so nav updates if no full reload). */
+                try { if (window.Alpine && Alpine.store('owner')) Alpine.store('owner').set(owner); } catch (e) { /* noop */ }
+
+                window.location.assign('/d/' + encodeURIComponent(primary.token));
+            } catch (err) {
+                /* Network failure / offline. Generic, retryable. */
+                this.errorBanner = 'Network error — check your connection and try again.';
+                this.submitting = false;
+            }
+        },
+    };
+}
 </script>
 {% endblock %}

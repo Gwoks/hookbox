@@ -1,267 +1,470 @@
 {% extends "base.html" %}
 
-{% block title %}HookBox - Dashboard{% endblock %}
+{% block title %}HookBox — Dashboard{% endblock %}
 
-{% block content %}
-<div id="dashboard">
-    <div class="flex items-center gap-2 text-sm text-[#8b949e] mb-4">
-        <a href="/" class="hover:text-[#58a6ff]">Endpoints</a>
-        <span>/</span>
-        <span id="endpoint-id">Loading...</span>
-        <span id="ws-status" class="ml-2 text-xs"></span>
-    </div>
-</div>
+{# Slim nav on the dashboard for more split-screen vertical room (design.md §3.11). #}
+{% block nav_pad %}py-2{% endblock %}
 
-<div id="modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
-    <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-4xl max-h-[80vh] overflow-hidden">
-        <div class="p-4 border-b border-[#30363d] flex justify-between items-center">
-            <h3 class="font-bold text-lg" id="modal-title">Request Details</h3>
-            <button onclick="closeModal()" class="text-2xl">&times;</button>
+{% block extra_head %}
+<!-- Live feed pipe: the useRequestStream substitute (_decisions.md §1a). -->
+<script defer src="/static/js/util.js"></script>
+<script defer src="/static/js/request-stream.js"></script>
+<!-- Rule modal serialize/validate (hookbox-wrd.27). -->
+<script defer src="/static/js/rule-builder.js"></script>
+{% endblock %}
+
+{#
+  Full-bleed split-screen shell (design.md §4, ux.md §2.2):
+    LEFT  (40%, min 360px): live feed — header (name · WS pill · Pause · "N new"),
+                            mock-URL chips, the streaming feed list, footer count.
+    RIGHT (flex-1):         inspector — header strip + tabs (filled by .26), with a
+                            "Select a request" empty state so the shell is complete.
+
+  `token` (the endpoint token) is the only required server context. First-paint
+  feed rows (AC-27a) are progressive enhancement: if the route passes
+  `initial_requests` (RequestSummary-shaped) they render server-side AND seed the
+  client via the #hb-initial-feed JSON island; otherwise the client back-fills.
+#}
+{% block fullbleed %}
+{% set ep_token = token if token is defined else '' %}
+<div
+    x-data="dashboard('{{ ep_token }}')"
+    x-init="init()"
+    class="flex flex-col"
+    style="height: calc(100vh - 49px);"
+    x-cloak
+>
+    {# ----- Endpoint not found / expired (AC-7a FE, AC-46 dashboard shell) ----- #}
+    <template x-if="notFound">
+        <div class="flex-1 flex items-center justify-center p-8">
+            <div class="card p-8 max-w-md text-center">
+                <h2 class="text-2xl font-bold text-[#f85149] mb-2">Endpoint not found</h2>
+                <p class="text-[#8b949e] text-sm mb-6">
+                    This endpoint may have been deleted or expired. Create a new one to keep going.
+                </p>
+                <a href="/" class="btn-primary inline-block">Back to start</a>
+            </div>
         </div>
-        <div class="p-4 overflow-auto max-h-[70vh]" id="modal-content"></div>
-    </div>
+    </template>
+
+    {# ----- Owner mismatch / not signed in: bounce to landing (handled in init) ----- #}
+
+    <template x-if="!notFound">
+        <div class="flex flex-col flex-1 min-h-0">
+
+            {# ================= ENDPOINT BAR (AC-3b switcher · settings · Auto-CRUD) ================= #}
+            <div class="panel-flush px-4 py-2 flex items-center justify-between gap-3 flex-wrap sticky top-0 z-10">
+                <div class="flex items-center gap-2 min-w-0">
+                    {# Multi-endpoint switcher: lists GET /api/endpoints; select → /d/<token> (AC-3b). #}
+                    <label for="ep-switcher" class="sr-only">Switch endpoint</label>
+                    <select id="ep-switcher"
+                            class="bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-sm focus:border-[#58a6ff] focus:outline-none max-w-[220px]"
+                            @change="switchEndpoint($event.target.value)">
+                        {# Current token is always present even before the list loads. #}
+                        <template x-if="$store.endpoint.list.length === 0">
+                            <option :value="token" x-text="endpointName || token" selected></option>
+                        </template>
+                        <template x-for="ep in $store.endpoint.list" :key="ep.token">
+                            <option :value="ep.token" :selected="ep.token === token" x-text="(ep.name || ep.token)"></option>
+                        </template>
+                    </select>
+                    <button type="button" class="btn-secondary text-xs px-2 py-1"
+                            :class="$store.endpoint.creating ? 'is-disabled' : ''"
+                            :disabled="$store.endpoint.creating"
+                            @click="newEndpoint()"
+                            x-text="$store.endpoint.creating ? 'Creating…' : '+ New endpoint'"></button>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    {# Inline Auto-CRUD quick toggle (optimistic; AC-11 FE). #}
+                    <template x-if="$store.endpoint.detail">
+                        <label class="flex items-center gap-2 text-xs text-[#8b949e] cursor-pointer">
+                            <span>Auto-CRUD</span>
+                            <span class="relative inline-flex items-center">
+                                <input type="checkbox" class="sr-only peer"
+                                       :checked="$store.endpoint.detail.auto_crud"
+                                       @change="$store.endpoint.setAutoCrud($event.target.checked)"
+                                       aria-label="Toggle Auto-CRUD">
+                                <span class="w-9 h-5 bg-[#30363d] rounded-full peer peer-checked:bg-[#238636] peer-focus-visible:ring-2 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"></span>
+                            </span>
+                        </label>
+                    </template>
+                    {# Rules manager (list overlay) + quick New Rule (hookbox-wrd.27). #}
+                    <button type="button" class="btn-secondary text-sm" x-ref="rulesBtn" @click="openRules()">Rules</button>
+                    <button type="button" class="btn-primary text-sm" @click="openNewRule()">+ New Rule</button>
+                    <button type="button" class="btn-secondary text-sm" x-ref="settingsBtn" @click="openSettings()">Settings</button>
+                </div>
+            </div>
+
+        <div class="flex flex-col md:flex-row flex-1 min-h-0">
+
+            {# ================= LEFT: live feed ================= #}
+            <section class="flex flex-col w-full md:w-[40%] md:min-w-[360px] border-b md:border-b-0 md:border-r border-[#30363d] min-h-0">
+
+                {# Feed header bar #}
+                <div class="panel-flush px-4 py-2 flex items-center justify-between gap-3 sticky top-0 z-10">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="font-bold text-sm truncate" x-text="endpointName || 'Live feed'"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        {# WS health pill (AC-29 / AC-VC4 / AC-47). Label always present. #}
+                        <span class="ws-pill" role="status" aria-live="polite"
+                              :aria-label="'Connection: ' + $store.stream.label">
+                            <span :class="$store.stream.dotClass"></span>
+                            <span x-text="$store.stream.label"></span>
+                        </span>
+                        {# Pause / auto-follow toggle (AC-30c) #}
+                        <button type="button" class="btn-secondary text-xs px-2 py-1"
+                                @click="$store.feed.togglePause()"
+                                :aria-pressed="$store.feed.paused ? 'true' : 'false'"
+                                x-text="$store.feed.paused ? 'Paused' : 'Pause'"></button>
+                    </div>
+                </div>
+
+                {# "N new" buffered pill while paused (AC-30c) #}
+                <template x-if="$store.feed.paused && $store.feed.pending > 0">
+                    <button type="button"
+                            class="mx-4 mt-2 text-xs text-[#0d1117] bg-[#3fb950] rounded px-2 py-1 self-start"
+                            @click="$store.feed.flush()"
+                            x-text="$store.feed.pending + ' new'"></button>
+                </template>
+
+                {# Mock-URL chips — copy-only, neutral, never link-blue (AC-48 / VC-7) #}
+                <div class="px-4 py-2 space-y-2 border-b border-[#21262d]">
+                    <template x-if="mockUrl">
+                        <div class="mock-chip">
+                            <code class="flex-1" x-text="mockUrl"></code>
+                            <button type="button" class="copy-btn text-[#8b949e] text-xs"
+                                    :aria-label="'Copy mock URL ' + mockUrl"
+                                    @click="copyToClipboard(mockUrl)">Copy</button>
+                        </div>
+                    </template>
+                    <template x-if="pathUrl">
+                        <div class="mock-chip">
+                            <span class="text-[10px] uppercase tracking-wide text-[#6e7681]">Local</span>
+                            <code class="flex-1" x-text="pathUrl"></code>
+                            <button type="button" class="copy-btn text-[#8b949e] text-xs"
+                                    :aria-label="'Copy local fallback URL ' + pathUrl"
+                                    @click="copyToClipboard(absolutePathUrl)">Copy</button>
+                        </div>
+                    </template>
+                </div>
+
+                {# Feed list — aria-live polite, paused with the feed (AC-47). #}
+                <div id="feed"
+                     class="flex-1 overflow-y-auto min-h-0"
+                     role="listbox"
+                     aria-label="Live request feed"
+                     :aria-live="$store.feed.paused ? 'off' : 'polite'"
+                     @keydown.arrow-down.prevent="moveSelection(1)"
+                     @keydown.arrow-up.prevent="moveSelection(-1)"
+                     tabindex="0">
+
+                    {# Loading skeleton (AC-46). Static under reduced-motion via app.css. #}
+                    <template x-if="loading">
+                        <div class="p-2 space-y-2" aria-hidden="true">
+                            <template x-for="i in 5" :key="i">
+                                <div class="skeleton" style="height: 34px;"></div>
+                            </template>
+                        </div>
+                    </template>
+
+                    {# Empty state — turns a dead screen into the first-call funnel (AC-46). #}
+                    <template x-if="!loading && $store.feed.rows.length === 0">
+                        <div class="p-8 text-center text-[#8b949e] text-sm">
+                            <p class="mb-3">No requests yet.</p>
+                            <p class="mb-3 text-xs">Send a request to your mock URL and it will appear here live.</p>
+                            <template x-if="mockUrl">
+                                <div class="mock-chip mx-auto inline-flex">
+                                    <code x-text="mockUrl"></code>
+                                    <button type="button" class="copy-btn text-[#8b949e] text-xs"
+                                            :aria-label="'Copy mock URL ' + mockUrl"
+                                            @click="copyToClipboard(mockUrl)">Copy</button>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    {# Server-rendered first paint (AC-27a): present before JS reconciles. #}
+                    {% if initial_requests %}
+                    <div id="hb-server-rows" x-show="$store.feed.rows.length === 0">
+                        {% for r in initial_requests %}
+                            {% include "partials/feed_row.html" %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    {# Live rows — the client reconciles into $store.feed.rows. #}
+                    <div x-show="$store.feed.rows.length > 0">
+                        <template x-for="row in $store.feed.rows" :key="row.id">
+                            <button
+                                type="button"
+                                class="feed-row"
+                                role="option"
+                                :class="[methodRail(row.method), $store.feed.selectedId === row.id ? 'is-selected' : '', row._new ? 'feed-row--new' : '']"
+                                :aria-selected="$store.feed.selectedId === row.id ? 'true' : 'false'"
+                                :data-request-id="row.id"
+                                @click="$store.feed.select(row.id)"
+                            >
+                                <span class="badge" :class="methodBadge(row.method)" x-text="row.method"></span>
+                                <span class="flex-1 truncate" :title="row.path" x-text="row.path"></span>
+                                <span class="font-bold" :class="statusClass(row.status_code)" x-text="row.status_code"></span>
+                                <template x-if="row.served_by">
+                                    <span class="served-chip" :class="servedClass(row.served_by)" x-text="servedLabel(row.served_by)"></span>
+                                </template>
+                                <span class="text-xs text-[#8b949e]" x-text="row.duration_ms + 'ms'"></span>
+                                <span class="text-xs text-[#6e7681]" x-text="relTime(row.timestamp)"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                {# Footer count (AC-30a) #}
+                <div class="panel-flush px-4 py-1 text-xs text-[#8b949e] border-t border-[#30363d]"
+                     x-text="$store.feed.footerText"></div>
+            </section>
+
+            {# ================= RIGHT: inspector (hookbox-wrd.26) ================= #}
+            {# Empty state when nothing is selected; the deep inspector partial mounts
+               and lazy-loads RequestDetail (GET /api/requests/{id}) once a row is
+               selected. The feed store fires hb:select-request → the inspector store. #}
+            <section class="flex-1 flex flex-col min-h-0" id="inspector-root">
+                <template x-if="$store.feed.selectedId === null">
+                    <div class="flex-1 flex items-center justify-center text-[#8b949e] text-sm p-8">
+                        Select a request on the left to inspect it.
+                    </div>
+                </template>
+                <template x-if="$store.feed.selectedId !== null">
+                    <div id="inspector-mount" class="flex-1 flex flex-col min-h-0">
+                        {% include "partials/inspector.html" %}
+                    </div>
+                </template>
+            </section>
+
+        </div>
+        {# Settings overlay (hookbox-wrd.28) — inside the dashboard() scope so it can
+           read settingsOpen / closeSettings(). Hidden until openSettings(). #}
+        {% include "partials/endpoint_settings.html" %}
+
+        {# ----- Rules manager overlay (hookbox-wrd.27): list + edit/disable/delete ----- #}
+        <div x-show="rulesOpen" x-cloak
+             class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+             @keydown.escape.window="if (rulesOpen && !ruleModalOpen) closeRules()"
+             @click.self="closeRules()"
+             style="display:none;">
+            <div class="card w-full max-w-2xl max-h-[85vh] flex flex-col"
+                 style="box-shadow: var(--shadow-overlay);"
+                 role="dialog" aria-modal="true" aria-labelledby="rules-title">
+                <div class="flex items-center justify-between px-5 py-3 border-b border-[#30363d]">
+                    <h2 id="rules-title" class="text-lg font-bold">Mock rules</h2>
+                    <div class="flex items-center gap-3">
+                        <button type="button" class="btn-primary text-sm" @click="openNewRule()">+ New Rule</button>
+                        <button type="button" class="copy-btn text-[#8b949e]" aria-label="Close rules" @click="closeRules()">&times;</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto">
+                    {# Loading #}
+                    <template x-if="$store.rules.loading">
+                        <div class="p-6 text-center text-[#8b949e] text-sm" role="status" aria-busy="true">Loading rules…</div>
+                    </template>
+                    {# Error #}
+                    <template x-if="$store.rules.error && !$store.rules.loading">
+                        <div class="m-4 bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="$store.rules.error"></div>
+                    </template>
+                    {# Empty (AC-46 rule list) #}
+                    <template x-if="!$store.rules.loading && !$store.rules.error && $store.rules.list.length === 0">
+                        <div class="p-8 text-center text-[#8b949e] text-sm">
+                            <p class="mb-3">No rules yet — unmatched requests use Auto-CRUD / proxy / default.</p>
+                            <button type="button" class="btn-primary text-sm" @click="openNewRule()">+ New Rule</button>
+                        </div>
+                    </template>
+                    {# List #}
+                    <template x-for="rule in $store.rules.list" :key="rule.id">
+                        {% include "partials/rule_row.html" %}
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        {# Rule create/edit modal (hookbox-wrd.27) — opens on top of the rules list. #}
+        {% include "partials/rule_modal.html" %}
+        </div>
+    </template>
 </div>
+
+{# JSON island: seeds the client feed from the same data as the server-rendered rows
+   (AC-27a). Rendered as text and parsed with JSON.parse — never executed. #}
+{% if initial_requests %}
+<script type="application/json" id="hb-initial-feed">{{ initial_requests | tojson }}</script>
+{% endif %}
 
 <script>
-let currentUser = null;
-const endpointId = window.location.pathname.split('/').pop();
-let requests = [];
-let ws = null;
-let wsConnected = false;
+function dashboard(serverToken) {
+    return {
+        token: '',
+        notFound: false,
+        loading: true,
+        endpointName: '',
+        mockUrl: '',
+        pathUrl: '',
+        settingsOpen: false,
+        rulesOpen: false,
+        ruleModalOpen: false,
+        editingRule: null,
 
-async function init() {
-    const stored = localStorage.getItem('hookbox_user');
-    if (!stored) {
-        window.location.href = '/login';
-        return;
-    }
-    currentUser = JSON.parse(stored);
-    await loadDashboard();
-    connectWebSocket();
-}
+        get absolutePathUrl() {
+            return this.pathUrl ? (window.location.origin + this.pathUrl) : '';
+        },
 
-function connectWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/${endpointId}`;
-    
-    updateWsStatus('Connecting...', 'text-yellow-500');
-    
-    ws = new WebSocket(wsUrl);
-    
-    ws.onopen = () => {
-        console.log('WebSocket connected');
-        wsConnected = true;
-        updateWsStatus('Live', 'text-green-500');
-    };
-    
-    ws.onmessage = (event) => {
-        try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'new_request') {
-                console.log('New request received:', msg.data);
-                // Add to beginning of requests array
-                requests.unshift({
-                    id: msg.data.id,
-                    method: msg.data.method,
-                    path: msg.data.path,
-                    content_type: msg.data.content_type,
-                    timestamp: msg.data.timestamp
+        init() {
+            const owner = window.HookBox.readOwner();
+            /* Not signed in → bounce to landing (AC-3 reload contract). */
+            if (!owner || !owner.owner_secret) {
+                window.location.replace('/');
+                return;
+            }
+
+            /* Resolve the token: server context wins, else the URL, else storage. */
+            this.token = serverToken || this._tokenFromUrl() || owner.token || '';
+            if (!this.token) { this.notFound = true; this.loading = false; return; }
+
+            /* Seed display fields from the stored owner (instant paint), then refine
+               from GET /api/endpoints/{token}. */
+            if (owner.token === this.token && owner.mock_url) this.mockUrl = owner.mock_url;
+            this.pathUrl = '/e/' + this.token;
+
+            /* Boot the live stream (opens /ws/<token>?cap=..., AC-30). */
+            window.HookBox.startRequestStream(this.token, { cap: 100 });
+
+            /* Refetch the endpoint detail for name/mock_url/expiry (AC-46 dashboard). */
+            this.loadEndpoint();
+
+            /* Populate the endpoint store (settings overlay + Auto-CRUD toggle) and
+               the switcher list (AC-3b). The store's own 404 handling is benign here. */
+            try {
+                if (this.$store.endpoint) {
+                    this.$store.endpoint.load(this.token);
+                    this.$store.endpoint.loadList();
+                }
+            } catch (e) { /* stores boot independently; ignore if not ready */ }
+
+            /* Endpoint config changed elsewhere → refresh (consumes endpoint_updated). */
+            document.addEventListener('hb:endpoint-updated', (e) => {
+                if (e.detail && e.detail.token === this.token) this.loadEndpoint();
+            });
+        },
+
+        /* ----- endpoint switcher + settings overlay (hookbox-wrd.28) ----- */
+
+        /* AC-3b: switch to another of the owner's endpoints. */
+        switchEndpoint(token) {
+            if (!token || token === this.token) return;
+            try { if (this.$store.owner) this.$store.owner.setToken(token); } catch (e) {}
+            window.location.assign('/d/' + encodeURIComponent(token));
+        },
+
+        /* AC-3b: + New endpoint → POST /api/endpoints → route to the new token. */
+        newEndpoint() {
+            try { if (this.$store.endpoint) this.$store.endpoint.createEndpoint(null); } catch (e) {}
+        },
+
+        /* Settings overlay open/close with focus management (AC-VC16): record the
+           trigger, focus the dialog on open, restore focus to the trigger on close. */
+        openSettings() {
+            try { if (this.$store.endpoint && !this.$store.endpoint.detail) this.$store.endpoint.load(this.token); } catch (e) {}
+            this.settingsOpen = true;
+            this.$nextTick(() => {
+                const dlg = document.querySelector('[role="dialog"][aria-labelledby="settings-title"]');
+                if (!dlg) return;
+                const focusEl = dlg.querySelector('input, select, button') || dlg;
+                if (focusEl && focusEl.focus) focusEl.focus();
+            });
+        },
+        closeSettings() {
+            this.settingsOpen = false;
+            this.$nextTick(() => {
+                const btn = this.$refs.settingsBtn;
+                if (btn && btn.focus) btn.focus();
+            });
+        },
+
+        /* ----- rules manager + modal (hookbox-wrd.27) ----- */
+        openRules() {
+            this.rulesOpen = true;
+            try { if (this.$store.rules) this.$store.rules.load(this.token); } catch (e) {}
+        },
+        closeRules() {
+            this.rulesOpen = false;
+            this.$nextTick(() => { const b = this.$refs.rulesBtn; if (b && b.focus) b.focus(); });
+        },
+        /* + New Rule: ensure rules are loaded (so the new one appends to a real list), open a blank modal. */
+        openNewRule() {
+            try { if (this.$store.rules && this.$store.rules.token !== this.token) this.$store.rules.load(this.token); } catch (e) {}
+            this.editingRule = null;
+            this.ruleModalOpen = true;
+        },
+        editRule(rule) {
+            this.editingRule = rule;
+            this.ruleModalOpen = true;
+        },
+        closeRuleModal() {
+            this.ruleModalOpen = false;
+            this.editingRule = null;
+        },
+        confirmDelete(rule) {
+            if (window.confirm('Delete rule "' + (rule.name || ('#' + rule.id)) + '"? This cannot be undone.')) {
+                try { if (this.$store.rules) this.$store.rules.remove(this.token, rule.id); } catch (e) {}
+            }
+        },
+
+        _tokenFromUrl() {
+            const m = window.location.pathname.match(/^\/d\/([^\/?#]+)/);
+            return m ? decodeURIComponent(m[1]) : '';
+        },
+
+        async loadEndpoint() {
+            try {
+                const res = await fetch('/api/endpoints/' + encodeURIComponent(this.token), {
+                    headers: window.HookBox.authHeaders(),
                 });
-                // Update the list immediately without full re-render
-                updateRequestsList();
-                // Also update total count
-                const countEl = document.getElementById('request-count');
-                if (countEl) countEl.textContent = requests.length;
-                // Show toast
-                showToast(`New ${msg.data.method} request!`);
+                if (res.status === 401) { window.location.replace('/'); return; }
+                if (res.status === 404) { this.notFound = true; this.loading = false; return; }
+                if (!res.ok) { this.loading = false; return; }
+                const ep = await res.json();          /* EndpointDetail (§5.3) */
+                this.endpointName = ep.name || ('Endpoint ' + this.token);
+                if (ep.mock_url) this.mockUrl = ep.mock_url;
+                if (ep.path_url) this.pathUrl = ep.path_url;
+                this.loading = false;
+            } catch (err) {
+                /* Network error: leave the feed running; it has its own health pill. */
+                this.loading = false;
             }
-        } catch (err) {
-            console.error('WebSocket message error:', err);
-        }
+        },
+
+        /* Keyboard feed navigation (AC-47): up/down move selection, Enter inspects. */
+        moveSelection(delta) {
+            const rows = this.$store.feed.rows;
+            if (!rows.length) return;
+            let idx = rows.findIndex(r => r.id === this.$store.feed.selectedId);
+            if (idx === -1) { idx = delta > 0 ? -1 : rows.length; }
+            let next = idx + delta;
+            next = Math.max(0, Math.min(rows.length - 1, next));
+            this.$store.feed.select(rows[next].id);
+            this.$nextTick(() => {
+                const el = document.querySelector('#feed [data-request-id="' + rows[next].id + '"]');
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+                if (el && el.focus) el.focus();
+            });
+        },
+
+        /* Render helpers — thin wrappers over util.js so markup stays declarative. */
+        methodBadge(m) { return window.HookBox.methodBadgeClass(m); },
+        methodRail(m) { return window.HookBox.methodRailClass(m); },
+        statusClass(c) { return window.HookBox.statusClass(c); },
+        servedClass(s) { return window.HookBox.servedClass(s); },
+        servedLabel(s) { return window.HookBox.servedLabel(s); },
+        relTime(ts) { return window.HookBox.relativeTime(ts); },
     };
-    
-    ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        wsConnected = false;
-        updateWsStatus('Disconnected', 'text-red-500');
-        // Try to reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000);
-    };
-    
-    ws.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        ws.close();
-    };
 }
-
-function updateWsStatus(text, colorClass) {
-    const el = document.getElementById('ws-status');
-    el.textContent = text;
-    el.className = `ml-2 text-xs ${colorClass}`;
-}
-
-async function loadRequests() {
-    try {
-        const reqResponse = await fetch(`/api/endpoints/${endpointId}/requests`, {
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
-            }
-        });
-        requests = await reqResponse.json();
-        updateRequestsList();
-    } catch (err) {
-        console.error('Error loading requests:', err);
-    }
-}
-
-async function loadDashboard() {
-    try {
-        const epResponse = await fetch(`/api/endpoints/${endpointId}`, {
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
-            }
-        });
-        
-        if (!epResponse.ok) {
-            document.getElementById('dashboard').innerHTML = '<div class="card p-8 text-center"><p class="text-red-500">Endpoint not found</p></div>';
-            return;
-        }
-        
-        const endpoint = await epResponse.json();
-        document.getElementById('endpoint-id').textContent = endpoint.id;
-        
-        const reqResponse = await fetch(`/api/endpoints/${endpointId}/requests`, {
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
-            }
-        });
-        requests = await reqResponse.json();
-        
-        renderDashboard(endpoint);
-    } catch (err) {
-        console.error('Error loading dashboard:', err);
-    }
-}
-
-function updateRequestsList() {
-    const listContainer = document.getElementById('requests-list');
-    if (listContainer) {
-        listContainer.innerHTML = renderRequestsList();
-    }
-    // Update count
-    const countEl = document.getElementById('request-count');
-    if (countEl) {
-        countEl.textContent = requests.length;
-    }
-}
-
-function renderDashboard(endpoint) {
-    const container = document.getElementById('dashboard');
-    container.innerHTML = `
-    <div class="flex justify-between items-start mb-6">
-        <div>
-            <h1 class="text-2xl font-bold font-mono text-[#58a6ff]">${endpoint.id}</h1>
-            ${endpoint.name ? `<p class="text-[#8b949e]">${endpoint.name}</p>` : ''}
-        </div>
-        <div class="flex gap-2">
-            <a href="/m/${endpoint.id}" class="btn-secondary">Mock</a>
-            <button onclick="deleteEndpoint('${endpoint.id}')" class="btn-danger">Delete</button>
-        </div>
-    </div>
-    
-    <div class="card p-4 mb-6">
-        <label class="text-sm text-[#8b949e] mb-2 block">Webhook URL</label>
-        <div class="flex items-center gap-2">
-            <code class="flex-1 bg-[#0d1117] p-3 rounded font-mono text-sm truncate">${window.location.origin}/hook/${currentUser.id}/${endpoint.id}</code>
-            <button onclick="copyToClipboard('${window.location.origin}/hook/${currentUser.id}/${endpoint.id}')" class="btn-secondary">Copy</button>
-        </div>
-    </div>
-    
-    <div class="grid grid-cols-3 gap-4 mb-6">
-        <div class="card p-4 text-center">
-            <div class="text-2xl font-bold text-[#58a6ff]" id="request-count">${requests.length}</div>
-            <div class="text-sm text-[#8b949e]">Total Requests</div>
-        </div>
-        <div class="card p-4 text-center">
-            <div class="text-2xl font-bold text-[#3fb950]">${endpoint.mock_enabled ? 'On' : 'Off'}</div>
-            <div class="text-sm text-[#8b949e]">Mock Response</div>
-        </div>
-        <div class="card p-4 text-center">
-            <div class="text-2xl font-bold">${formatDate(endpoint.created_at)}</div>
-            <div class="text-sm text-[#8b949e]">Created</div>
-        </div>
-    </div>
-    
-    <div class="card">
-        <div class="p-4 border-b border-[#30363d]"><h2 class="font-bold">Captured Requests</h2></div>
-        <div id="requests-list">${renderRequestsList()}</div>
-    </div>`;
-}
-
-function renderRequestsList() {
-    if (requests.length === 0) return `<div class="p-12 text-center text-[#8b949e]"><p>No requests captured yet</p></div>`;
-    return `<table class="w-full">
-        <thead><tr class="text-left text-sm text-[#8b949e] border-b border-[#30363d]">
-            <th class="p-3">Method</th><th class="p-3">Path</th><th class="p-3">Content-Type</th>
-            <th class="p-3">Time</th><th class="p-3">Actions</th>
-        </tr></thead>
-        <tbody>${requests.map(req => `<tr class="border-b border-[#21262d] hover:bg-[#21262d] cursor-pointer" onclick="showRequestDetail(${req.id})">
-            <td class="p-3"><span class="badge badge-method">${req.method}</span></td>
-            <td class="p-3 font-mono text-sm">${req.path}</td>
-            <td class="p-3 text-sm text-[#8b949e]">${req.content_type || '-'}</td>
-            <td class="p-3 text-sm text-[#8b949e]">${formatDate(req.timestamp)}</td>
-            <td class="p-3"><button onclick="event.stopPropagation(); showRequestDetail(${req.id})" class="btn-secondary text-sm">View</button></td>
-        </tr>`).join('')}</tbody></table>`;
-}
-
-async function showRequestDetail(requestId) {
-    try {
-        const response = await fetch(`/api/requests/${requestId}`, {
-            headers: {
-                'X-User-ID': currentUser.id,
-                'X-Email': currentUser.email
-            }
-        });
-        const req = await response.json();
-        document.getElementById('modal-title').textContent = `${req.method} ${req.path}`;
-        document.getElementById('modal-content').innerHTML = `
-        <div class="space-y-6">
-            <div><label class="text-sm text-[#8b949e]">Timestamp</label><p>${new Date(req.timestamp).toLocaleString()}</p></div>
-            <div><label class="text-sm text-[#8b949e] mb-2 block">Headers</label><pre><code>${JSON.stringify(req.headers, null, 2)}</code></pre></div>
-            ${Object.keys(req.query_params || {}).length > 0 ? `<div><label class="text-sm text-[#8b949e] mb-2 block">Query Parameters</label><pre><code>${JSON.stringify(req.query_params, null, 2)}</code></pre></div>` : ''}
-            <div><label class="text-sm text-[#8b949e] mb-2 block">Body</label>${req.body ? `<pre><code>${prettyJson(req.body)}</code></pre>` : '<p class="text-[#8b949e]">No body</p>'}</div>
-        </div>`;
-        document.getElementById('modal').classList.remove('hidden');
-        document.getElementById('modal').classList.add('flex');
-    } catch (err) { console.error('Error loading request:', err); }
-}
-
-async function deleteEndpoint(id) {
-    if (!confirm('Delete this endpoint?')) return;
-    try {
-        await fetch(`/api/endpoints/${id}`, {
-            method: 'DELETE',
-            headers: { 'X-User-ID': currentUser.id, 'X-Email': currentUser.email }
-        });
-        window.location.href = '/';
-    } catch (err) { console.error('Error deleting endpoint:', err); }
-}
-
-function closeModal() { document.getElementById('modal').classList.add('hidden'); document.getElementById('modal').classList.remove('flex'); }
-function prettyJson(str) { try { return JSON.stringify(JSON.parse(str), null, 2); } catch (e) { return escapeHtml(str); } }
-function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
-function formatDate(dateStr) { if (!dateStr) return '-'; const date = new Date(dateStr); const diff = (now - date) / 1000; if (diff < 60) return 'just now'; if (diff < 3600) return `${Math.floor(diff / 60)}m ago`; if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`; return date.toLocaleDateString(); }
-const now = new Date();
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
-
-// Cleanup on page unload
-window.addEventListener('beforeunload', () => {
-    if (ws) ws.close();
-});
-
-init();
 </script>
 {% endblock %}

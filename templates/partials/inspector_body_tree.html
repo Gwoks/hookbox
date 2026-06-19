@@ -1,0 +1,85 @@
+{#
+  partials/inspector_body_tree.html — collapsible JSON tree for the Body /
+  Response-Served tabs (AC-31 Body tree, VC-10 syntax tints).
+
+  XSS SAFETY (AC-S14 / AC-S15): the tree is built CLIENT-SIDE from a *parsed*
+  body, then flattened to a depth-tagged node list (HookBox.flattenJson). Every
+  key and value below is bound with x-text → inserted as a TEXT NODE. We never
+  pass captured strings through x-html / innerHTML, so a value of
+  `</script><script>…` or `"><img onerror=…>` cannot break out — it renders as
+  literal mono text. There is no recursion in markup either: a single x-for over
+  the flat list plus a per-node `visible` gate (driven by ancestor open-state)
+  reproduces a collapsible tree without nested templates.
+
+  Contract: the parent passes a `nodes` array (from HookBox.flattenJson). This
+  partial is included as an Alpine sub-scope; it reads `nodes` from the parent
+  inspector component (the Body tab computes reqBodyTree / resBodyTree).
+
+  Usage (inside inspector.html):
+    <div x-data="bodyTree(() => $store.inspector.resBodyTree)"> {% include %} </div>
+#}
+<div class="tree-node" role="tree" aria-label="Body tree">
+    {# `visibleNodes` collapses descendants of any closed node (computed in bodyTree()). #}
+    <template x-for="node in visibleNodes" :key="node.id">
+        <div class="tree-line"
+             role="treeitem"
+             :aria-expanded="node.hasChildren ? (isOpen(node) ? 'true' : 'false') : null"
+             :style="'padding-left:' + (node.depth * 14) + 'px'">
+
+            {# Disclosure triangle for objects/arrays; a spacer otherwise so keys align. #}
+            <template x-if="node.hasChildren">
+                <button type="button"
+                        class="tree-toggle"
+                        :style="isOpen(node) ? 'transform:rotate(90deg)' : ''"
+                        :aria-label="(isOpen(node) ? 'Collapse ' : 'Expand ') + (node.key || node.indexLabel || 'node')"
+                        @click="toggle(node)">&#9656;</button>
+            </template>
+            <template x-if="!node.hasChildren && node.kind !== 'note'">
+                <span class="tree-toggle" aria-hidden="true">&nbsp;</span>
+            </template>
+
+            {# Object key (e.g.  "name":) — text node, XSS-safe. #}
+            <template x-if="node.key !== null && node.key !== undefined">
+                <span><span class="tree-key" x-text="JSON.stringify(node.key)"></span><span class="tree-punct">: </span></span>
+            </template>
+
+            {# Array index label (e.g. [0]) #}
+            <template x-if="node.indexLabel">
+                <span class="tree-punct" x-text="node.indexLabel + ' '"></span>
+            </template>
+
+            {# Container preview: {n} / [n] with a muted child count. #}
+            <template x-if="node.hasChildren || node.kind === 'object' || node.kind === 'array'">
+                <span>
+                    <span class="tree-punct" x-text="node.kind === 'array' ? '[' : '{'"></span>
+                    <template x-if="!isOpen(node) && node.childCount > 0">
+                        <span class="tree-count" x-text="' ' + node.childCount + (node.kind === 'array' ? ' items ' : ' keys ')"></span>
+                    </template>
+                    <template x-if="!isOpen(node)">
+                        <span class="tree-punct" x-text="node.kind === 'array' ? ']' : '}'"></span>
+                    </template>
+                    <template x-if="node.childCount === 0">
+                        <span class="tree-punct" x-text="node.kind === 'array' ? ']' : '}'"></span>
+                    </template>
+                </span>
+            </template>
+
+            {# Scalar value — syntax-tinted, text node only (AC-S15). #}
+            <template x-if="node.kind === 'string'">
+                <span class="v-string" x-text="JSON.stringify(node.valueText)"></span>
+            </template>
+            <template x-if="node.kind === 'number'">
+                <span class="v-number" x-text="node.valueText"></span>
+            </template>
+            <template x-if="node.kind === 'boolean'">
+                <span class="v-bool" x-text="node.valueText"></span>
+            </template>
+            <template x-if="node.kind === 'null'">
+                <span class="v-null" x-text="node.valueText"></span>
+            </template>
+            <template x-if="node.kind === 'note'">
+                <span class="tree-punct" x-text="node.valueText"></span>
+            </template>
+        </div>
+    </template>
+</div>

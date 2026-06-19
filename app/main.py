@@ -1,268 +1,248 @@
-"""FastAPI main application"""
+"""HookBox — Beeceptor-class API mocking & interception platform.
 
-from fastapi import FastAPI, Request, Depends, Header, WebSocket
-from fastapi.responses import JSONResponse, Response, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import json
-import asyncio
-from datetime import datetime
+App factory + lifespan + plane dispatch + the P1 mock catch-all (mounted LAST).
+
+Three hard-isolated planes (arch §3): P1 wildcard mock surface, P2 management API
+(``/api/*``), P3 dashboard UI + static + WS/SSE feed. ``PlaneDispatchMiddleware``
+tags each request; explicit routers are matched before the catch-all; the catch-all
+re-checks ``request.state.plane`` so it can never shadow ``/api`` or the UI (AC-6).
+"""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from app.database import init_db, get_db
-from app.routes.api import router as api_router
-from app.routes.backup import router as backup_router
-from app.websocket import manager
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
-app = FastAPI(title="HookBox", description="Self-hosted webhook testing service", version="1.0.0")
+import config
+from app.database import get_db, init_db, trace_writer
+from app.middleware import PlaneDispatchMiddleware
+from app.routes.api import router as api_router
+from app.routes.ui import router as ui_router
+
+logger = logging.getLogger("hookbox")
+logging.basicConfig(level=logging.INFO)
 
 BASE_DIR = Path(__file__).parent.parent
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-app.include_router(api_router)
-app.include_router(backup_router)
 
-@app.on_event("startup")
-async def startup():
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown (arch §2): init DB, open Redis pool, start the pub/sub
+    relay + retention sweep, open the long-lived trace-writer connection, warm
+    the rule cache. Each step degrades gracefully (Redis may be down)."""
     await init_db()
+    await trace_writer.connect()
 
-@app.websocket("/ws/{endpoint_id}")
-async def websocket_endpoint(websocket, endpoint_id: str):
-    await manager.connect(websocket, endpoint_id)
+    # Redis pool (state/CRUD/rate-limit/pubsub). Never crash if Redis is down.
     try:
-        while True:
-            # Keep connection alive, wait for close
-            data = await websocket.receive_text()
-    except Exception:
-        pass
+        from app.redis_state import redis_state
+        await redis_state.connect()
+    except Exception:  # noqa: BLE001
+        logger.warning("Redis pool not available at startup; degrading per §5.11")
+
+    # Pub/sub relay (trace:* fan-out + cfg:* cache invalidation), if present.
+    relay_task = None
+    try:
+        from app.pubsub import start_relay
+        relay_task = await start_relay()
+    except Exception:  # noqa: BLE001
+        logger.info("pub/sub relay not started (module pending or Redis down)")
+
+    # Retention sweep (both caps, every RETENTION_SWEEP_SECONDS).
+    sweep_task = None
+    try:
+        from app.utils.cleanup import start_retention_task
+        sweep_task = start_retention_task()
+    except Exception:  # noqa: BLE001
+        logger.info("retention sweep not started (module pending)")
+
+    if config.PATH_FALLBACK_ONLY:
+        logger.warning(
+            "MOCK_DOMAIN unset/misconfigured (%r) -> path-fallback-only mode; "
+            "mock surface reachable only at /e/<token>/...", config.MOCK_DOMAIN,
+        )
+
+    try:
+        yield
     finally:
-        manager.disconnect(websocket, endpoint_id)
+        for task in (relay_task, sweep_task):
+            if task is not None:
+                task.cancel()
+        await trace_writer.close()
+        try:
+            from app.redis_state import redis_state
+            await redis_state.close()
+        except Exception:  # noqa: BLE001
+            pass
+        # Close the shared MITM httpx client (issue .16).
+        try:
+            from app.interceptor.proxy import aclose as proxy_aclose
+            await proxy_aclose()
+        except Exception:  # noqa: BLE001
+            pass
 
-@app.api_route("/hook/{user_id}/{endpoint_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def receive_webhook(user_id: str, endpoint_id: str, request: Request, db = Depends(get_db)):
-    # Try method-specific mock first, then fall back to DEFAULT
-    mock = None
-    async with db.execute(
-        "SELECT * FROM mock_rules WHERE endpoint_id = ? AND method = ? AND enabled = 1",
-        (endpoint_id, request.method)
-    ) as cursor:
-        mock = await cursor.fetchone()
-    
-    # Fall back to DEFAULT if no method-specific rule
-    if not mock:
-        async with db.execute(
-            "SELECT * FROM mock_rules WHERE endpoint_id = ? AND method = 'DEFAULT' AND enabled = 1",
-            (endpoint_id,)
-        ) as cursor:
-            mock = await cursor.fetchone()
-    
-    headers = dict(request.headers)
-    query_params = dict(request.query_params)
-    body = await request.body()
-    content_type = headers.get('content-type', '')
-    body_text = body.decode('utf-8', errors='replace') if body else ''
-    
-    now = datetime.utcnow().isoformat()
-    await db.execute(
-        "INSERT INTO requests (endpoint_id, method, path, headers, query_params, body, content_type, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (endpoint_id, request.method, str(request.url.path), json.dumps(dict(headers)),
-         json.dumps(dict(query_params)), body_text[:1_000_000], content_type, now)
+
+app = FastAPI(
+    title="HookBox",
+    description="Self-hosted API mocking & HTTP interception platform",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+# Plane dispatch runs before routing (arch §3.1).
+app.add_middleware(PlaneDispatchMiddleware)
+
+# Static assets (P3). Frontend lane owns the files; we just mount the dir.
+_static_dir = BASE_DIR / "static"
+_static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# P2 management API + P3 UI (explicit routers, matched before the catch-all).
+app.include_router(api_router)
+app.include_router(ui_router)
+
+
+# --- Health (P3, public) ------------------------------------------------------
+@app.get("/healthz")
+async def healthz():
+    """Liveness/readiness probe (§5.2 #19). Reports redis + db reachability."""
+    redis_ok = False
+    try:
+        from app.redis_state import redis_state
+        redis_ok = await redis_state.healthy()
+    except Exception:  # noqa: BLE001
+        redis_ok = False
+
+    db_ok = False
+    try:
+        from app.database import DATABASE_PATH
+        import aiosqlite
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute("SELECT 1")
+        db_ok = True
+    except Exception:  # noqa: BLE001
+        db_ok = False
+
+    return {"status": "ok", "redis": redis_ok, "db": db_ok}
+
+
+# --- WebSocket / SSE live feed (P3) ------------------------------------------
+# The owner-gated WS/SSE feed (§5.4, OQ-4) is registered by app/websocket.py when
+# that module is wired (issue hookbox-wrd.20). We attach it here if available so
+# main.py stays the single registration point.
+try:
+    from app.websocket import register_feed_routes
+    register_feed_routes(app)
+except Exception:  # noqa: BLE001
+    logger.info("live-feed WS/SSE routes not registered yet (pending wave)")
+
+# Tunnel WS control channel (§5.12), if present (issue hookbox-wrd.21).
+try:
+    from app.routes.tunnel import register_tunnel_routes
+    register_tunnel_routes(app)
+except Exception:  # noqa: BLE001
+    logger.info("tunnel WS routes not registered yet (pending wave)")
+
+
+# --- P1 mock catch-all (registered LAST so explicit routes win) ---------------
+_MOCK_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+
+
+@app.api_route("/{full_path:path}", methods=_MOCK_METHODS)
+async def mock_catch_all(full_path: str, request: Request):
+    """The behavioral P1 mock surface (§5.5).
+
+    Guard 1 (plane): only ``request.state.plane == "mock"`` reaches the engine;
+    anything tagged ``api``/``ui`` that fell through to here returns the UI 404 —
+    the mock catch-all never serves API/UI content (AC-6).
+    """
+    plane = getattr(request.state, "plane", "ui")
+    if plane != "mock":
+        # An /api or UI path that wasn't matched by an explicit route → UI 404.
+        return JSONResponse(
+            status_code=404,
+            content={"error": "not_found", "detail": "Resource not found."},
+        )
+
+    token = getattr(request.state, "token", None)
+    mock_path = getattr(request.state, "mock_path", None) or "/" + full_path
+
+    if not token:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "unknown_endpoint", "detail": "No endpoint token."},
+        )
+
+    # Delegate to the interceptor engine if it is wired (issue hookbox-wrd.14).
+    # The engine owns the frozen resolution order + 404/410 token disposition.
+    try:
+        from app.interceptor.engine import handle_mock
+    except Exception:  # noqa: BLE001 — engine pending in a later wave
+        # Until the engine lands, still honor the unknown/gone token contract so
+        # the dispatch + isolation behavior (this issue) is independently correct.
+        return await _fallback_token_disposition(token, mock_path, request)
+
+    return await handle_mock(request, token=token, mock_path=mock_path)
+
+
+async def _fallback_token_disposition(token: str, mock_path: str, request: Request) -> Response:
+    """Minimal unknown(404)/gone(410) disposition used until the engine is wired.
+
+    Reads the durable ``endpoints`` table directly (cold path, pre-engine) and a
+    Redis ``gone:<token>`` tombstone set on owner-delete (§5.5, OQ-1):
+      * token present in ``endpoints``           -> engine pending → 501 placeholder
+      * token absent but tombstoned (was valid)  -> 410 endpoint_gone (not logged)
+      * token absent and never seen              -> 404 unknown_endpoint (not logged)
+    """
+    from app.database import DATABASE_PATH
+    import aiosqlite
+
+    exists = False
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute("SELECT 1 FROM endpoints WHERE token = ?", (token,))
+            exists = await cur.fetchone() is not None
+    except Exception:  # noqa: BLE001
+        exists = False
+
+    base_headers = {"X-HookBox-Endpoint": token}
+
+    if exists:
+        return JSONResponse(
+            status_code=501,
+            content={"error": "engine_pending", "detail": "Interceptor engine not yet wired."},
+            headers=base_headers,
+        )
+
+    # Distinguish gone vs unknown via the tombstone (best-effort; Redis may be down).
+    gone = False
+    try:
+        from app.redis_state import redis_state
+        gone = await redis_state.is_gone(token)
+    except Exception:  # noqa: BLE001
+        gone = False
+
+    if gone:
+        return JSONResponse(
+            status_code=410,
+            content={"error": "endpoint_gone", "detail": "This endpoint was deleted or expired."},
+            headers=base_headers,
+        )
+    return JSONResponse(
+        status_code=404,
+        content={"error": "unknown_endpoint", "detail": "No such endpoint."},
+        headers=base_headers,
     )
-    await db.execute("UPDATE endpoints SET request_count = request_count + 1, last_hit = ? WHERE id = ?", (now, endpoint_id))
-    await db.commit()
-    
-    # Broadcast to WebSocket clients
-    await manager.broadcast_new_request(endpoint_id, {
-        "method": request.method,
-        "path": str(request.url.path),
-        "content_type": content_type,
-        "timestamp": now
-    })
-    
-    if mock:
-        delay_ms = mock['delay_ms'] or 0
-        if delay_ms > 0:
-            await asyncio.sleep(delay_ms / 1000)
-        
-        response_headers = json.loads(mock['response_headers']) if mock['response_headers'] else {}
-        response_headers['Content-Type'] = mock['content_type']
-        
-        return Response(content=mock['response_body'], status_code=mock['status_code'], headers=response_headers)
-    
-    return JSONResponse(content={"status": "received", "endpoint_id": endpoint_id, "timestamp": now}, status_code=200)
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/d/{endpoint_id}", response_class=HTMLResponse)
-async def dashboard(request: Request, endpoint_id: str):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
-
-@app.get("/m/{endpoint_id}", response_class=HTMLResponse)
-async def mock_config(request: Request, endpoint_id: str):
-    return templates.TemplateResponse("mock.html", {"request": request})
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
-
-@app.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
-
-@app.get("/backup", response_class=HTMLResponse)
-async def backup_page(request: Request):
-    return templates.TemplateResponse("backup.html", {"request": request})
-
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
-    from config import HOST, PORT
-    uvicorn.run(app, host=HOST, port=PORT)
-
-@app.get("/status", response_class=HTMLResponse)
-async def crypto_status(request: Request):
-    """Crypto Trading Bot Status Page"""
-    import json
-    import os
-    from datetime import datetime
-    
-    # Paths
-    WORKSPACE = "/home/ubuntu/.openclaw/workspace/openclaw"
-    holdings_path = f"{WORKSPACE}/holdings.json"
-    research_path = f"{WORKSPACE}/stocks/research_6h.json"
-    signals_path = f"{WORKSPACE}/stocks/signals.json"
-    heartbeat_path = f"{WORKSPACE}/heartbeat.log"
-    
-    # Load data
-    holdings = {}
-    try:
-        if os.path.exists(holdings_path):
-            with open(holdings_path) as f:
-                holdings = json.load(f)
-    except: pass
-    
-    research = {}
-    try:
-        if os.path.exists(research_path):
-            with open(research_path) as f:
-                research = json.load(f)
-    except: pass
-    
-    signals = {}
-    try:
-        if os.path.exists(signals_path):
-            with open(signals_path) as f:
-                signals = json.load(f)
-    except: pass
-    
-    heartbeat_log = ""
-    try:
-        if os.path.exists(heartbeat_path):
-            with open(heartbeat_path) as f:
-                heartbeat_log = f.read()[-2000:]
-    except: pass
-    
-    # Get FGI
-    fgi_value = research.get("market", {}).get("fear_greed", {}).get("value", "N/A")
-    fgi_class = research.get("market", {}).get("fear_greed", {}).get("classification", "Unknown")
-    
-    positions = holdings.get("positions", [])
-    total_value = sum(p.get("current_value_usdt", 0) for p in positions)
-    
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Crypto Trading Bot Status</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #e6edf3; padding: 20px; line-height: 1.6; }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
-        h1 {{ color: #58a6ff; margin-bottom: 20px; }}
-        h2 {{ color: #8b949e; font-size: 14px; text-transform: uppercase; margin: 25px 0 10px; border-bottom: 1px solid #30363d; padding-bottom: 5px; }}
-        .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; margin-bottom: 15px; }}
-        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }}
-        .stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; text-align: center; }}
-        .stat .label {{ color: #8b949e; font-size: 11px; text-transform: uppercase; }}
-        .stat .value {{ font-size: 18px; font-weight: bold; margin-top: 5px; }}
-        .green {{ color: #3fb950; }}
-        .red {{ color: #f85149; }}
-        table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-        th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #30363d; }}
-        th {{ color: #8b949e; font-size: 11px; text-transform: uppercase; background: #161b22; }}
-        pre {{ background: #0d1117; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px; max-height: 200px; }}
-        .nav {{ display: flex; gap: 15px; margin-bottom: 20px; }}
-        .nav a {{ color: #58a6ff; text-decoration: none; padding: 8px 16px; background: #161b22; border-radius: 6px; }}
-        .nav a:hover {{ background: #21262d; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="nav">
-            <a href="/">← HookBox</a>
-            <a href="/status">Crypto Status</a>
-        </div>
-        
-        <h1>🤙 Crypto Trading Bot Status</h1>
-        
-        <h2>📊 Portfolio</h2>
-        <div class="grid">
-            <div class="stat">
-                <div class="label">Fear & Greed</div>
-                <div class="value">{fgi_value} ({fgi_class})</div>
-            </div>
-            <div class="stat">
-                <div class="label">Mode</div>
-                <div class="value">{holdings.get('baseline', {}).get('mode', 'N/A')}</div>
-            </div>
-            <div class="stat">
-                <div class="label">Total Value</div>
-                <div class="value">${total_value:.2f}</div>
-            </div>
-            <div class="stat">
-                <div class="label">Positions</div>
-                <div class="value">{len(positions)}</div>
-            </div>
-        </div>
-        
-        <h2>💰 Positions</h2>
-        <div class="card">
-            <table>
-                <thead><tr><th>Symbol</th><th>Qty</th><th>Buy Price</th><th>Current</th><th>Value</th><th>P&L</th></tr></thead>
-                <tbody>
-"""
-    
-    for pos in positions:
-        pnl = pos.get('pnl_usdt', 0)
-        pnl_pct = ((pos.get('current_price', 0) / pos.get('buy_price', 1)) - 1) * 100
-        pnl_class = 'green' if pnl >= 0 else 'red'
-        html += f"""<tr>
-                        <td><strong>{pos.get('symbol', 'N/A')}</strong></td>
-                        <td>{pos.get('buy_quantity', 0):.4f}</td>
-                        <td>${pos.get('buy_price', 0):.4f}</td>
-                        <td>${pos.get('current_price', 0):.4f}</td>
-                        <td>${pos.get('current_value_usdt', 0):.2f}</td>
-                        <td class="{pnl_class}">{pnl_pct:+.2f}%</td>
-                    </tr>"""
-    
-    html += f"""</tbody></table></div>
-        
-        <h2>📡 Research</h2>
-        <div class="card">
-            <p>Sources: {', '.join(research.get('sources_used', ['None']))}</p>
-            <p>Tickers processed: {research.get('total_tickers', 0)}</p>
-        </div>
-        
-        <h2>📋 Recent Heartbeat</h2>
-        <pre>{heartbeat_log or 'No heartbeat data'}</pre>
-        
-        <div style="text-align: center; color: #8b949e; margin-top: 30px; padding-top: 20px; border-top: 1px solid #30363d;">
-            Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        </div>
-    </div>
-</body>
-</html>"""
-    return HTMLResponse(content=html)
+    uvicorn.run(app, host=config.HOST, port=config.PORT)

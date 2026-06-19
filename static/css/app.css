@@ -1,0 +1,349 @@
+/* ============================================================================
+ * HookBox — app.css
+ * Design-token + component layer for the Beeceptor-class rewrite.
+ * Source of truth: docs/features/beeceptor-rewrite/design.md (§2 tokens, §3
+ * components, §6 motion, §8 a11y). Extends the GitHub-dark system already in
+ * base.html. No build step — plain CSS custom properties + a few component
+ * classes consumed by Tailwind-CDN arbitrary-value markup.
+ *
+ * Loaded by base.html via <link rel="stylesheet" href="/static/css/app.css">.
+ * The Tailwind Play CDN cannot see a tailwind.config, so method/keyframe/shadow
+ * specifics live here (design.md §9).
+ * ========================================================================== */
+
+/* ---- §2 Design tokens (design.md §9 :root block, verbatim) --------------- */
+:root {
+  /* surfaces & lines */
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --surface-3: #30363d;
+  --border: #30363d;
+  --border-strong: #3d444d;
+  --row-divider: #21262d;
+
+  /* text */
+  --text: #e6edf3;
+  --text-2: #c9d1d9;
+  --text-muted: #8b949e;
+  --text-faint: #6e7681;
+  --link: #58a6ff;
+
+  /* semantic / intent (the signal layer) */
+  --success: #3fb950;
+  --success-strong: #2ea043;
+  --success-bg: rgba(63, 185, 80, 0.15);
+  --info: #58a6ff;
+  --info-bg: rgba(88, 166, 255, 0.15);
+  --warn: #d29922;
+  --warn-bg: rgba(210, 153, 34, 0.15);
+  --client-err: #e3a008;
+  --danger: #f85149;
+  --danger-base: #da3633;
+  --danger-bg: rgba(248, 81, 73, 0.15);
+
+  /* typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+
+  /* radius / elevation */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --shadow-overlay: 0 16px 48px rgba(1, 4, 9, 0.85);
+  --shadow-pop: 0 8px 24px rgba(1, 4, 9, 0.7);
+  --ring: 0 0 0 2px #0d1117, 0 0 0 4px #58a6ff;
+
+  /* motion */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 300ms;
+  --dur-flash: 900ms;
+  --dur-pulse: 2000ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: ease;
+}
+
+/* ---- Base surface (mirrors base.html inline, kept in sync) --------------- */
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+/* ============================================================================
+ * §3.7 / §2.4  HTTP method-badge map — extends the .badge geometry
+ * (base.html .badge: padding 4px 8px; radius 4px; 12px; bold). The literal
+ * method text always renders, so meaning never depends on hue (VC-1, AC-VC1).
+ * Contrast pairs verified AA in design.md §8.1.
+ * ========================================================================== */
+.m-get     { background: #388bfd; color: #ffffff; }
+.m-post    { background: #3fb950; color: #0d1117; }
+.m-put     { background: #d29922; color: #0d1117; }
+.m-patch   { background: #a371f7; color: #ffffff; }
+.m-delete  { background: #f85149; color: #ffffff; }
+.m-options { background: #30363d; color: #c9d1d9; } /* VC-2b: bumped to --text-2 for >=3:1 */
+.m-head    { background: #21262d; color: #8b949e; }
+.m-any     { background: #6e7681; color: #ffffff; }
+
+/* ============================================================================
+ * §2.5  Status-code color map (VC-9 / AC-VC9). Colored text, never a fill —
+ * one filled badge per row max (the method). 4xx amber vs 5xx red distinct.
+ * ========================================================================== */
+.status-2xx { color: var(--success); }
+.status-3xx { color: var(--warn); }
+.status-4xx { color: var(--client-err); }
+.status-5xx { color: var(--danger); }
+
+/* ============================================================================
+ * §3.7  Served-by chip — outline (no fill, to not compete with the method
+ * badge). Colors map by intent (VC-8 / AC-31b).
+ * ========================================================================== */
+.served-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+}
+.served-rule      { color: var(--success); }    /* Matched rule */
+.served-crud      { color: var(--info); }        /* Auto-CRUD */
+.served-mitm      { color: var(--warn); }         /* Proxied */
+.served-tunnel    { color: var(--info); }         /* Tunneled */
+.served-default   { color: var(--text-muted); }   /* Default */
+.served-cors      { color: var(--text-muted); }   /* CORS */
+.served-chaos     { color: var(--danger); }       /* Chaos */
+.served-ratelimit { color: var(--client-err); }   /* Rate-limited */
+
+/* ============================================================================
+ * §3.2  Panels — flush variant for the sticky split-screen bars/headers
+ * ========================================================================== */
+.panel-flush {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ============================================================================
+ * §3.3  Feed row — the centerpiece. Single-line dense, fast vertical scan.
+ * ========================================================================== */
+.feed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;                 /* px-3 py-2 */
+  border-bottom: 1px solid var(--row-divider);
+  border-left: 3px solid transparent; /* VC-3 accent rail, transparent at rest */
+  font-family: var(--font-mono);
+  font-size: 14px;                    /* text-sm */
+  color: var(--text-2);
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--dur-base) var(--ease-standard),
+              border-color var(--dur-base) var(--ease-standard);
+}
+.feed-row:hover { background: var(--surface-2); }
+.feed-row.is-selected {
+  background: var(--surface-2);
+  color: var(--text);
+}
+/* Selected row gets a method-colored accent rail (VC-3). Method class is added
+ * alongside .is-selected by the feed renderer, e.g. class="feed-row is-selected rail-post". */
+.feed-row.rail-get.is-selected     { border-left-color: #388bfd; }
+.feed-row.rail-post.is-selected    { border-left-color: #3fb950; }
+.feed-row.rail-put.is-selected     { border-left-color: #d29922; }
+.feed-row.rail-patch.is-selected   { border-left-color: #a371f7; }
+.feed-row.rail-delete.is-selected  { border-left-color: #f85149; }
+.feed-row.rail-options.is-selected,
+.feed-row.rail-head.is-selected    { border-left-color: var(--text-muted); }
+.feed-row.rail-any.is-selected     { border-left-color: var(--text-faint); }
+
+/* §6.2 arrival flash + subtle slide (VC-5). request-stream.js adds .feed-row--new
+ * then removes it after the animation so re-selection doesn't re-flash. */
+.feed-row--new {
+  animation: hb-flash var(--dur-flash) var(--ease-out),
+             hb-slide var(--dur-base) var(--ease-out);
+}
+
+/* ============================================================================
+ * §3.8 / §6.1  WS health pill + the "Live" pulse (VC-4 / VC-6 / AC-VC4)
+ * ========================================================================== */
+.ws-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  font-family: var(--font-sans);
+}
+.ws-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex: none;
+  background: var(--text-muted);
+}
+.ws-dot--live        { background: var(--success); animation: hb-pulse var(--dur-pulse) var(--ease-standard) infinite; }
+.ws-dot--reconnect   { background: var(--warn);    animation: hb-throb var(--dur-pulse) var(--ease-standard) infinite; }
+.ws-dot--offline     { background: var(--danger); }
+.ws-dot--degraded    { background: var(--warn); }
+.ws-dot--unauthorized{ background: var(--danger); }
+
+/* ============================================================================
+ * §3.4  Inspector — underline tabs (reuse the index.html active-tab pattern),
+ * KV rows, JSON tree, trace step list.
+ * ========================================================================== */
+.tab-btn {
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+  white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text-2); }
+.tab-btn.is-active { color: var(--link); border-bottom-color: var(--link); }
+
+/* KV rows (Headers / Query Params) — definition-list rows */
+.kv-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--row-divider);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.kv-key { color: var(--text-muted); min-width: 9rem; flex: none; word-break: break-word; }
+.kv-val { color: var(--text); flex: 1; word-break: break-word; white-space: pre-wrap; }
+
+/* JSON/XML tree (inspector_body_tree.html). Value syntax tints (VC-10). */
+.tree-node { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; }
+.tree-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0; }
+.tree-toggle {
+  color: var(--text-faint);
+  cursor: pointer;
+  display: inline-block;
+  width: 1em;
+  transition: transform var(--dur-fast) var(--ease-standard);
+  user-select: none;
+}
+.tree-key   { color: var(--text-muted); }
+.tree-punct { color: var(--text-faint); }
+.tree-count { color: var(--text-faint); }
+.v-string   { color: var(--success); }
+.v-number   { color: var(--link); }
+.v-bool,
+.v-null     { color: var(--warn); }
+
+/* Trace step list (VC-11 / AC-31c) — vertical step list, not raw JSON */
+.trace-step {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 13px;
+  align-items: flex-start;
+}
+.trace-glyph { flex: none; width: 1.25rem; text-align: center; font-weight: bold; }
+.trace-matched .trace-glyph    { color: var(--success); }
+.trace-skipped .trace-glyph    { color: var(--text-faint); }
+.trace-statewrite .trace-glyph { color: var(--info); }
+.trace-cors .trace-glyph       { color: var(--text-muted); }
+.trace-chaos .trace-glyph      { color: var(--danger); }
+.trace-detail { color: var(--text-2); word-break: break-word; }
+.state-before { color: var(--text-faint); }
+.state-arrow  { color: var(--text-muted); }
+.state-after  { color: var(--success); }
+
+/* ============================================================================
+ * §3.7  Mock-URL chip — copy-only, neutral, NEVER link-blue (VC-7 / AC-48)
+ * ========================================================================== */
+.mock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-2);            /* neutral, not --link */
+  max-width: 100%;
+}
+.mock-chip code { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ============================================================================
+ * §5  Skeleton loading rows (shimmer; static under reduced-motion via §8.4)
+ * ========================================================================== */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: hb-shimmer 1.2s linear infinite;
+  border-radius: var(--radius);
+}
+
+/* ============================================================================
+ * §3.1 / §8.2  Disabled + focus-visible (VC-15 / VC-16 / AC-VC16)
+ * ========================================================================== */
+:disabled,
+[aria-disabled="true"],
+.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ============================================================================
+ * §6  Keyframes (design.md §6) — GPU-friendly (opacity/transform/background)
+ * ========================================================================== */
+@keyframes hb-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.45); }
+  50%      { box-shadow: 0 0 0 5px rgba(63, 185, 80, 0); }
+}
+@keyframes hb-throb {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+@keyframes hb-flash {
+  from { background: var(--success-bg); }
+  to   { background: transparent; }
+}
+@keyframes hb-slide {
+  from { transform: translateY(-4px); }
+  to   { transform: translateY(0); }
+}
+@keyframes hb-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ============================================================================
+ * §8.4  Reduced motion (VC-17 / AC-VC17) — disable WS pulse, row flash/slide,
+ * skeleton shimmer, tree/panel transitions; all states stay legible by color +
+ * text + glyph.
+ * ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .ws-dot--live,
+  .ws-dot--reconnect,
+  .feed-row--new,
+  .skeleton,
+  [class*="hb-"] {
+    animation: none !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

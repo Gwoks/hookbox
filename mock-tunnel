@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""``mock-tunnel`` console entry point (LOCKED §8, AC-40).
+
+A thin executable shim so ``./mock-tunnel --port 3000 --endpoint <slug> ...`` works
+directly (the AC-40 invocation). Equivalent to ``python -m tunnel``. Add this repo
+root to your PATH, or run it as ``./mock-tunnel``.
+"""
+
+import os
+import sys
+
+# Ensure the repo root (this file's directory) is importable so ``tunnel`` resolves
+# regardless of the caller's CWD.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from tunnel.mock_tunnel import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,15 +4,28 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}HookBox{% endblock %}</title>
+
+<!-- Locked stack: Tailwind Play CDN + Alpine.js + HTMX, no build step (_decisions.md §1a) -->
 <script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+
+<!-- Design tokens + component layer (design.md). Loaded before paint to avoid FOUC. -->
+<link rel="stylesheet" href="/static/css/app.css">
+
+<!-- Alpine stores (owner identity + feed/inspector/endpoint/rules). `defer` runs it
+     after parse but before DOMContentLoaded, so its `alpine:init` listener is
+     registered before Alpine (also deferred, loaded after) boots. -->
+<script defer src="/static/js/stores.js"></script>
+
 <style>
-body { background-color: #0d1117; color: #e6edf3; }
+/* Kept inline for parity with the original GitHub-dark base; tokens canonical in app.css. */
 .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; }
 .btn-primary { background-color: #238636; color: white; padding: 8px 16px; border-radius: 6px; transition: background-color 0.2s; }
 .btn-primary:hover { background-color: #2ea043; }
 .btn-secondary { background-color: #21262d; color: #c9d1d9; padding: 8px 16px; border-radius: 6px; border: 1px solid #30363d; transition: all 0.2s; }
 .btn-secondary:hover { background-color: #30363d; }
-.btn-danger { background-color: #da3633; color: white; padding: 8px 16px; border-radius: 6px; }
+.btn-danger { background-color: #da3633; color: white; padding: 8px 16px; border-radius: 6px; transition: background-color 0.2s; }
 .btn-danger:hover { background-color: #f85149; }
 .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
 .badge-method { background-color: #388bfd; color: white; }
@@ -22,66 +35,148 @@ code { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
 .copy-btn:hover { color: #58a6ff; }
 .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 24px; background-color: #238636; color: white; border-radius: 8px; opacity: 0; transition: opacity 0.3s; z-index: 1000; }
 .toast.show { opacity: 1; }
+.toast.toast-error { background-color: #da3633; }
+[x-cloak] { display: none !important; }
 </style>
+
+<script>
+/* ----------------------------------------------------------------------------
+ * Owner identity helpers + global Alpine `owner` store.
+ *
+ * The session is keyed by localStorage["hookbox_owner"] =
+ *   { owner_id, owner_secret, token, mock_url }  (§5.1, AC-3).
+ * The owner_secret is the bearer capability for /api/* and the ?cap= for the
+ * feed WS (§5.4). Defined in base so every page can read identity before its
+ * own scripts run; stores.js layers feed/inspector/endpoint/rules on top.
+ * ------------------------------------------------------------------------- */
+window.HookBox = window.HookBox || {};
+
+HookBox.STORAGE_KEY = 'hookbox_owner';
+
+/* Detect whether localStorage is actually usable (private mode can throw). */
+HookBox.storageAvailable = (function () {
+    try {
+        const k = '__hb_probe__';
+        window.localStorage.setItem(k, '1');
+        window.localStorage.removeItem(k);
+        return true;
+    } catch (e) {
+        return false;
+    }
+})();
+
+HookBox.readOwner = function () {
+    if (!HookBox.storageAvailable) return null;
+    try {
+        const raw = window.localStorage.getItem(HookBox.STORAGE_KEY);
+        if (!raw) return null;
+        const o = JSON.parse(raw);
+        if (o && typeof o === 'object' && o.owner_secret && o.token) return o;
+        return null;
+    } catch (e) {
+        return null;
+    }
+};
+
+HookBox.writeOwner = function (owner) {
+    if (!HookBox.storageAvailable) return false;
+    try {
+        window.localStorage.setItem(HookBox.STORAGE_KEY, JSON.stringify(owner));
+        return true;
+    } catch (e) {
+        return false;
+    }
+};
+
+HookBox.clearOwner = function () {
+    if (!HookBox.storageAvailable) return;
+    try { window.localStorage.removeItem(HookBox.STORAGE_KEY); } catch (e) { /* noop */ }
+};
+
+/* Authorization header for /api/* calls (§5.1). Returns {} when no capability. */
+HookBox.authHeaders = function () {
+    const o = HookBox.readOwner();
+    return o && o.owner_secret ? { 'Authorization': 'Bearer ' + o.owner_secret } : {};
+};
+
+/* Logout: clear identity and return to landing (AC-3a). */
+HookBox.logout = function () {
+    HookBox.clearOwner();
+    window.location.href = '/';
+};
+
+/* The Alpine `owner` store (and the other dashboard stores) are registered in
+ * static/js/stores.js so there is a single source of truth (arch file plan). */
+</script>
+
 {% block extra_head %}{% endblock %}
 </head>
-<body class="min-h-screen">
-<nav class="border-b border-[#30363d] px-6 py-4">
+<body class="min-h-screen" {% block body_attrs %}{% endblock %}>
+
+{# Slim nav variant on the dashboard gives the split-screen more vertical room (design.md §3.11). #}
+{% block nav %}
+<nav class="border-b border-[#30363d] px-6 {% block nav_pad %}py-4{% endblock %}">
 <div class="max-w-6xl mx-auto flex justify-between items-center">
-<div class="flex items-center gap-6">
-    <a href="/" class="text-xl font-bold text-[#58a6ff]">📦 HookBox</a>
-    <div class="flex gap-4 text-sm">
-        <a href="/" class="text-[#8b949e] hover:text-[#c9d1d9]">Endpoints</a>
-        <a href="/backup" class="text-[#8b949e] hover:text-[#c9d1d9]">Backup</a>
+    <div class="flex items-center gap-6">
+        <a href="/" class="text-xl font-bold text-[#58a6ff]">HookBox</a>
+    </div>
+    {# Email + Logout rendered by Alpine from the owner store (no innerHTML injection). #}
+    <div class="flex gap-3 items-center" x-data x-cloak>
+        <template x-if="$store.owner.isLoggedIn">
+            <div class="flex gap-3 items-center">
+                <span class="text-sm text-[#8b949e]" x-text="$store.owner.email"></span>
+                <button @click="$store.owner.logout()" class="btn-secondary text-sm">Logout</button>
+            </div>
+        </template>
     </div>
 </div>
-<div class="flex gap-4" id="nav-buttons"></div>
-</div>
 </nav>
-<script>
-// Update nav based on login state
-const stored = localStorage.getItem('hookbox_user');
-if (stored) {
-    const user = JSON.parse(stored);
-    document.getElementById('nav-buttons').innerHTML = 
-        `<span class="text-sm text-[#8b949e]">${user.email}</span>
-         <button onclick="localStorage.removeItem('hookbox_user'); window.location.reload();" class="btn-secondary text-sm">Logout</button>`;
-}
-</script>
+{% endblock %}
+
+{# Standard pages use the centered main; the dashboard overrides `fullbleed` for the split-screen. #}
+{% block fullbleed %}
 <main class="max-w-6xl mx-auto px-6 py-8">
 {% block content %}{% endblock %}
 </main>
-<div id="toast" class="toast"></div>
+{% endblock %}
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
 <script>
-function showToast(message) {
+/* Toast + clipboard utilities (reused across pages). */
+function showToast(message, isError) {
     const toast = document.getElementById('toast');
+    if (!toast) return;
     toast.textContent = message;
+    toast.classList.toggle('toast-error', !!isError);
     toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 3000);
+    clearTimeout(window.__hbToastTimer);
+    window.__hbToastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
 }
 async function copyToClipboard(text) {
-    try { await navigator.clipboard.writeText(text); showToast('Copied!'); } catch (err) { console.error('Failed to copy:', err); }
-}
-
-// Check if user is logged in and update nav
-const stored = localStorage.getItem('hookbox_user');
-if (stored) {
     try {
-        const user = JSON.parse(stored);
-        document.getElementById('nav-buttons').innerHTML = `
-            <span class="text-sm text-[#8b949e]">${user.email}</span>
-            <button onclick="logout()" class="btn-secondary text-sm">Logout</button>
-        `;
-    } catch (e) {
-        localStorage.removeItem('hookbox_user');
+        await navigator.clipboard.writeText(text);
+        showToast('Copied!');
+    } catch (err) {
+        /* Fallback for non-secure contexts / clipboard denied. */
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'absolute';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            showToast('Copied!');
+        } catch (e) {
+            showToast('Copy failed', true);
+        }
     }
 }
-
-function logout() {
-    localStorage.removeItem('hookbox_user');
-    window.location.href = '/login';
-}
 </script>
+
 {% block scripts %}{% endblock %}
 </body>
 </html>

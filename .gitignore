@@ -3,3 +3,13 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Runtime data (SQLite WAL store lives here; volume-mounted in Docker)
+data/

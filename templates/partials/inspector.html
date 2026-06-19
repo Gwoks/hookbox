@@ -1,0 +1,323 @@
+{#
+  partials/inspector.html — the right-column deep inspector (AC-31, AC-31a/b/c,
+  AC-S14/S15, design.md §3.4). Mounted into #inspector-mount on the dashboard.
+
+  Reads the lazily-fetched RequestDetail (§5.3) from $store.inspector (filled by
+  the inspector store in stores.js, which calls GET /api/requests/{id} on
+  hb:select-request). NOTHING here builds markup from captured data: every
+  captured path/header/query/body value is bound with x-text (a text node), so an
+  injected <script> or "><img onerror=…> renders inert (AC-S14/AC-S15). No |safe,
+  no x-html on captured data anywhere in this file.
+
+  Tabs (AC-31): Headers · Query Params · Body · Response Served · State & Tracing.
+  Keyboard (AC-47): role=tablist/tab/tabpanel with ArrowLeft/Right + Home/End.
+#}
+<div
+    x-data="inspectorPanel()"
+    class="flex-1 flex flex-col min-h-0"
+    @keydown.escape.stop="/* leave selection; dashboard owns row focus */"
+>
+    {# ---- Loading / pending / error gates (AC-31a, AC-46 inspector) ---- #}
+    <template x-if="$store.inspector.isLoading">
+        <div class="flex-1 flex items-center justify-center text-[#8b949e] text-sm p-8" role="status" aria-busy="true">
+            Loading detail…
+        </div>
+    </template>
+
+    {# AC-31a: detail not yet written (fire-and-forget) → pending + retry, NOT a 404. #}
+    <template x-if="$store.inspector.isPending">
+        <div class="flex-1 flex flex-col items-center justify-center text-[#8b949e] text-sm p-8 gap-3" role="status">
+            <p>Detail still being written…</p>
+            <p class="text-xs text-[#6e7681]">Traces are logged asynchronously; this request's full detail is on its way.</p>
+            <button type="button" class="btn-secondary text-xs px-2 py-1" @click="$store.inspector.retry()">Retry now</button>
+        </div>
+    </template>
+
+    <template x-if="$store.inspector.isUnauthorized">
+        <div class="flex-1 flex items-center justify-center text-[#f85149] text-sm p-8" role="alert">
+            Not authorized to view this request.
+        </div>
+    </template>
+
+    <template x-if="$store.inspector.isError">
+        <div class="flex-1 flex flex-col items-center justify-center text-[#8b949e] text-sm p-8 gap-3" role="alert">
+            <p class="text-[#f85149]" x-text="$store.inspector.error || 'Could not load request detail.'"></p>
+            <button type="button" class="btn-secondary text-xs px-2 py-1" @click="$store.inspector.retry()">Retry</button>
+        </div>
+    </template>
+
+    {# ---- Loaded detail ---- #}
+    <template x-if="$store.inspector.isReady">
+        <div class="flex-1 flex flex-col min-h-0">
+
+            {# Header strip (design.md §3.4): method · path · status · served-by · latency #}
+            <div class="panel-flush px-4 py-2 flex flex-wrap items-center gap-3 sticky top-0 z-10">
+                <span class="badge" :class="$store.inspector.methodBadge" x-text="d().method"></span>
+                <span class="font-mono text-sm break-all flex-1 min-w-[8rem]" x-text="d().path"></span>
+                <span class="font-bold font-mono" :class="$store.inspector.statusClass" x-text="d().status_code"></span>
+                <template x-if="d().served_by">
+                    <span class="served-chip" :class="$store.inspector.servedClass" x-text="$store.inspector.servedLabel"></span>
+                </template>
+                <span class="text-xs text-[#8b949e]" x-text="d().duration_ms + 'ms'"></span>
+            </div>
+
+            {# Tab strip — role=tablist with arrow-key navigation (AC-47) #}
+            <div class="flex border-b border-[#30363d] px-2 overflow-x-auto"
+                 role="tablist"
+                 aria-label="Request detail sections"
+                 @keydown.arrow-right.prevent="cycleTab(1)"
+                 @keydown.arrow-left.prevent="cycleTab(-1)"
+                 @keydown.home.prevent="selectTabIndex(0)"
+                 @keydown.end.prevent="selectTabIndex(tabs.length - 1)">
+                <template x-for="(t, i) in tabs" :key="t.id">
+                    <button type="button"
+                            class="tab-btn"
+                            role="tab"
+                            :id="'insp-tab-' + t.id"
+                            :class="$store.inspector.tab === t.id ? 'is-active' : ''"
+                            :aria-selected="$store.inspector.tab === t.id ? 'true' : 'false'"
+                            :tabindex="$store.inspector.tab === t.id ? '0' : '-1'"
+                            :aria-controls="'insp-panel-' + t.id"
+                            @click="$store.inspector.setTab(t.id)"
+                            x-text="t.label"></button>
+                </template>
+            </div>
+
+            {# Scrollable tab panels #}
+            <div class="flex-1 overflow-y-auto min-h-0 px-4 py-3">
+
+                {# ===== Headers ===== #}
+                <div x-show="$store.inspector.tab === 'headers'"
+                     role="tabpanel" id="insp-panel-headers" aria-labelledby="insp-tab-headers" tabindex="0">
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e] mb-1 mt-1">Request headers</h3>
+                    <template x-if="$store.inspector.requestHeaderPairs.length === 0">
+                        <p class="text-xs text-[#6e7681] py-1">No request headers captured.</p>
+                    </template>
+                    <template x-for="pair in $store.inspector.requestHeaderPairs" :key="'rqh-' + pair.k">
+                        <div class="kv-row">
+                            <span class="kv-key" x-text="pair.k"></span>
+                            <span class="kv-val" x-text="pair.v"></span>
+                            <button type="button" class="copy-btn text-[#8b949e] text-xs flex-none"
+                                    :aria-label="'Copy header ' + pair.k"
+                                    @click="copyToClipboard(pair.v)">Copy</button>
+                        </div>
+                    </template>
+                </div>
+
+                {# ===== Query Params ===== #}
+                <div x-show="$store.inspector.tab === 'query'"
+                     role="tabpanel" id="insp-panel-query" aria-labelledby="insp-tab-query" tabindex="0">
+                    <template x-if="$store.inspector.queryPairs.length === 0">
+                        <p class="text-xs text-[#6e7681] py-1">No query parameters.</p>
+                    </template>
+                    <template x-for="pair in $store.inspector.queryPairs" :key="'qp-' + pair.k">
+                        <div class="kv-row">
+                            <span class="kv-key" x-text="pair.k"></span>
+                            <span class="kv-val" x-text="pair.v"></span>
+                            <button type="button" class="copy-btn text-[#8b949e] text-xs flex-none"
+                                    :aria-label="'Copy query param ' + pair.k"
+                                    @click="copyToClipboard(pair.v)">Copy</button>
+                        </div>
+                    </template>
+                </div>
+
+                {# ===== Body (request) — JSON/XML tree, <pre> fallback, binary marker ===== #}
+                <div x-show="$store.inspector.tab === 'body'"
+                     role="tabpanel" id="insp-panel-body" aria-labelledby="insp-tab-body" tabindex="0">
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e] mb-2 mt-1">Request body</h3>
+                    {# empty #}
+                    <template x-if="$store.inspector.reqBodyKind === 'empty'">
+                        <p class="text-xs text-[#6e7681] py-1">No request body.</p>
+                    </template>
+                    {# binary / oversized → "binary, truncated" label, never the raw bytes #}
+                    <template x-if="$store.inspector.reqBodyKind === 'binary'">
+                        <p class="text-xs text-[#8b949e] py-1 font-mono">[binary, truncated]</p>
+                    </template>
+                    {# JSON → collapsible tree #}
+                    <template x-if="$store.inspector.reqBodyKind === 'json'">
+                        <div x-data="bodyTree(() => $store.inspector.reqBodyTree)">
+                            {% include "partials/inspector_body_tree.html" %}
+                        </div>
+                    </template>
+                    {# XML / text → raw <pre> (textContent via x-text — inert) #}
+                    <template x-if="$store.inspector.reqBodyKind === 'xml' || $store.inspector.reqBodyKind === 'text'">
+                        <pre class="whitespace-pre-wrap break-all"><code x-text="$store.inspector.reqBodyRaw"></code></pre>
+                    </template>
+                </div>
+
+                {# ===== Response Served (AC-31b) ===== #}
+                <div x-show="$store.inspector.tab === 'response'"
+                     role="tabpanel" id="insp-panel-response" aria-labelledby="insp-tab-response" tabindex="0">
+
+                    {# Served-by + identifying headers (X-HookBox-*, §5.5) #}
+                    <div class="mb-4 space-y-2">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-xs uppercase tracking-wide text-[#8b949e]">Served by</span>
+                            <span class="served-chip" :class="$store.inspector.servedClass" x-text="$store.inspector.servedLabel"></span>
+                            <template x-if="d().matched_rule_id !== null && d().matched_rule_id !== undefined">
+                                <span class="text-xs text-[#8b949e] font-mono" x-text="'rule #' + d().matched_rule_id"></span>
+                            </template>
+                        </div>
+                        <div class="kv-row" x-show="$store.inspector.hbEndpoint">
+                            <span class="kv-key">X-HookBox-Endpoint</span>
+                            <span class="kv-val" x-text="$store.inspector.hbEndpoint"></span>
+                        </div>
+                        <div class="kv-row" x-show="$store.inspector.hbServedBy">
+                            <span class="kv-key">X-HookBox-Served-By</span>
+                            <span class="kv-val" x-text="$store.inspector.hbServedBy"></span>
+                        </div>
+                        <div class="kv-row" x-show="$store.inspector.hbRuleId">
+                            <span class="kv-key">X-HookBox-Rule-Id</span>
+                            <span class="kv-val" x-text="$store.inspector.hbRuleId"></span>
+                        </div>
+                    </div>
+
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e] mb-1">Response headers</h3>
+                    <template x-if="$store.inspector.responseHeaderPairs.length === 0">
+                        <p class="text-xs text-[#6e7681] py-1">No response headers captured.</p>
+                    </template>
+                    <template x-for="pair in $store.inspector.responseHeaderPairs" :key="'rsh-' + pair.k">
+                        <div class="kv-row">
+                            <span class="kv-key" x-text="pair.k"></span>
+                            <span class="kv-val" x-text="pair.v"></span>
+                        </div>
+                    </template>
+
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e] mb-2 mt-4">Response body</h3>
+                    <template x-if="$store.inspector.resBodyKind === 'empty'">
+                        <p class="text-xs text-[#6e7681] py-1">No response body.</p>
+                    </template>
+                    <template x-if="$store.inspector.resBodyKind === 'binary'">
+                        <p class="text-xs text-[#8b949e] py-1 font-mono">[binary, truncated]</p>
+                    </template>
+                    <template x-if="$store.inspector.resBodyKind === 'json'">
+                        <div x-data="bodyTree(() => $store.inspector.resBodyTree)">
+                            {% include "partials/inspector_body_tree.html" %}
+                        </div>
+                    </template>
+                    <template x-if="$store.inspector.resBodyKind === 'xml' || $store.inspector.resBodyKind === 'text'">
+                        <pre class="whitespace-pre-wrap break-all"><code x-text="$store.inspector.resBodyRaw"></code></pre>
+                    </template>
+                </div>
+
+                {# ===== State & Tracing Logs (AC-31c) — vertical step list ===== #}
+                <div x-show="$store.inspector.tab === 'trace'"
+                     role="tabpanel" id="insp-panel-trace" aria-labelledby="insp-tab-trace" tabindex="0">
+
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e] mb-2 mt-1">Trace</h3>
+                    <template x-if="$store.inspector.traceSteps.length === 0">
+                        <p class="text-xs text-[#6e7681] py-1">No trace events recorded.</p>
+                    </template>
+                    <template x-for="step in $store.inspector.traceSteps" :key="step.idx">
+                        <div class="trace-step" :class="step.cls">
+                            <span class="trace-glyph" aria-hidden="true" x-text="step.glyph"></span>
+                            <div class="trace-detail">
+                                <span class="font-mono text-[#c9d1d9]" x-text="step.step"></span>
+                                {# before -> after state diff, when the step encodes one #}
+                                <template x-if="step.diff">
+                                    <span>
+                                        <span class="text-[#8b949e]" x-text="' ' + step.diff.label + ': '"></span>
+                                        <span class="state-before" x-text="step.diff.before"></span>
+                                        <span class="state-arrow"> &rarr; </span>
+                                        <span class="state-after" x-text="step.diff.after"></span>
+                                    </span>
+                                </template>
+                                <template x-if="!step.diff && step.detail">
+                                    <span class="text-[#8b949e]" x-text="' — ' + step.detail"></span>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e] mb-1 mt-4">State at request time</h3>
+                    <template x-if="$store.inspector.stateSnapshotPairs.length === 0">
+                        <p class="text-xs text-[#6e7681] py-1">No state set on this endpoint.</p>
+                    </template>
+                    <template x-for="pair in $store.inspector.stateSnapshotPairs" :key="'st-' + pair.k">
+                        <div class="kv-row">
+                            <span class="kv-key" x-text="pair.k"></span>
+                            <span class="kv-val" x-text="pair.v"></span>
+                        </div>
+                    </template>
+                </div>
+
+            </div>
+        </div>
+    </template>
+</div>
+
+<script>
+/* inspectorPanel() — local Alpine component glue for the inspector partial.
+ * Tab list + keyboard cycling (AC-47). All data lives in $store.inspector. */
+function inspectorPanel() {
+    return {
+        tabs: [
+            { id: 'headers',  label: 'Headers' },
+            { id: 'query',    label: 'Query Params' },
+            { id: 'body',     label: 'Body' },
+            { id: 'response', label: 'Response Served' },
+            { id: 'trace',    label: 'State & Tracing' },
+        ],
+        /* Shorthand for the loaded RequestDetail (never null inside the isReady gate). */
+        d() { return this.$store.inspector.detail || {}; },
+
+        selectTabIndex(i) {
+            const t = this.tabs[Math.max(0, Math.min(this.tabs.length - 1, i))];
+            if (t) {
+                this.$store.inspector.setTab(t.id);
+                this.$nextTick(() => {
+                    const el = document.getElementById('insp-tab-' + t.id);
+                    if (el && el.focus) el.focus();
+                });
+            }
+        },
+        cycleTab(delta) {
+            const cur = this.tabs.findIndex(t => t.id === this.$store.inspector.tab);
+            let next = (cur === -1 ? 0 : cur + delta);
+            if (next < 0) next = this.tabs.length - 1;
+            if (next >= this.tabs.length) next = 0;
+            this.selectTabIndex(next);
+        },
+    };
+}
+
+/* bodyTree(getNodes) — collapsible flat-tree renderer used by inspector_body_tree.html.
+ * `getNodes` returns the flattened node list (HookBox.flattenJson) reactively.
+ * Open-state is tracked per node id; visibleNodes hides descendants of any closed
+ * ancestor by walking depth. No captured strings become markup (AC-S15). */
+function bodyTree(getNodes) {
+    return {
+        openState: {},   // id -> bool (override of node.open default)
+        _initFor: null,
+
+        nodesRaw() {
+            const ns = (typeof getNodes === 'function') ? getNodes() : (getNodes || []);
+            return Array.isArray(ns) ? ns : [];
+        },
+        isOpen(node) {
+            if (Object.prototype.hasOwnProperty.call(this.openState, node.id)) return this.openState[node.id];
+            return !!node.open;
+        },
+        toggle(node) {
+            this.openState[node.id] = !this.isOpen(node);
+        },
+        get visibleNodes() {
+            const nodes = this.nodesRaw();
+            const out = [];
+            /* hideUntilDepth: when a node is collapsed, skip everything deeper than
+             * it until we return to its depth or shallower. */
+            let hideDeeperThan = Infinity;
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                if (n.depth > hideDeeperThan) continue;     // descendant of a closed node
+                hideDeeperThan = Infinity;                   // back at/above the cut depth
+                out.push(n);
+                if (n.hasChildren && !this.isOpen(n)) {
+                    hideDeeperThan = n.depth;                 // hide its descendants
+                }
+            }
+            return out;
+        },
+    };
+}
+</script>

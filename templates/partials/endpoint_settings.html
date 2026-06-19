@@ -1,0 +1,271 @@
+{#
+  partials/endpoint_settings.html — endpoint Settings overlay (AC-10, AC-11,
+  AC-24, AC-25, AC-27c, AC-46 settings slice, AC-VC16, design.md §3.9).
+
+  Modal geometry reuses dashboard.html:15 (backdrop bg-black/50 z-50 + .card) with
+  --shadow-overlay to lift off the busy feed. Toggles use the inline Tailwind
+  `sr-only peer` switch pattern; inputs use the shared inline field utilities
+  (bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff]). All values are
+  CLAMPED before PATCH (AC-27c) via $store.endpoint.save (and surfaced inline here).
+
+  Open/close is owned by the dashboard via the `settingsOpen` flag in the
+  `dashboard()` scope; this partial is rendered inside that scope and toggles
+  visibility with x-show. Focus is trapped while open and Esc restores focus to
+  the trigger (AC-VC16) — handled by the focusTrap() helper below.
+
+  Serializes EndpointConfigPatch (§5.3): name, auto_crud, target_url, default_mode,
+  latency_ms (0-10000), rate_limit_per_min (>=0), chaos_pct (0-100), cors_enabled.
+#}
+<div
+    x-data="endpointSettings()"
+    x-show="settingsOpen"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+    @keydown.escape.window="if (settingsOpen) closeSettings()"
+    @click.self="closeSettings()"
+    style="display:none;"
+>
+    <div class="card w-full max-w-2xl max-h-[85vh] flex flex-col"
+         style="box-shadow: var(--shadow-overlay);"
+         role="dialog" aria-modal="true" aria-labelledby="settings-title"
+         x-ref="dialog"
+         @keydown.tab="trapTab($event)">
+
+        {# Header #}
+        <div class="flex items-center justify-between px-5 py-3 border-b border-[#30363d]">
+            <h2 id="settings-title" class="text-lg font-bold">Endpoint settings</h2>
+            <button type="button" class="copy-btn text-[#8b949e]" aria-label="Close settings" @click="closeSettings()">&times;</button>
+        </div>
+
+        {# Body — scrollable #}
+        <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+
+            {# Loading state (AC-46 settings) #}
+            <template x-if="$store.endpoint.loading">
+                <div class="text-[#8b949e] text-sm py-6 text-center" role="status" aria-busy="true">Loading settings…</div>
+            </template>
+            <template x-if="$store.endpoint.error && !$store.endpoint.loading">
+                <div class="bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="$store.endpoint.error"></div>
+            </template>
+
+            <template x-if="!$store.endpoint.loading && $store.endpoint.detail">
+                <div class="space-y-5">
+
+                    {# Save error banner (AC-46 settings error) #}
+                    <template x-if="$store.endpoint.saveError">
+                        <div class="bg-red-900/50 border border-red-500 text-red-200 text-sm rounded px-3 py-2" role="alert" x-text="$store.endpoint.saveError"></div>
+                    </template>
+
+                    {# Name #}
+                    <div>
+                        <label for="set-name" class="block text-sm mb-1 text-[#c9d1d9]">Endpoint name</label>
+                        <input id="set-name" type="text" maxlength="100" x-model="form.name"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none"
+                               placeholder="My mock API">
+                    </div>
+
+                    {# Auto-CRUD toggle (AC-11 FE) #}
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <label for="set-autocrud" class="font-bold text-sm">Auto-CRUD</label>
+                            <p class="text-xs text-[#8b949e]">Turn this endpoint into a REST DB backend (POST/GET/PUT/DELETE /&lt;collection&gt;) with no rules.</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer flex-none">
+                            <input id="set-autocrud" type="checkbox" class="sr-only peer" x-model="form.auto_crud">
+                            <div class="w-11 h-6 bg-[#30363d] rounded-full peer peer-checked:bg-[#238636] peer-focus-visible:ring-2 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                        </label>
+                    </div>
+
+                    {# Auto-CORS toggle #}
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <label for="set-cors" class="font-bold text-sm">Auto-CORS</label>
+                            <p class="text-xs text-[#8b949e]">Auto-handle OPTIONS preflight and inject permissive CORS headers on every response.</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer flex-none">
+                            <input id="set-cors" type="checkbox" class="sr-only peer" x-model="form.cors_enabled">
+                            <div class="w-11 h-6 bg-[#30363d] rounded-full peer peer-checked:bg-[#238636] peer-focus-visible:ring-2 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                        </label>
+                    </div>
+
+                    {# MITM target URL (AC-14 FE config) #}
+                    <div>
+                        <label for="set-target" class="block text-sm mb-1 text-[#c9d1d9]">Proxy target (MITM)</label>
+                        <input id="set-target" type="url" x-model="form.target_url"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none font-mono text-sm"
+                               :class="targetError ? 'border-[#f85149]' : 'border-[#30363d]'"
+                               :aria-invalid="targetError ? 'true' : 'false'"
+                               placeholder="https://api.example.com">
+                        <p class="text-xs mt-1" :class="targetError ? 'text-[#f85149]' : 'text-[#8b949e]'"
+                           x-text="targetError || 'Unmatched requests forward here (http/https only). Leave empty to disable.'"></p>
+                    </div>
+
+                    {# Default mode #}
+                    <div>
+                        <label for="set-default" class="block text-sm mb-1 text-[#c9d1d9]">Default response (no match)</label>
+                        <select id="set-default" x-model="form.default_mode"
+                                class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
+                            <option value="mock_404">404 — no match</option>
+                            <option value="echo">Echo the request (200)</option>
+                        </select>
+                    </div>
+
+                    <hr class="border-[#30363d]">
+                    <h3 class="text-xs uppercase tracking-wide text-[#8b949e]">Simulated network conditions</h3>
+
+                    {# Latency slider 0-10000 (AC-24 FE) #}
+                    <div>
+                        <label for="set-latency" class="block text-sm mb-1 text-[#c9d1d9]">
+                            Latency: <span class="font-mono" x-text="form.latency_ms + ' ms'"></span>
+                        </label>
+                        <input id="set-latency" type="range" min="0" max="10000" step="50" x-model.number="form.latency_ms"
+                               class="w-full" aria-describedby="set-latency-help">
+                        <div class="flex justify-between text-[10px] text-[#6e7681]"><span>0</span><span>10000 ms</span></div>
+                        <p id="set-latency-help" class="text-xs text-[#8b949e]">Delays every response by this amount (clamped 0–10000 ms).</p>
+                    </div>
+
+                    {# Rate limit (AC-25 FE) #}
+                    <div>
+                        <label for="set-rate" class="block text-sm mb-1 text-[#c9d1d9]">Rate limit (requests / min)</label>
+                        <input id="set-rate" type="number" min="0" max="100000" step="1" x-model.number="form.rate_limit_per_min"
+                               @blur="form.rate_limit_per_min = clamp('rate_limit_per_min', form.rate_limit_per_min)"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 focus:border-[#58a6ff] focus:outline-none">
+                        <p class="text-xs text-[#8b949e]">0 = unlimited. Excess requests get 429 + Retry-After.</p>
+                    </div>
+
+                    {# Chaos % dial (AC-26 FE) #}
+                    <div>
+                        <label for="set-chaos" class="block text-sm mb-1 text-[#c9d1d9]">
+                            Chaos: <span class="font-mono" x-text="form.chaos_pct + '%'"></span>
+                        </label>
+                        <input id="set-chaos" type="range" min="0" max="100" step="1" x-model.number="form.chaos_pct"
+                               class="w-full" aria-describedby="set-chaos-help">
+                        <p id="set-chaos-help" class="text-xs text-[#8b949e]">Percent of requests that return a random 5xx (502/503/504). Clamped 0–100.</p>
+                    </div>
+
+                    <hr class="border-[#30363d]">
+
+                    {# Danger zone — Clear state (AC-10) + Clear history (§5.2 #14) #}
+                    <div class="border border-[#f85149]/40 rounded p-3 space-y-3">
+                        <h3 class="text-sm font-bold text-[#f85149]">Danger zone</h3>
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-sm">Clear endpoint state</p>
+                                <p class="text-xs text-[#8b949e]">Wipes the per-endpoint Redis state; gated rules revert to pre-condition behavior.</p>
+                            </div>
+                            <button type="button" class="btn-danger text-xs px-2 py-1 flex-none"
+                                    @click="confirmClearState()">Clear state</button>
+                        </div>
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-sm">Clear request history</p>
+                                <p class="text-xs text-[#8b949e]">Deletes captured traces for this endpoint.</p>
+                            </div>
+                            <button type="button" class="btn-danger text-xs px-2 py-1 flex-none"
+                                    @click="confirmClearHistory()">Clear history</button>
+                        </div>
+                    </div>
+
+                </div>
+            </template>
+        </div>
+
+        {# Footer #}
+        <div class="flex items-center justify-end gap-3 px-5 py-3 border-t border-[#30363d]">
+            <button type="button" class="btn-secondary text-sm" @click="closeSettings()">Cancel</button>
+            <button type="button" class="btn-primary text-sm"
+                    :class="$store.endpoint.saving || targetError ? 'is-disabled' : ''"
+                    :disabled="$store.endpoint.saving || !!targetError"
+                    @click="saveSettings()"
+                    x-text="$store.endpoint.saving ? 'Saving…' : 'Save settings'"></button>
+        </div>
+    </div>
+</div>
+
+<script>
+/* endpointSettings() — settings overlay glue (hookbox-wrd.28).
+ * Holds a local `form` snapshot of EndpointConfigPatch fields so editing is
+ * non-destructive until Save; serializes + clamps via $store.endpoint.save. */
+function endpointSettings() {
+    return {
+        form: {
+            name: '', auto_crud: false, target_url: '', default_mode: 'mock_404',
+            latency_ms: 0, rate_limit_per_min: 0, chaos_pct: 0, cors_enabled: true,
+        },
+        _lastTrigger: null,
+
+        init() {
+            /* Re-snapshot the form whenever the overlay opens or detail changes. */
+            this.$watch('settingsOpen', (open) => { if (open) this.snapshot(); });
+            this.$watch('$store.endpoint.detail', () => { if (this.settingsOpen) this.snapshot(); });
+        },
+
+        snapshot() {
+            const d = this.$store.endpoint.detail;
+            if (!d) return;
+            this.form = {
+                name: d.name || '',
+                auto_crud: !!d.auto_crud,
+                target_url: d.target_url || '',
+                default_mode: d.default_mode || 'mock_404',
+                latency_ms: this.clamp('latency_ms', d.latency_ms),
+                rate_limit_per_min: this.clamp('rate_limit_per_min', d.rate_limit_per_min),
+                chaos_pct: this.clamp('chaos_pct', d.chaos_pct),
+                cors_enabled: d.cors_enabled !== false,
+            };
+        },
+
+        clamp(key, v) { return this.$store.endpoint.clampNum(key, v); },
+
+        /* Client-side scheme check mirrors AC-S6 (http/https only); the server is
+         * authoritative (422). Empty is valid (clears MITM). */
+        get targetError() {
+            const t = (this.form.target_url || '').trim();
+            if (!t) return '';
+            if (!/^https?:\/\//i.test(t)) return 'Target must start with http:// or https://';
+            return '';
+        },
+
+        saveSettings() {
+            if (this.targetError) return;
+            const patch = {
+                name: this.form.name || null,
+                auto_crud: this.form.auto_crud,
+                target_url: (this.form.target_url || '').trim(),   // '' clears MITM (§5.3)
+                default_mode: this.form.default_mode,
+                latency_ms: this.clamp('latency_ms', this.form.latency_ms),
+                rate_limit_per_min: this.clamp('rate_limit_per_min', this.form.rate_limit_per_min),
+                chaos_pct: this.clamp('chaos_pct', this.form.chaos_pct),
+                cors_enabled: this.form.cors_enabled,
+            };
+            this.$store.endpoint.save(patch).then((ep) => {
+                if (ep) this.closeSettings();
+            });
+        },
+
+        confirmClearState() {
+            if (window.confirm('Clear all per-endpoint state? Gated rules will revert to pre-condition behavior.')) {
+                this.$store.endpoint.clearState();
+            }
+        },
+        confirmClearHistory() {
+            if (window.confirm('Delete all captured request history for this endpoint?')) {
+                this.$store.endpoint.clearHistory();
+            }
+        },
+
+        /* Focus trap (AC-VC16): keep Tab within the dialog. x-trap (Alpine focus
+         * plugin) is used when available; this is a dependency-free fallback. */
+        trapTab(e) {
+            const dlg = this.$refs.dialog;
+            if (!dlg) return;
+            const f = dlg.querySelectorAll('button, [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])');
+            const list = Array.from(f).filter(el => el.offsetParent !== null);
+            if (!list.length) return;
+            const first = list[0], last = list[list.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        },
+    };
+}
+</script>

@@ -1,369 +1,514 @@
-"""JSON API routes with user authentication"""
+"""Management API (P2) — the 19 §5.2 endpoints with real owner-capability auth.
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
-import aiosqlite
-from datetime import datetime
+Replaces the prior ``X-User-Id`` header-trust. All responses are JSON; error
+bodies are uniformly ``{"error": "<code>", "detail": "<human>"}``. Endpoint-scoped
+routes return 404 (not 403) for a valid-but-non-owner capability (AC-S2/S3).
+"""
+
+from __future__ import annotations
+
 import json
-from fastapi import Header
+from datetime import datetime, timezone
+from typing import Optional
 
-from app.database import get_db, create_user_token, hash_email
+import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
+
+import config
+from app.auth import assert_owns_endpoint, require_owner
+from app.database import gen_owner_secret, gen_token, get_db, hash_email, hash_secret
 from app.models import (
-    UserRegister, UserLogin, UserResponse, UserSession,
-    EndpointCreate, EndpointResponse, EndpointDetail,
-    RequestResponse, RequestDetail, 
-    MockRuleCreate, MockRuleResponse, MockRuleListResponse,
-    MessageResponse
+    EndpointConfigPatch,
+    EndpointCreate,
+    EndpointDetail,
+    EndpointSummary,
+    Message,
+    MockRule,
+    MockRuleCreate,
+    MockRulePatch,
+    RequestDetail,
+    RequestSummary,
+    SessionCreate,
+    SessionResponse,
 )
-from app.utils import generate_endpoint_id, calculate_expiry
+from app.redis_state import RedisUnavailable, redis_state
 
 router = APIRouter(prefix="/api", tags=["API"])
 
-# --- User Authentication ---
 
-def get_current_user(x_user_id: str = Header(...), x_email: str = Header(...)) -> dict:
-    """Validate user from headers"""
-    return {"user_id": x_user_id, "email": x_email}
+# --- serialization helpers ----------------------------------------------------
+def _mock_url(token: str) -> str:
+    if config.PATH_FALLBACK_ONLY:
+        # No usable wildcard domain — surface the path-fallback URL here too.
+        return f"/e/{token}"
+    return f"https://{token}.{config.MOCK_DOMAIN}"
 
-@router.post("/register", response_model=UserResponse)
-async def register(data: UserRegister, db: aiosqlite.Connection = Depends(get_db)):
-    """Register user with email"""
-    user_id = hash_email(data.email)
-    token = create_user_token()
-    
+
+def _path_url(token: str) -> str:
+    return f"/e/{token}"
+
+
+def _to_dt(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
     try:
-        await db.execute(
-            "INSERT INTO users (id, email) VALUES (?, ?)",
-            (user_id, data.email.lower().strip())
-        )
-        await db.commit()
-    except aiosqlite.IntegrityError:
-        # User exists, get existing data
-        async with db.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-        if row:
-            return UserResponse(
-                id=row['id'],
-                email=row['email'],
-                created_at=datetime.fromisoformat(row['created_at']),
-                last_login=datetime.fromisoformat(row['last_login']) if row['last_login'] else None,
-                token=token
-            )
-    
-    return UserResponse(
-        id=user_id,
-        email=data.email.lower().strip(),
-        created_at=datetime.utcnow(),
-        last_login=None,
-        token=token
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _endpoint_summary(row: aiosqlite.Row) -> EndpointSummary:
+    return EndpointSummary(
+        token=row["token"],
+        name=row["name"],
+        mock_url=_mock_url(row["token"]),
+        path_url=_path_url(row["token"]),
+        created_at=_to_dt(row["created_at"]) or datetime.now(timezone.utc),
+        last_hit=_to_dt(row["last_hit"]),
+        request_count=row["request_count"],
     )
 
-@router.post("/login", response_model=UserResponse)
-async def login(data: UserLogin, db: aiosqlite.Connection = Depends(get_db)):
-    """Login with email - auto-register if not found"""
-    user_id = hash_email(data.email)
-    
-    async with db.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row:
-        # Auto-register the user
-        await db.execute(
-            "INSERT INTO users (id, email) VALUES (?, ?)",
-            (user_id, data.email.lower().strip())
-        )
-        await db.commit()
-        token = create_user_token()
-        return UserResponse(
-            id=user_id,
-            email=data.email.lower().strip(),
-            created_at=datetime.utcnow(),
-            last_login=None,
-            token=token
-        )
-    
-    # Update last login
-    await db.execute("UPDATE users SET last_login = ? WHERE id = ?", 
-                     (datetime.utcnow().isoformat(), user_id))
-    await db.commit()
-    
-    token = create_user_token()
-    return UserResponse(
-        id=row['id'],
-        email=row['email'],
-        created_at=datetime.fromisoformat(row['created_at']),
-        last_login=datetime.utcnow(),
-        token=token
-    )
 
-# --- Endpoints CRUD (User-scoped) ---
-
-@router.post("/endpoints", response_model=EndpointResponse)
-async def create_endpoint(
-    data: EndpointCreate = None,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Create a new webhook endpoint for current user"""
-    if data is None:
-        data = EndpointCreate()
-    
-    endpoint_id = generate_endpoint_id()
-    expires_at = calculate_expiry(data.expires_in_hours or 24)
-    
-    await db.execute(
-        "INSERT INTO endpoints (id, user_id, name, expires_at) VALUES (?, ?, ?, ?)",
-        (endpoint_id, current_user['user_id'], data.name, expires_at.isoformat())
-    )
-    await db.commit()
-    
-    return EndpointResponse(
-        id=endpoint_id,
-        user_id=current_user['user_id'],
-        name=data.name,
-        created_at=datetime.utcnow(),
-        last_hit=None,
-        request_count=0,
-        webhook_url=f"/{current_user['user_id']}/{endpoint_id}"
-    )
-
-@router.get("/endpoints", response_model=list[EndpointResponse])
-async def list_endpoints(
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """List all endpoints for current user only"""
-    async with db.execute(
-        "SELECT id, name, user_id, created_at, last_hit, request_count FROM endpoints WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC",
-        (current_user['user_id'],)
-    ) as cursor:
-        rows = await cursor.fetchall()
-    
-    return [
-        EndpointResponse(
-            id=row['id'],
-            user_id=row['user_id'],
-            name=row['name'],
-            created_at=datetime.fromisoformat(row['created_at']),
-            last_hit=datetime.fromisoformat(row['last_hit']) if row['last_hit'] else None,
-            request_count=row['request_count'],
-            webhook_url=f"/{current_user['user_id']}/{row['id']}"
-        )
-        for row in rows
-    ]
-
-@router.get("/endpoints/{endpoint_id}", response_model=EndpointDetail)
-async def get_endpoint(
-    endpoint_id: str,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get endpoint details (only if owned by current user)"""
-    async with db.execute(
-        "SELECT e.*, m.enabled as mock_enabled FROM endpoints e LEFT JOIN mock_rules m ON e.id = m.endpoint_id WHERE e.id = ? AND e.user_id = ?",
-        (endpoint_id, current_user['user_id'])
-    ) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Endpoint not found")
-    
+def _endpoint_detail(row: aiosqlite.Row, tunnel_active: bool = False) -> EndpointDetail:
     return EndpointDetail(
-        id=row['id'],
-        user_id=row['user_id'],
-        name=row['name'],
-        created_at=datetime.fromisoformat(row['created_at']),
-        last_hit=datetime.fromisoformat(row['last_hit']) if row['last_hit'] else None,
-        request_count=row['request_count'],
-        webhook_url=f"/{current_user['user_id']}/{row['id']}",
-        expires_at=datetime.fromisoformat(row['expires_at']) if row['expires_at'] else None,
-        is_active=bool(row['is_active']),
-        mock_enabled=bool(row['mock_enabled']) if row['mock_enabled'] else False
+        token=row["token"],
+        name=row["name"],
+        mock_url=_mock_url(row["token"]),
+        path_url=_path_url(row["token"]),
+        auto_crud=bool(row["auto_crud"]),
+        target_url=row["target_url"],
+        default_mode=row["default_mode"],
+        latency_ms=row["latency_ms"],
+        rate_limit_per_min=row["rate_limit_per_min"],
+        chaos_pct=row["chaos_pct"],
+        cors_enabled=bool(row["cors_enabled"]),
+        tunnel_active=tunnel_active,
+        created_at=_to_dt(row["created_at"]) or datetime.now(timezone.utc),
+        last_hit=_to_dt(row["last_hit"]),
+        request_count=row["request_count"],
     )
 
-@router.delete("/endpoints/{endpoint_id}", response_model=MessageResponse)
-async def delete_endpoint(
-    endpoint_id: str,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Delete endpoint (only if owned by current user)"""
-    # Verify ownership
-    async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row or row['user_id'] != current_user['user_id']:
-        raise HTTPException(status_code=404, detail="Endpoint not found")
-    
-    await db.execute("DELETE FROM mock_rules WHERE endpoint_id = ?", (endpoint_id,))
-    await db.execute("DELETE FROM requests WHERE endpoint_id = ?", (endpoint_id,))
-    await db.execute("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
-    await db.commit()
-    
-    return MessageResponse(message=f"Endpoint {endpoint_id} deleted")
 
-# --- Requests ---
+def _tunnel_active(token: str) -> bool:
+    """Lazily consult the tunnel registry if it exists (avoids hard import cycle)."""
+    try:
+        from app.routes.tunnel import tunnel_registry  # local import
+        return tunnel_registry.is_active(token)
+    except Exception:
+        return False
 
-@router.get("/endpoints/{endpoint_id}/requests", response_model=list[RequestResponse])
-async def list_requests(
-    endpoint_id: str, 
-    limit: int = 50,
-    offset: int = 0,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """List captured requests for endpoint (only if owned by current user)"""
-    # Verify ownership
-    async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row or row['user_id'] != current_user['user_id']:
-        raise HTTPException(status_code=404, detail="Endpoint not found")
-    
-    async with db.execute(
-        "SELECT id, endpoint_id, method, path, timestamp, content_type FROM requests WHERE endpoint_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        (endpoint_id, limit, offset)
-    ) as cursor:
-        rows = await cursor.fetchall()
-    
-    return [
-        RequestResponse(
-            id=row['id'],
-            endpoint_id=row['endpoint_id'],
-            method=row['method'],
-            path=row['path'],
-            timestamp=datetime.fromisoformat(row['timestamp']),
-            content_type=row['content_type']
-        )
-        for row in rows
-    ]
 
-@router.get("/requests/{request_id}", response_model=RequestDetail)
-async def get_request(
-    request_id: int,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get full request details"""
-    async with db.execute(
-        "SELECT r.* FROM requests r JOIN endpoints e ON r.endpoint_id = e.id WHERE r.id = ? AND e.user_id = ?",
-        (request_id, current_user['user_id'])
-    ) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Request not found")
-    
-    return RequestDetail(
-        id=row['id'],
-        endpoint_id=row['endpoint_id'],
-        method=row['method'],
-        path=row['path'],
-        timestamp=datetime.fromisoformat(row['timestamp']),
-        content_type=row['content_type'],
-        headers=json.loads(row['headers']) if row['headers'] else {},
-        query_params=json.loads(row['query_params']) if row['query_params'] else {},
-        body=row['body']
+def _rule_from_row(row: aiosqlite.Row) -> MockRule:
+    return MockRule(
+        id=row["id"],
+        token=row["token"],
+        name=row["name"],
+        priority=row["priority"],
+        enabled=bool(row["enabled"]),
+        match=json.loads(row["match_json"] or "{}"),
+        response=json.loads(row["response_json"] or "{}"),
+        state_writes=json.loads(row["state_writes_json"] or "[]"),
+        latency_ms=row["latency_ms"],
+        rate_limit_per_min=row["rate_limit_per_min"],
+        webhook_action=json.loads(row["webhook_json"]) if row["webhook_json"] else None,
+        created_at=_to_dt(row["created_at"]) or datetime.now(timezone.utc),
     )
 
-# --- Mock Rules ---
 
-@router.put("/endpoints/{endpoint_id}/mock", response_model=MockRuleResponse)
-async def set_mock_rule(
-    endpoint_id: str,
-    data: MockRuleCreate,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Set or update mock rule for endpoint (method-specific)"""
-    # Verify ownership
-    async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
-        row = await cursor.fetchone()
-        if not row or row['user_id'] != current_user['user_id']:
-            raise HTTPException(status_code=404, detail="Endpoint not found")
-    
-    method = data.method.upper() if data.method else "DEFAULT"
-    
+async def _new_endpoint(db: aiosqlite.Connection, owner_id: str, name: Optional[str]) -> aiosqlite.Row:
+    token = gen_token()
+    # Extremely unlikely collision; retry a couple of times.
+    for _ in range(5):
+        cur = await db.execute("SELECT 1 FROM endpoints WHERE token = ?", (token,))
+        if await cur.fetchone() is None:
+            break
+        token = gen_token()
     await db.execute(
-        """INSERT INTO mock_rules (endpoint_id, method, status_code, response_body, response_headers, content_type, enabled, delay_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(endpoint_id, method) DO UPDATE SET
-           status_code = excluded.status_code, response_body = excluded.response_body,
-           response_headers = excluded.response_headers, content_type = excluded.content_type,
-           enabled = excluded.enabled, delay_ms = excluded.delay_ms""",
-        (endpoint_id, method, data.status_code, data.response_body, json.dumps(data.response_headers),
-         data.content_type, 1 if data.enabled else 0, data.delay_ms)
+        "INSERT INTO endpoints (token, owner_id, name) VALUES (?, ?, ?)",
+        (token, owner_id, name),
     )
     await db.commit()
-    
-    return MockRuleResponse(
-        endpoint_id=endpoint_id,
-        method=method,
-        status_code=data.status_code,
-        response_body=data.response_body,
-        response_headers=data.response_headers,
-        content_type=data.content_type,
-        enabled=data.enabled,
-        delay_ms=data.delay_ms
-    )
+    cur = await db.execute("SELECT * FROM endpoints WHERE token = ?", (token,))
+    return await cur.fetchone()
 
-@router.get("/endpoints/{endpoint_id}/mock", response_model=MockRuleListResponse)
-async def get_mock_rules(
-    endpoint_id: str,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get all mock rules for endpoint"""
-    # Verify ownership
-    async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row or row['user_id'] != current_user['user_id']:
-        raise HTTPException(status_code=404, detail="Endpoint not found")
-    
-    async with db.execute("SELECT * FROM mock_rules WHERE endpoint_id = ?", (endpoint_id,)) as cursor:
-        rows = await cursor.fetchall()
-    
-    rules = []
-    default_enabled = False
-    for row in rows:
-        rules.append(MockRuleResponse(
-            endpoint_id=row['endpoint_id'],
-            method=row['method'],
-            status_code=row['status_code'],
-            response_body=row['response_body'],
-            response_headers=json.loads(row['response_headers']) if row['response_headers'] else {},
-            content_type=row['content_type'],
-            enabled=bool(row['enabled']),
-            delay_ms=row['delay_ms']
-        ))
-        if row['method'] == 'DEFAULT':
-            default_enabled = bool(row['enabled'])
-    
-    return MockRuleListResponse(
-        endpoint_id=endpoint_id,
-        rules=rules,
-        default_enabled=default_enabled
-    )
 
-@router.delete("/endpoints/{endpoint_id}/mock", response_model=MessageResponse)
-async def delete_mock_rule(
-    endpoint_id: str,
-    db: aiosqlite.Connection = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Delete mock rule for specific method or all"""
-    method = None
-    # Try to get method from query param
-    # For simplicity, delete all rules for this endpoint
-    
-    # Verify ownership
-    async with db.execute("SELECT user_id FROM endpoints WHERE id = ?", (endpoint_id,)) as cursor:
-        row = await cursor.fetchone()
-    
-    if not row or row['user_id'] != current_user['user_id']:
-        raise HTTPException(status_code=404, detail="Endpoint not found")
-    
-    await db.execute("DELETE FROM mock_rules WHERE endpoint_id = ?", (endpoint_id,))
+async def _invalidate(token: str) -> None:
+    """Publish cfg invalidation so the in-process rule cache reloads (AC-34).
+
+    Best-effort: also invalidate the local cache directly (single-instance)."""
+    try:
+        from app.rule_cache import rule_cache
+        rule_cache.invalidate(token)
+    except Exception:
+        pass
+    await redis_state.publish_cfg_invalidation(token)
+
+
+# --- 1. session (no auth) -----------------------------------------------------
+@router.post("/session", response_model=SessionResponse)
+async def create_session(data: SessionCreate, request: Request,
+                         db: aiosqlite.Connection = Depends(get_db)):
+    """Email → instant session. Upserts the owner, **rotates** the secret on every
+    call (§5.9), auto-provisions a first endpoint if none, returns the primary.
+
+    Constant in shape/status for new vs existing emails (AC-S5)."""
+    # Per-source anti-enumeration rate limit (AC-S5); fails open if Redis is down.
+    client_ip = request.client.host if request.client else "unknown"
+    try:
+        rl = await redis_state.rate_limit_check(
+            token=f"session:{client_ip}", limit=config.SESSION_RATE_LIMIT_PER_MIN, window=60
+        )
+        if not rl.allowed:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"error": "rate_limited", "detail": "Too many session requests."},
+                headers={"Retry-After": str(rl.retry_after)},
+            )
+    except Exception:
+        pass
+
+    owner_id = hash_email(data.email)
+    new_secret = gen_owner_secret()
+    secret_hash = hash_secret(new_secret)
+    email = data.email.lower().strip()
+
+    # Upsert owner, rotating the secret (works for both new and existing — same shape).
+    await db.execute(
+        """
+        INSERT INTO owners (owner_id, email, secret_hash, last_seen)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(owner_id) DO UPDATE SET
+            secret_hash = excluded.secret_hash,
+            last_seen = datetime('now')
+        """,
+        (owner_id, email, secret_hash),
+    )
     await db.commit()
-    return MessageResponse(message="Mock rules deleted")
+
+    cur = await db.execute(
+        "SELECT * FROM endpoints WHERE owner_id = ? ORDER BY created_at, token", (owner_id,)
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        rows = [await _new_endpoint(db, owner_id, None)]
+
+    summaries = [_endpoint_summary(r) for r in rows]
+    return SessionResponse(
+        owner_id=owner_id,
+        owner_secret=new_secret,
+        endpoints=summaries,
+        primary=summaries[0],
+    )
+
+
+# --- 2. list endpoints --------------------------------------------------------
+@router.get("/endpoints", response_model=list[EndpointSummary])
+async def list_endpoints(owner_id: str = Depends(require_owner),
+                         db: aiosqlite.Connection = Depends(get_db)):
+    cur = await db.execute(
+        "SELECT * FROM endpoints WHERE owner_id = ? ORDER BY created_at, token", (owner_id,)
+    )
+    rows = await cur.fetchall()
+    return [_endpoint_summary(r) for r in rows]
+
+
+# --- 3. create endpoint -------------------------------------------------------
+@router.post("/endpoints", response_model=EndpointDetail, status_code=status.HTTP_201_CREATED)
+async def create_endpoint(data: EndpointCreate, owner_id: str = Depends(require_owner),
+                          db: aiosqlite.Connection = Depends(get_db)):
+    row = await _new_endpoint(db, owner_id, data.name)
+    return _endpoint_detail(row, _tunnel_active(row["token"]))
+
+
+# --- 4. get endpoint ----------------------------------------------------------
+@router.get("/endpoints/{token}", response_model=EndpointDetail)
+async def get_endpoint(token: str, owner_id: str = Depends(require_owner),
+                       db: aiosqlite.Connection = Depends(get_db)):
+    row = await assert_owns_endpoint(token, owner_id, db)
+    return _endpoint_detail(row, _tunnel_active(token))
+
+
+# --- 5. patch endpoint config -------------------------------------------------
+_PATCH_COLUMNS = {
+    "name", "auto_crud", "target_url", "default_mode",
+    "latency_ms", "rate_limit_per_min", "chaos_pct", "cors_enabled",
+}
+
+
+@router.patch("/endpoints/{token}", response_model=EndpointDetail)
+async def patch_endpoint(token: str, data: EndpointConfigPatch,
+                         owner_id: str = Depends(require_owner),
+                         db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    fields = data.model_dump(exclude_unset=True)
+    if fields:
+        # Build a parameterized SET from a fixed column allow-list (AC-S23).
+        sets = []
+        values = []
+        for col in _PATCH_COLUMNS:
+            if col in fields:
+                val = fields[col]
+                if isinstance(val, bool):
+                    val = int(val)
+                sets.append(f"{col} = ?")
+                values.append(val)
+        if sets:
+            values.append(token)
+            await db.execute(
+                "UPDATE endpoints SET " + ", ".join(sets) + " WHERE token = ?", values
+            )
+            await db.commit()
+            await _invalidate(token)
+    cur = await db.execute("SELECT * FROM endpoints WHERE token = ?", (token,))
+    return _endpoint_detail(await cur.fetchone(), _tunnel_active(token))
+
+
+# --- 6. delete endpoint -------------------------------------------------------
+@router.delete("/endpoints/{token}", response_model=Message)
+async def delete_endpoint(token: str, owner_id: str = Depends(require_owner),
+                          db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    await db.execute("DELETE FROM endpoints WHERE token = ?", (token,))
+    await db.commit()
+    await _invalidate(token)
+    try:
+        await redis_state.clear_state(token)
+    except RedisUnavailable:
+        pass
+    # Tombstone so the mock surface returns 410 endpoint_gone (AC-7a / OQ-1).
+    await redis_state.mark_gone(token)
+    return Message(message="Endpoint deleted.")
+
+
+# --- 7. list rules ------------------------------------------------------------
+@router.get("/endpoints/{token}/rules", response_model=list[MockRule])
+async def list_rules(token: str, owner_id: str = Depends(require_owner),
+                     db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    cur = await db.execute(
+        "SELECT * FROM mock_rules WHERE token = ? ORDER BY priority, id", (token,)
+    )
+    return [_rule_from_row(r) for r in await cur.fetchall()]
+
+
+# --- 8. create rule -----------------------------------------------------------
+@router.post("/endpoints/{token}/rules", response_model=MockRule, status_code=status.HTTP_201_CREATED)
+async def create_rule(token: str, data: MockRuleCreate,
+                      owner_id: str = Depends(require_owner),
+                      db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    cur = await db.execute(
+        """
+        INSERT INTO mock_rules
+            (token, name, priority, enabled, match_json, response_json,
+             state_writes_json, latency_ms, rate_limit_per_min, webhook_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            token, data.name, data.priority, int(data.enabled),
+            data.match.model_dump_json(), data.response.model_dump_json(),
+            json.dumps([w.model_dump() for w in data.state_writes]),
+            data.latency_ms, data.rate_limit_per_min,
+            data.webhook_action.model_dump_json() if data.webhook_action else None,
+        ),
+    )
+    await db.commit()
+    rule_id = cur.lastrowid
+    await _invalidate(token)
+    cur = await db.execute("SELECT * FROM mock_rules WHERE id = ?", (rule_id,))
+    return _rule_from_row(await cur.fetchone())
+
+
+# --- 9. get rule --------------------------------------------------------------
+@router.get("/endpoints/{token}/rules/{rule_id}", response_model=MockRule)
+async def get_rule(token: str, rule_id: int, owner_id: str = Depends(require_owner),
+                   db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    cur = await db.execute(
+        "SELECT * FROM mock_rules WHERE id = ? AND token = ?", (rule_id, token)
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "detail": "Rule not found."})
+    return _rule_from_row(row)
+
+
+# --- 10. patch rule -----------------------------------------------------------
+@router.patch("/endpoints/{token}/rules/{rule_id}", response_model=MockRule)
+async def patch_rule(token: str, rule_id: int, data: MockRulePatch,
+                     owner_id: str = Depends(require_owner),
+                     db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    cur = await db.execute(
+        "SELECT * FROM mock_rules WHERE id = ? AND token = ?", (rule_id, token)
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "detail": "Rule not found."})
+
+    fields = data.model_dump(exclude_unset=True)
+    sets, values = [], []
+    if "name" in fields:
+        sets.append("name = ?"); values.append(fields["name"])
+    if "priority" in fields:
+        sets.append("priority = ?"); values.append(fields["priority"])
+    if "enabled" in fields:
+        sets.append("enabled = ?"); values.append(int(fields["enabled"]))
+    if "match" in fields and data.match is not None:
+        sets.append("match_json = ?"); values.append(data.match.model_dump_json())
+    if "response" in fields and data.response is not None:
+        sets.append("response_json = ?"); values.append(data.response.model_dump_json())
+    if "state_writes" in fields and data.state_writes is not None:
+        sets.append("state_writes_json = ?")
+        values.append(json.dumps([w.model_dump() for w in data.state_writes]))
+    if "latency_ms" in fields:
+        sets.append("latency_ms = ?"); values.append(fields["latency_ms"])
+    if "rate_limit_per_min" in fields:
+        sets.append("rate_limit_per_min = ?"); values.append(fields["rate_limit_per_min"])
+    if "webhook_action" in fields:
+        sets.append("webhook_json = ?")
+        values.append(data.webhook_action.model_dump_json() if data.webhook_action else None)
+
+    if sets:
+        values.extend([rule_id, token])
+        await db.execute(
+            "UPDATE mock_rules SET " + ", ".join(sets) + " WHERE id = ? AND token = ?",
+            values,
+        )
+        await db.commit()
+        await _invalidate(token)
+    cur = await db.execute("SELECT * FROM mock_rules WHERE id = ?", (rule_id,))
+    return _rule_from_row(await cur.fetchone())
+
+
+# --- 11. delete rule ----------------------------------------------------------
+@router.delete("/endpoints/{token}/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule(token: str, rule_id: int, owner_id: str = Depends(require_owner),
+                      db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    cur = await db.execute(
+        "SELECT 1 FROM mock_rules WHERE id = ? AND token = ?", (rule_id, token)
+    )
+    if await cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "detail": "Rule not found."})
+    await db.execute("DELETE FROM mock_rules WHERE id = ? AND token = ?", (rule_id, token))
+    await db.commit()
+    await _invalidate(token)
+    return JSONResponse(status_code=status.HTTP_204_NO_CONTENT, content=None)
+
+
+# --- 12. list requests --------------------------------------------------------
+@router.get("/endpoints/{token}/requests", response_model=list[RequestSummary])
+async def list_requests(token: str, owner_id: str = Depends(require_owner),
+                        limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                        db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    cur = await db.execute(
+        "SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (token, limit, offset),
+    )
+    rows = await cur.fetchall()
+    return [_request_summary(r) for r in rows]
+
+
+def _request_summary(row: aiosqlite.Row) -> RequestSummary:
+    return RequestSummary(
+        id=row["id"], token=row["token"], method=row["method"], path=row["path"],
+        status_code=row["status_code"], served_by=row["served_by"],
+        matched_rule_id=row["matched_rule_id"], duration_ms=row["duration_ms"],
+        overhead_ms=row["overhead_ms"],
+        timestamp=_to_dt(row["created_at"]) or datetime.now(timezone.utc),
+    )
+
+
+# --- 13. get request detail ---------------------------------------------------
+@router.get("/requests/{request_id}", response_model=RequestDetail)
+async def get_request(request_id: int, owner_id: str = Depends(require_owner),
+                      db: aiosqlite.Connection = Depends(get_db)):
+    cur = await db.execute("SELECT * FROM request_logs WHERE id = ?", (request_id,))
+    row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "detail": "Request not found."})
+    # Ownership via the trace's endpoint (404 for non-owner — AC-S2).
+    await assert_owns_endpoint(row["token"], owner_id, db)
+    return RequestDetail(
+        id=row["id"], token=row["token"], method=row["method"], path=row["path"],
+        status_code=row["status_code"], served_by=row["served_by"],
+        matched_rule_id=row["matched_rule_id"], duration_ms=row["duration_ms"],
+        overhead_ms=row["overhead_ms"],
+        timestamp=_to_dt(row["created_at"]) or datetime.now(timezone.utc),
+        request_headers=json.loads(row["request_headers"] or "{}"),
+        query_params=json.loads(row["query_params"] or "{}"),
+        request_body=row["request_body"],
+        response_headers=json.loads(row["response_headers"] or "{}"),
+        response_body=row["response_body"],
+        trace=json.loads(row["trace_json"] or "[]"),
+        state_snapshot=json.loads(row["state_snapshot"] or "{}"),
+    )
+
+
+# --- 14. clear request history ------------------------------------------------
+@router.delete("/endpoints/{token}/requests", response_model=Message)
+async def clear_requests(token: str, owner_id: str = Depends(require_owner),
+                         db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    await db.execute("DELETE FROM request_logs WHERE token = ?", (token,))
+    await db.commit()
+    return Message(message="Trace history cleared.")
+
+
+# --- 15. get state ------------------------------------------------------------
+@router.get("/endpoints/{token}/state")
+async def get_state(token: str, owner_id: str = Depends(require_owner),
+                    db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    try:
+        state = await redis_state.get_state(token)
+    except RedisUnavailable:
+        return JSONResponse(status_code=503, content={"error": "state_unavailable", "detail": "State store unavailable."})
+    return {"state": state}
+
+
+# --- 16. clear state ----------------------------------------------------------
+@router.delete("/endpoints/{token}/state", response_model=Message)
+async def clear_state(token: str, owner_id: str = Depends(require_owner),
+                      db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    try:
+        await redis_state.clear_state(token)
+    except RedisUnavailable:
+        return JSONResponse(status_code=503, content={"error": "state_unavailable", "detail": "State store unavailable."})
+    return Message(message="State cleared.")
+
+
+# --- 17. peek collection ------------------------------------------------------
+@router.get("/endpoints/{token}/collections/{name}")
+async def peek_collection(token: str, name: str, owner_id: str = Depends(require_owner),
+                          db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    from app.utils.helpers import is_safe_key
+    if not is_safe_key(name):
+        raise HTTPException(status_code=422, detail={"error": "invalid_collection", "detail": "Invalid collection name."})
+    try:
+        items = await redis_state.crud_list(token, name)
+    except RedisUnavailable:
+        return JSONResponse(status_code=503, content={"error": "store_unavailable", "detail": "Collection store unavailable."})
+    return {"items": items}
+
+
+# --- 18. clear collection -----------------------------------------------------
+@router.delete("/endpoints/{token}/collections/{name}", response_model=Message)
+async def clear_collection(token: str, name: str, owner_id: str = Depends(require_owner),
+                           db: aiosqlite.Connection = Depends(get_db)):
+    await assert_owns_endpoint(token, owner_id, db)
+    from app.utils.helpers import is_safe_key
+    if not is_safe_key(name):
+        raise HTTPException(status_code=422, detail={"error": "invalid_collection", "detail": "Invalid collection name."})
+    try:
+        await redis_state.crud_clear(token, name)
+    except RedisUnavailable:
+        return JSONResponse(status_code=503, content={"error": "store_unavailable", "detail": "Collection store unavailable."})
+    return Message(message="Collection cleared.")

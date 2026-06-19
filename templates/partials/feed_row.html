@@ -1,0 +1,58 @@
+{#
+  partials/feed_row.html — a single live-feed row (design.md §3.3, AC-28/AC-VC1/AC-VC9).
+
+  Two consumers, ONE markup contract:
+    1. First-paint server render (AC-27a): the route renders the most-recent traces
+       (up to the 100 cap) by looping this partial. Jinja autoescape is ON, so any
+       <script> in `r.path` etc. is inert (AC-S14).
+    2. The live client (request-stream.js) builds rows via DOM textContent to mirror
+       this exact structure for WS-pushed RequestSummary events — never innerHTML.
+
+  Expects `r` = a RequestSummary-shaped mapping (§5.3):
+    { id, method, path, status_code, served_by, matched_rule_id, duration_ms, timestamp }
+
+  Self-contained: the method/status/served maps are inlined as Jinja dicts so the
+  partial needs NO backend-registered globals/filters (FE lane only).
+  These maps mirror static/js/util.js (HookBox.methodClass / statusClass / servedBy*).
+#}
+{%- set _m = (r.method | upper) if r.method else 'ANY' -%}
+{%- set _method_badge = {
+    'GET':'m-get','POST':'m-post','PUT':'m-put','PATCH':'m-patch','DELETE':'m-delete',
+    'OPTIONS':'m-options','HEAD':'m-head'
+} -%}
+{%- set _method_rail = {
+    'GET':'rail-get','POST':'rail-post','PUT':'rail-put','PATCH':'rail-patch','DELETE':'rail-delete',
+    'OPTIONS':'rail-options','HEAD':'rail-head'
+} -%}
+{%- set _sc = r.status_code | int -%}
+{%- set _status_cls = ('status-2xx' if _sc >= 200 and _sc < 300 else
+                       'status-3xx' if _sc >= 300 and _sc < 400 else
+                       'status-4xx' if _sc >= 400 and _sc < 500 else
+                       'status-5xx' if _sc >= 500 else 'status-2xx') -%}
+{%- set _served_cls = {
+    'rule':'served-rule','crud':'served-crud','mitm':'served-mitm','tunnel':'served-tunnel',
+    'default':'served-default','cors':'served-cors','chaos':'served-chaos','ratelimit':'served-ratelimit'
+} -%}
+{%- set _served_label = {
+    'rule':'Matched rule','crud':'Auto-CRUD','mitm':'Proxied','tunnel':'Tunneled',
+    'default':'Default','cors':'CORS','chaos':'Chaos','ratelimit':'Rate-limited'
+} -%}
+<button
+    type="button"
+    class="feed-row {{ _method_rail.get(_m, 'rail-any') }}"
+    role="option"
+    data-request-id="{{ r.id }}"
+    data-method="{{ _m }}"
+    :class="$store.feed.selectedId === {{ r.id }} ? 'is-selected' : ''"
+    @click="$store.feed.select({{ r.id }})"
+    aria-label="{{ _m }} {{ r.path }} responded {{ r.status_code }}"
+>
+    <span class="badge {{ _method_badge.get(_m, 'm-any') }}" data-cell="method">{{ _m }}</span>
+    <span class="flex-1 truncate" data-cell="path" title="{{ r.path }}">{{ r.path }}</span>
+    <span class="{{ _status_cls }} font-bold" data-cell="status">{{ r.status_code }}</span>
+    {% if r.served_by %}
+    <span class="served-chip {{ _served_cls.get(r.served_by, 'served-default') }}" data-cell="served">{{ _served_label.get(r.served_by, r.served_by) }}</span>
+    {% endif %}
+    <span class="text-xs text-[#8b949e]" data-cell="latency">{{ r.duration_ms }}ms</span>
+    <span class="text-xs text-[#6e7681]" data-cell="time" data-ts="{{ r.timestamp }}">{{ r.timestamp }}</span>
+</button>

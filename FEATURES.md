@@ -1,149 +1,112 @@
-# HookBox Features & User Journey
+# HookBox Features
 
-## Overview
-**HookBox** is a self-hosted webhook testing service that allows users to capture, inspect, and mock HTTP requests.
-
-**URL:** http://43.156.182.81:5000
-**GitHub:** https://github.com/Gwoks/hookbox
+HookBox is a self-hosted, Beeceptor-class API mocking & HTTP interception
+platform. It covers the full mock/intercept/virtualize workflow behind a
+no-password, email-keyed session.
 
 ---
 
-## Features
+## 1. Email-keyed access (no password)
 
-### 1. Email-Only Authentication
-- **Flow:** User enters email → Auto-registered if new → Auto-logged in
-- **No passwords required**
-- **Session stored in localStorage**
-- **File:** `templates/login.html`, `app/routes/api.py`
+Enter an email on the landing page to instantly generate or resume an endpoint
+session. The email maps to a non-secret `owner_id`; the server also issues a
+secret **owner capability** (256-bit) that backs every management call and the
+real-time feed. No registration, no password, no email verification. The
+capability rotates on each email submit (an old leaked secret stops working).
 
-### 2. Multiple Endpoints Per Account
-- One account can create unlimited endpoints
-- Each endpoint gets unique webhook URL: `/hook/{user_id}/{endpoint_id}`
-- **File:** `app/routes/api.py` (endpoints CRUD)
+## 2. Wildcard mock surface + path fallback
 
-### 3. Webhook Capture
-- Capture any HTTP method: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD
-- Store: headers, query params, body, content-type, timestamp
-- **File:** `app/main.py` (receive_webhook route)
+Each endpoint is reachable at `<token>.<MOCK_DOMAIN>/<path>` and, for local dev,
+at `/e/<token>/<path>`. Three hard-isolated request planes (mock / management API
+/ dashboard UI) guarantee the mock catch-all never shadows the API or UI.
 
-### 4. Real-Time Dashboard Updates (WebSocket)
-- Dashboard auto-updates when new requests arrive
-- Connection status indicator (Live/Disconnected)
-- Auto-reconnect on disconnect
-- **File:** `app/websocket.py`, `templates/dashboard.html`
+## 3. Rule-driven mock responses
 
-### 5. Method-Specific Mock Responses
-- Configure different responses per HTTP method
-- Per-method: status code, headers, body, content-type, delay
-- DEFAULT fallback for unmatched methods
-- Priority: Specific method → DEFAULT
-- **File:** `app/routes/api.py` (mock rules), `templates/mock.html`
+A multi-tab rule builder (Matching · Response · Templating · Actions · Throttling)
+defines match criteria (method, path with `:param` segments and `/*` wildcard,
+headers, query, JSON body conditions, state requirements) and a templated
+response. Rules are evaluated first-by-priority-then-id, deterministically.
 
-### 6. Backup & Restore
-- Export all data as JSON
-- Import to restore
-- **File:** `app/routes/backup.py`, `templates/backup.html`
+## 4. Dynamic response templating (sandboxed)
 
-### 7. Auto-Reset at Midnight
-- Database cleared at midnight (configurable)
-- Cron job: `reset_db.sh`
-- **File:** `reset_db.sh`, `app/utils/cleanup.py`
+Response bodies support `{{now 'iso'}}`, `{{random 'uuid'}}`,
+`{{request.query.<k>}}`, `{{request.path.<name>}}`, `{{request.header.<name>}}`,
+`{{request.body.<jsonpath>}}`, `{{state.<k>}}`, and more — evaluated by a
+hand-written single-pass scanner with **no `eval`/`exec` and no Jinja over user
+text**. Unknown/malformed tags are left literal and never error the mock path.
 
-### 8. GitHub Auto-Deploy
-- Push to GitHub → Auto-pull and restart
-- **File:** `app/routes/webhook.py`
+## 5. Stateful / multi-step transactions
 
-### 9. Docker Support
-- Dockerfile + docker-compose.yml
-- **File:** `Dockerfile`, `docker-compose.yml`
+Rules can read, require, and mutate per-endpoint state (Redis hash `state:<token>`,
+24h TTL). Example: a `POST /login` rule sets `authenticated=true`; a later
+`/dashboard` rule matches only when that state holds. State is per-endpoint
+(shared across all callers of the mock) and clearable from the dashboard.
 
----
+## 6. Instant Auto-CRUD
 
-## User Journey
+Toggle Auto-CRUD and the endpoint becomes a REST DB backend over a Redis-backed
+JSON array per collection: `POST/GET/PUT/PATCH/DELETE /<collection>[/<id>]`, with
+generated UUID ids, no rules required. Bounded by configurable item-count and
+size caps.
 
-### 1. First Visit
-1. User visits `/login`
-2. Enters email address
-3. Auto-registered and redirected to `/` (endpoints list)
-4. Sees "No endpoints yet" message
+## 7. Proxy / partial mocking (MITM)
 
-### 2. Create First Endpoint
-1. Clicks "+ Create Endpoint" button
-2. Optionally enters endpoint name
-3. Redirected to `/d/{endpoint_id}` (dashboard)
-4. Copy webhook URL
+Set a `target_url` and unmatched requests forward to the real upstream via
+`httpx`; the real response is captured, returned to the caller, and logged as
+"Proxied". A matching local rule always wins over the forward. An SSRF guard
+blocks loopback/private/link-local/metadata targets (evaluated on the resolved
+IP), strips the owner capability and sensitive headers, and caps body + timeout.
 
-### 3. Send Test Request
-1. User configures their app to send webhooks to copied URL
-2. Sends a test request (e.g., POST with JSON body)
-3. Dashboard shows "Live" indicator (WebSocket connected)
-4. Request appears in list automatically (no refresh)
+## 8. Auto-CORS engine
 
-### 4. View Request Details
-1. Clicks on any request row
-2. Modal shows: headers, query params, body
-3. Can pretty-print JSON body
+Every intercepted response auto-handles `OPTIONS` preflight and injects wide-open
+dynamic CORS headers on the mock surface (P1 only — the management API carries no
+wildcard CORS). Origin is reflected and credentials are never claimed alongside a
+wildcard origin.
 
-### 5. Configure Mock Response
-1. Clicks "Mock" button
-2. Selects HTTP method (GET, POST, etc.)
-3. Configures: status code, headers, body, delay
-4. Enables the mock
-5. Sends test request to see mock response
+## 9. Simulated network conditions
 
-### 6. Create More Endpoints
-1. Clicks "Endpoints" to go back to list
-2. Creates new endpoint
-3. Each endpoint has independent requests and mock configs
+Per-endpoint / per-rule **latency** (0–10000ms), **rate limit** (req/min via a
+Redis token bucket; `0` = unlimited; covers MITM forwards and CRUD writes too),
+and a **chaos** percentage that injects random `502/503/504` by default with an
+opt-in connection-drop mode — all bounded by the global rate/size caps.
 
-### 7. Backup Data
-1. Visits `/backup`
-2. Downloads JSON export
-3. Can import later to restore
+## 10. Real-time split-screen dashboard
+
+A live feed streams every served request over a WebSocket (SSE fallback), fanned
+out via Redis pub/sub. A deep inspector shows Headers · Query · Body · Response
+Served · State & Tracing for each trace. The feed and inspector reconcile via the
+management API; the feed is **owner-gated** (capability required to subscribe).
+
+## 11. Data retention
+
+Two configurable caps enforced by a background sweep: a hard **100-trace
+per-endpoint** cap and a **24-hour TTL**. The cap is also held at write-time so it
+never drifts between sweeps.
+
+## 12. Local tunnel CLI
+
+`python -m tunnel --port 3000 --endpoint <slug> --secret <owner_secret>`
+reverse-tunnels public traffic for `<slug>` to your localhost over an
+authenticated WebSocket control channel, with backoff reconnect. Tunneled traffic
+appears in the live feed labeled `tunnel`.
+
+## 13. Deployment
+
+`docker compose up` brings up the app + Redis on an internal network, each
+healthchecked, with named persistent volumes for the SQLite data and Redis AOF.
+The app waits for Redis to be healthy before starting.
 
 ---
 
-## Technical Details
+## Resolution order (mock surface)
 
-### Database Schema
-```sql
-users: id, email, created_at, last_login
-endpoints: id, user_id, name, created_at, last_hit, request_count, expires_at, is_active
-requests: id, endpoint_id, method, path, headers, query_params, body, content_type, timestamp
-mock_rules: id, endpoint_id, method, status_code, response_body, response_headers, content_type, enabled, delay_ms
+```
+OPTIONS preflight → matching rule → Auto-CRUD → tunnel → MITM → default
 ```
 
-### API Endpoints
-- `POST /api/login` - Login/register with email
-- `GET /api/endpoints` - List user's endpoints
-- `POST /api/endpoints` - Create endpoint
-- `GET /api/endpoints/{id}` - Get endpoint details
-- `DELETE /api/endpoints/{id}` - Delete endpoint
-- `GET /api/endpoints/{id}/requests` - List captured requests
-- `GET /api/requests/{id}` - Get request details
-- `PUT /api/endpoints/{id}/mock` - Set mock rule
-- `GET /api/endpoints/{id}/mock` - Get mock rules
+Conditions are applied around the served response in the order:
+`rate-limit (429) → chaos (5xx / drop) → latency (sleep)`.
 
-### WebSocket
-- Route: `/ws/{endpoint_id}`
-- Message types: `new_request`
-
-### Environment Variables
-- `DATABASE_URL` - SQLite database path
-- `GITHUB_WEBHOOK_SECRET` - For GitHub auto-deploy
-
----
-
-## Ports
-
-| Service | Port | URL |
-|---------|------|-----|
-| HookBox | 5000 | http://43.156.182.81:5000 |
-| Crypto Status | 5002 | http://43.156.182.81:5002 |
-
----
-
-## Known Issues / TODOs
-- [ ] WebSocket disconnect doesn't auto-reconnect on dashboard refresh needed
-- [ ] Mock response delay not working in some cases
-- [ ] Delete mock rule should be method-specific, not all
+Every mock response carries identifying headers `X-HookBox-Endpoint`,
+`X-HookBox-Served-By`, and (when a rule matched) `X-HookBox-Rule-Id`.
