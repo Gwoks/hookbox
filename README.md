@@ -24,9 +24,10 @@ session, shipped as `docker compose up` with a local-tunnel CLI.
 ## Quick start (Docker)
 
 ```bash
-docker compose up
-# Redis starts first; the app waits until Redis is healthy, then starts on :8000.
-# Open the dashboard:
+docker compose up -d --build            # build the app image, start Redis + app
+# Redis starts first; the app waits until it is healthy (depends_on), then
+# listens on :8000. Confirm readiness, then open the dashboard:
+curl -s http://localhost:8000/healthz   # {"status":"ok","redis":true,"db":true}
 open http://localhost:8000
 ```
 
@@ -49,6 +50,28 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 The app **degrades gracefully** if Redis is down (see "Redis-down behavior"); it
 never crashes on startup for a missing Redis or an unset `MOCK_DOMAIN`.
+
+## Drive it from the CLI
+
+No dashboard needed — create a session, add a rule, and hit the mock surface:
+
+```bash
+# 1. Get an owner session → returns {owner_id, owner_secret, primary:{token,…}}
+curl -s -X POST localhost:8000/api/session \
+  -H 'content-type: application/json' -d '{"email":"you@example.com"}'
+
+# 2. Add a mock rule (owner_secret as the bearer; <token> from step 1)
+curl -s -X POST localhost:8000/api/endpoints/<token>/rules \
+  -H 'Authorization: Bearer <owner_secret>' -H 'content-type: application/json' \
+  -d '{"match":{"method":"GET","path":"/hello"},
+       "response":{"status_code":200,"content_type":"application/json",
+                   "body_template":"{\"hi\":\"{{request.query.name}}\"}"}}'
+
+# 3. Hit the PUBLIC mock surface (no auth on the mock plane)
+curl -s 'localhost:8000/e/<token>/hello?name=ada'    # → {"hi":"ada"}
+```
+
+The full management API is documented at `/docs` (OpenAPI / Swagger UI).
 
 ## Addressing a mock endpoint
 
@@ -135,6 +158,20 @@ satisfies the blueprint.
 | Auto-CRUD | **503** (no fabricated/lost data). |
 | Rate limiter | **Fails open** but bounded by the in-process body/size caps. |
 | Real-time feed | Mock serving + SQLite logging unaffected; dashboard shows a "degraded" pill. |
+
+## Development & tests
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt     # runtime deps + pytest, pip-audit, websockets
+pytest                                   # 44 unit + integration tests
+```
+
+Integration tests boot a real `uvicorn` on a random port and need a reachable
+Redis (`REDIS_URL`, default `redis://localhost:6379/0`); they **skip** automatically
+if Redis is unavailable. Unit tests (templating, matcher, SSRF guard) need nothing
+external. CI (`.github/workflows/ci.yml`) runs the suite + `pip-audit` against a
+Redis service container and validates/builds the Docker image on every push and PR.
 
 ## Operations
 
