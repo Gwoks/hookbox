@@ -33,7 +33,7 @@ Redis-namespace injection); **`pip-audit`: no known vulnerabilities** in the
 dependency tree; valid Compose config; `__import__` loader uses hardcoded internal
 paths only.
 
-**Two issues found and fixed:**
+**Three issues found and fixed:**
 - **DNS-rebinding TOCTOU in the MITM SSRF guard** (`hookbox-zqd`, fixed): the guard
   resolved+checked the hostname's IPs but httpx re-resolved at connect, so a rebinding
   record could swap in an internal address. Fixed in `app/interceptor/proxy.py` by
@@ -47,10 +47,13 @@ paths only.
   bounded by a single timeout regardless of client count. Feed delivery re-verified
   over WS + SSE.
 
-**One accepted limitation (tracked, low priority):**
-- **CRUD write atomicity** — PUT/PATCH/DELETE read-modify-write the Redis list, so
-  concurrent writes to one collection can lose an update. Acceptable for an ephemeral
-  single-tenant mock store; revisit (WATCH/MULTI or Lua CAS) for high-concurrency use.
+- **CRUD write atomicity** (`hookbox-65m`, fixed): `PUT/PATCH/DELETE` did
+  read-modify-write (`crud_list` then `crud_replace_all`), so concurrent writes to one
+  collection could lose an update. Added `redis_state.crud_cas()` — a **WATCH/MULTI
+  optimistic transaction** (cooperative yield + bounded retry), atomic and correct
+  across workers/replicas, with merge/validation kept in Python. Verified: **12
+  concurrent PATCHes each setting a distinct field all land (none lost)**; full
+  lifecycle + 404/400 unchanged; app QA still 30/31.
 
 ## Residual
 No critical/high finding from `security.md` remains open; the `hookbox-ej9` audit

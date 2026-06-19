@@ -52,6 +52,11 @@ logger = logging.getLogger("hookbox.crud")
 # resolution stage. We validate the charset of each segment with ``is_safe_key``.
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# crud_cas result sentinels (distinguish not-found / too-large from a returned item).
+_NOT_FOUND = object()
+_TOO_LARGE = object()
+_OK = object()
+
 
 def _parse_path(mock_path: str) -> Optional[Tuple[str, Optional[str]]]:
     """Parse ``/<collection>[/<id>]`` → ``(collection, id|None)``.
@@ -152,48 +157,72 @@ async def handle(token: str, method: str, mock_path: str, body_text: str) -> Res
         return _bad_request("an item id is required for this method")
 
     # --- item-level (collection + id) ----------------------------------------
-    items = await redis_state.crud_list(token, collection)
-    idx = _find_index(items, ident)
-
+    # GET/HEAD are read-only; the mutating verbs use an ATOMIC read-modify-write
+    # (redis_state.crud_cas, WATCH/MULTI + retry) so two concurrent writers to the
+    # same collection can't lose an update (hookbox-65m). Input is parsed/validated
+    # (→ 400) BEFORE the transaction; not-found / too-large come back via sentinels.
     if method in ("GET", "HEAD"):
+        items = await redis_state.crud_list(token, collection)
+        idx = _find_index(items, ident)
         if idx is None:
             return _not_found()
         return JSONResponse(status_code=200, content=items[idx])
 
     if method == "PUT":
-        if idx is None:
-            return _not_found()
         try:
             obj = _parse_object_body(body_text)
         except ValueError as exc:
             return _bad_request(str(exc))
         obj["id"] = ident  # id is immutable on replace
-        items[idx] = obj
-        await redis_state.crud_replace_all(token, collection, items)
-        return JSONResponse(status_code=200, content=obj)
+
+        def _put(items):
+            i = _find_index(items, ident)
+            if i is None:
+                return _NOT_FOUND, None
+            items[i] = dict(obj)
+            return items[i], items
+
+        result = await redis_state.crud_cas(token, collection, _put)
+        if result is _NOT_FOUND:
+            return _not_found()
+        return JSONResponse(status_code=200, content=result)
 
     if method == "PATCH":
-        if idx is None:
-            return _not_found()
         try:
             patch = _parse_object_body(body_text)
         except ValueError as exc:
             return _bad_request(str(exc))
-        merged = dict(items[idx])
-        merged.update(patch)
-        merged["id"] = ident  # id is immutable on merge
-        # Guard the merged size too (AC-12b).
-        if len(json.dumps(merged).encode("utf-8")) > config.CRUD_MAX_ITEM_BYTES:
+
+        def _patch(items):
+            i = _find_index(items, ident)
+            if i is None:
+                return _NOT_FOUND, None
+            merged = dict(items[i])
+            merged.update(patch)
+            merged["id"] = ident  # id is immutable on merge
+            if len(json.dumps(merged).encode("utf-8")) > config.CRUD_MAX_ITEM_BYTES:
+                return _TOO_LARGE, None
+            items[i] = merged
+            return merged, items
+
+        result = await redis_state.crud_cas(token, collection, _patch)
+        if result is _NOT_FOUND:
+            return _not_found()
+        if result is _TOO_LARGE:
             return _bad_request("item too large")
-        items[idx] = merged
-        await redis_state.crud_replace_all(token, collection, items)
-        return JSONResponse(status_code=200, content=merged)
+        return JSONResponse(status_code=200, content=result)
 
     if method == "DELETE":
-        if idx is None:
+        def _delete(items):
+            i = _find_index(items, ident)
+            if i is None:
+                return _NOT_FOUND, None
+            del items[i]
+            return _OK, items
+
+        result = await redis_state.crud_cas(token, collection, _delete)
+        if result is _NOT_FOUND:
             return _not_found()
-        del items[idx]
-        await redis_state.crud_replace_all(token, collection, items)
         return Response(status_code=204)
 
     return _bad_request("unsupported method for an item")

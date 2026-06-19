@@ -18,13 +18,14 @@ sentinel so the interceptor can allow-but-bound on Redis loss (AC-S20).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import redis.asyncio as aioredis
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, WatchError
 
 from config import (
     REDIS_URL,
@@ -224,6 +225,44 @@ class RedisState:
                 await pipe.execute()
         except (RedisError,) as exc:
             raise RedisUnavailable("crud replace failed") from exc
+
+    async def crud_cas(self, token: str, collection: str, mutate, retries: int = 20):
+        """Atomic read-modify-write of a CRUD collection via a WATCH/MULTI optimistic
+        transaction — closes the lost-update window of ``crud_list()`` + a later
+        ``crud_replace_all()`` under concurrent writers, and is correct across workers
+        / replicas (hookbox-65m).
+
+        ``mutate(items) -> (result, new_items)``: ``items`` is the decoded list. Return
+        ``new_items=None`` to make NO change (e.g. item not found) and just return
+        ``result``; otherwise the list is atomically replaced with ``new_items``. The
+        read→mutate→write is retried on a concurrent modification (``WatchError``).
+        Caller maps :class:`RedisUnavailable` -> 503 (§5.11).
+        """
+        k = self._crud_key(token, collection)
+        try:
+            for _ in range(retries):
+                async with self.client.pipeline() as pipe:
+                    try:
+                        await pipe.watch(k)
+                        raw = await pipe.lrange(k, 0, -1)        # immediate (watch mode)
+                        items = [json.loads(x) for x in raw]
+                        result, new_items = mutate(items)
+                        if new_items is None:
+                            await pipe.unwatch()
+                            return result
+                        pipe.multi()
+                        pipe.delete(k)
+                        if new_items:
+                            pipe.rpush(k, *[json.dumps(i) for i in new_items])
+                            pipe.expire(k, CRUD_TTL_SECONDS)
+                        await pipe.execute()
+                        return result
+                    except WatchError:
+                        await asyncio.sleep(0)  # yield so a pending EXEC lands, then retry
+                        continue
+            raise RedisUnavailable("crud cas: contention retry limit exceeded")
+        except (RedisError,) as exc:
+            raise RedisUnavailable("crud cas failed") from exc
 
     async def crud_clear(self, token: str, collection: str) -> None:
         try:
