@@ -37,13 +37,17 @@ def _ctx(request: Request, **extra) -> dict:
     return base
 
 
+# NOTE: Starlette ≥0.29 uses TemplateResponse(request, name, context). The old
+# (name, context) form silently mis-binds `name` to the context dict and raises
+# deep in Jinja ("unhashable type: 'dict'"); the except blocks below must LOG that
+# (not swallow it to a stub), or a render bug ships invisibly behind a 200.
 @router.get("/", response_class=HTMLResponse)
 async def landing(request: Request):
     """Landing / email entry. FE: POST /api/session → localStorage → /d/<token>."""
     try:
-        return templates.TemplateResponse("index.html", _ctx(request))
-    except Exception:  # noqa: BLE001 - template owned by FE lane, may lag
-        logger.debug("index.html not available yet")
+        return templates.TemplateResponse(request, "index.html", _ctx(request))
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to render index.html")
         return HTMLResponse("<!doctype html><title>HookBox</title><p>HookBox</p>")
 
 
@@ -52,7 +56,7 @@ async def dashboard(request: Request, token: str):
     """Dashboard split-screen for an endpoint. Ownership is enforced client-side
     via the stored capability hitting /api/* (the page itself is not secret)."""
     try:
-        return templates.TemplateResponse("dashboard.html", _ctx(request, token=token))
+        return templates.TemplateResponse(request, "dashboard.html", _ctx(request, token=token))
     except Exception:  # noqa: BLE001
-        logger.debug("dashboard.html not available yet")
+        logger.exception("failed to render dashboard.html")
         return HTMLResponse(f"<!doctype html><title>HookBox</title><p>dashboard {token}</p>")

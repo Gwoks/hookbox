@@ -5,10 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}HookBox{% endblock %}</title>
 
-<!-- Locked stack: Tailwind Play CDN + Alpine.js + HTMX, no build step (_decisions.md §1a) -->
-<script src="https://cdn.tailwindcss.com"></script>
-<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<!-- Locked stack: Tailwind + Alpine.js + HTMX — VENDORED LOCALLY under /static/vendor
+     (no external-CDN dependency, so the UI renders on airgapped / offline /
+     firewalled self-hosted installs). These previously loaded from external CDNs;
+     when those were unreachable Alpine never booted and every [x-cloak] element
+     stayed hidden, leaving only the bare "HookBox" nav brand visible. -->
+<script src="/static/vendor/tailwind.js"></script>
+<script defer src="/static/vendor/alpine.min.js"></script>
+<script src="/static/vendor/htmx.min.js"></script>
 
 <!-- Design tokens + component layer (design.md). Loaded before paint to avoid FOUC. -->
 <link rel="stylesheet" href="/static/css/app.css">
