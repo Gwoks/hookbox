@@ -37,10 +37,16 @@ keeps the order — `bd ready -l feature:<slug>` always shows the next step.
    run agent `design-agent` (reads `ux.md` + templates → `design.md`, the
    visual/aesthetic layer built on top of the UX), then close it. It can run
    concurrently with `architecture`/`security` if those are still finishing.
+4c. **Copy (handoff from design).** `step:copywriter` becomes ready once
+   `step:design` closes (depends on design → ux). Claim it
+   (`step:copywriter,feature:<slug>`), run agent `copywriter-engineer` (reads
+   `ux.md` + `design.md` + `journey.md` + draft `prd.md` → `copy.md`: voice/tone,
+   content design/IA, landing + marketing copy, and all in-app microcopy/state
+   strings, each keyed for the frontend engineer), then close it.
 5. **Revise.** Claim `step:prd-revise` → run `product-manager` (REVISE; folds the
    critiques + `design.md`'s visual direction & required visual ACs +
-   `architecture.md` + `security.md`'s required security ACs / §5 notes into
-   `prd.md`, lifting §5 verbatim) → close it.
+   `copy.md`'s voice & keyed strings + `architecture.md` + `security.md`'s
+   required security ACs / §5 notes into `prd.md`, lifting §5 verbatim) → close it.
 6. **Human review (approval gate).** `step:approval` is now ready. Show the human
    prd.md's goal, ACs (§4), frozen contract (§5), and Open Questions (§9).
    - Feedback → re-run `product-manager` (REVISE) to update `prd.md`; repeat.

@@ -25,6 +25,7 @@ DRAFT=$(mk     "PRD draft — product-manager"               "step:prd-draft,pha
 JOURNEY=$(mk   "User journey analysis — user-journey"      "step:journey,phase:discovery,agent:user-journey")
 UX=$(mk        "UI/UX design — ui-ux"                      "step:ux,phase:discovery,agent:ui-ux")
 DESIGN=$(mk    "Visual design — design-agent"             "step:design,phase:discovery,agent:design-agent")
+COPY=$(mk      "Voice & copy — copywriter-engineer"       "step:copywriter,phase:discovery,agent:copywriter-engineer")
 ARCH=$(mk      "Architecture & §5 contract — system-architect" "step:architecture,phase:discovery,agent:system-architect")
 SECURITY=$(mk  "Security threat model — security-engineer" "step:security,phase:discovery,agent:security-engineer")
 REVISE=$(mk    "PRD revise — product-manager"             "step:prd-revise,phase:discovery,agent:product-manager")
@@ -36,8 +37,10 @@ BREAKDOWN=$(mk "Task breakdown — product-manager"         "step:breakdown,phas
 for b in "$JOURNEY" "$UX" "$ARCH" "$SECURITY"; do bd dep add "$b" "$DRAFT"  >/dev/null; done
 # visual design is a handoff from ui-ux: it builds on ux.md, so it waits for ux to close
 bd dep add "$DESIGN" "$UX" >/dev/null
-# revise folds in all five critique/design artifacts
-for b in "$JOURNEY" "$UX" "$DESIGN" "$ARCH" "$SECURITY"; do bd dep add "$REVISE" "$b" >/dev/null; done
+# copy refines after design: it builds on ux.md + design.md, so it waits for design to close
+bd dep add "$COPY" "$DESIGN" >/dev/null
+# revise folds in all six critique/design/copy artifacts
+for b in "$JOURNEY" "$UX" "$DESIGN" "$COPY" "$ARCH" "$SECURITY"; do bd dep add "$REVISE" "$b" >/dev/null; done
 bd dep add "$APPROVE"   "$REVISE"   >/dev/null
 bd dep add "$BREAKDOWN" "$APPROVE"  >/dev/null
 
