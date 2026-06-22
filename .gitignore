@@ -14,3 +14,11 @@ venv/
 
 # Runtime data (SQLite WAL store lives here; volume-mounted in Docker)
 data/
+
+# Node / Vite SPA (frontend lane)
+node_modules/
+dist/
+*.tsbuildinfo
+playwright-report/
+test-results/
+backend/target/

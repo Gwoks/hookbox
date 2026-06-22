@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HookBox</title>
+    <!--
+      First-paint theme (design.md §9, AC-D23/D24): LIGHT is the default for a new
+      visitor with no stored preference and no `prefers-color-scheme: dark`. An
+      explicit stored toggle ('light' | 'dark') overrides everything. Applied
+      before paint to avoid a flash.
+    -->
+    <script>
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('hookbox-theme') // 'light' | 'dark' | null
+          var dark
+          if (stored === 'dark') dark = true
+          else if (stored === 'light') dark = false
+          else dark = window.matchMedia('(prefers-color-scheme: dark)').matches // no stored pref → system, default light
+          var root = document.documentElement
+          if (dark) {
+            root.classList.add('dark')
+            root.style.colorScheme = 'dark'
+          } else {
+            root.style.colorScheme = 'light'
+          }
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

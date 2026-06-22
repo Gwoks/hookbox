@@ -1,79 +1,46 @@
-# HookBox deployment — app + Redis (AC-42/43/44, arch §2 infra).
+# HookBox deployment — a SINGLE app container (Rust binary + SQLite). The Rust
+# re-platform collapses all four Redis responsibilities into in-process
+# structures + SQLite (arch §Approach), so there is no Redis/Postgres service.
 #
-#   docker compose up           # starts redis, waits for it healthy, then app
-#   docker compose down         # stops; named volumes PERSIST config/rules/history
-#   docker compose down -v      # ALSO wipes the volumes (fresh DB + Redis)
+#   docker compose up           # builds + starts the single app container
+#   docker compose down         # stops; the named volume PERSISTS the SQLite DB
+#   docker compose down -v      # ALSO wipes the volume (fresh DB)
 #
-# All knobs are env-overridable (see README "Configuration"); the defaults below
-# are a working single-host setup. `.env` in this directory is auto-loaded.
+# All knobs are env-overridable; `.env` in this directory is auto-loaded.
 
 services:
-  redis:
-    image: redis:7-alpine
-    # --appendonly yes => Redis AOF persistence on the named volume so live state
-    # and Auto-CRUD collections best-effort survive a restart (R7).
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - hookbox_redis:/data
-    networks:
-      - hookbox_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    restart: unless-stopped
-
   app:
     build: .
-    # Wait for Redis to be healthy before starting (deterministic readiness).
-    depends_on:
-      redis:
-        condition: service_healthy
     environment:
-      # --- core wiring (point the app at the redis service on the internal net) -
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      DATABASE_PATH: ${DATABASE_PATH:-/app/data/hookbox.db}
-      # --- routing (LOCKED §2) ------------------------------------------------
+      # --- durable store (one WAL SQLite file on the named volume) -----------
+      DATABASE_PATH: ${DATABASE_PATH:-/app/data/app.db}
+      STATIC_DIR: ${STATIC_DIR:-/app/dist}
+      # --- routing (LOCKED §2; OQ-4 default port 8080) -----------------------
       MOCK_DOMAIN: ${MOCK_DOMAIN:-mock.local}
       APP_HOST: ${APP_HOST:-localhost}
-      APP_PORT: ${APP_PORT:-8000}
-      # --- retention (LOCKED §6, AC-37) ---------------------------------------
+      APP_PORT: ${APP_PORT:-8080}
+      APP_BIND_HOST: ${APP_BIND_HOST:-0.0.0.0}
+      # --- retention (LOCKED §5.6) -------------------------------------------
       TRACE_CAP: ${TRACE_CAP:-100}
       TRACE_TTL_HOURS: ${TRACE_TTL_HOURS:-24}
       RETENTION_SWEEP_SECONDS: ${RETENTION_SWEEP_SECONDS:-300}
-      # --- MITM / SSRF policy (AC-S6..S9) -------------------------------------
+      GONE_TTL_HOURS: ${GONE_TTL_HOURS:-168}
+      # --- MITM / SSRF policy (AC-28..32, AC-S1..S4) -------------------------
       MITM_TIMEOUT_S: ${MITM_TIMEOUT_S:-10}
       MITM_MAX_BODY_BYTES: ${MITM_MAX_BODY_BYTES:-5000000}
       MITM_ALLOW_PRIVATE: ${MITM_ALLOW_PRIVATE:-false}
-      # --- simulated-condition + ingest bounds (AC-27c, AC-S18) ---------------
+      # --- simulated-condition + ingest bounds (AC-37/39, AC-S18) ------------
       LATENCY_MAX_MS: ${LATENCY_MAX_MS:-10000}
       RATE_LIMIT_MAX_PER_MIN: ${RATE_LIMIT_MAX_PER_MIN:-100000}
       MAX_INGEST_BODY_BYTES: ${MAX_INGEST_BODY_BYTES:-1000000}
     ports:
       # host:container — change the host side to relocate the published port.
-      - "${APP_PORT:-8000}:8000"
+      - "${APP_PORT:-8080}:8080"
     volumes:
       - hookbox_data:/app/data
-    networks:
-      - hookbox_net
-    healthcheck:
-      # python urllib probe (curl is absent in python:3.12-slim).
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status==200 else 1)"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
     restart: unless-stopped
 
-# Named volumes: config/rules/history (SQLite) + live state/collections (Redis)
-# survive `docker compose down && up` (without -v) — AC-43.
+# Named volume: the SQLite DB (config/rules/history/state/collections) survives
+# `docker compose down && up` (without -v).
 volumes:
   hookbox_data:
-  hookbox_redis:
-
-# Internal bridge network so the app reaches Redis by service name.
-networks:
-  hookbox_net:
-    driver: bridge

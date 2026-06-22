@@ -1,0 +1,301 @@
+/**
+ * HookBox design-system foundation (design.md §2 + §9). Semantic, theme-aware
+ * tokens: primitive palette → semantic CSS vars in :root (light) and .dark
+ * (dark), surfaced as Tailwind colors in tailwind.config.ts. Components
+ * reference semantic tokens only — never a raw hex (AC-D11). Light is the
+ * first-paint default; .dark on <html> re-themes the whole SPA (AC-D12/D24).
+ *
+ * This file is the ONLY place raw hex appears; primitives live here, semantics
+ * derive from them, components consume semantics.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ── Primitive palette — neutral warm slate (design.md §2.1) ── */
+  --slate-0: #ffffff;
+  --slate-25: #fbfcfc;
+  --slate-50: #f7f9f9;
+  --slate-100: #eef1f2;
+  --slate-200: #e0e5e7;
+  --slate-300: #cbd2d6;
+  --slate-400: #97a2a8;
+  --slate-500: #697077;
+  --slate-600: #4b5258;
+  --slate-700: #343a40;
+  --slate-800: #23282d;
+  --slate-850: #1a1e22;
+  --slate-900: #13171a;
+  --slate-950: #0d1012;
+
+  /* Accent — teal */
+  --teal-50: #e7f8f5;
+  --teal-100: #c6efe8;
+  --teal-200: #8fe0d3;
+  --teal-300: #4fc9b6;
+  --teal-400: #1fae99;
+  --teal-500: #0d9488;
+  --teal-600: #0b7d73;
+  --teal-700: #0a655e;
+  --teal-300-dark: #3fd6bf;
+  --teal-400-dark: #22c3ab;
+
+  /* Status / semantic hues + method hues */
+  --green-50: #e8f7ee;
+  --green-100: #cbecd7;
+  --green-500: #16a34a;
+  --green-600: #15803d;
+  --green-400-dark: #4ade80;
+  --sky-50: #e7f3fb;
+  --sky-100: #c9e4f7;
+  --sky-500: #0284c7;
+  --sky-600: #0369a1;
+  --sky-400-dark: #56c2f5;
+  --amber-50: #fdf3e2;
+  --amber-100: #fae3bd;
+  --amber-500: #d97706;
+  --amber-600: #b45309;
+  --amber-400-dark: #fbbf24;
+  --red-50: #fdecec;
+  --red-100: #fbd5d5;
+  --red-500: #dc2626;
+  --red-600: #b91c1c;
+  --red-400-dark: #f87171;
+  --violet-50: #f1ecfd;
+  --violet-500: #7c3aed;
+  --violet-600: #6d28d9;
+  --violet-400-dark: #a78bfa;
+  --rose-500: #e11d48;
+  --rose-600: #be123c;
+  --rose-400-dark: #fb7185;
+  --orange-500: #ea580c;
+  --orange-600: #c2410c;
+  --orange-400-dark: #fb923c;
+
+  /* ── Semantic tokens — light (design.md §2.2) ── */
+  --bg-canvas: var(--slate-50);
+  --bg-surface: var(--slate-0);
+  --bg-surface-raised: var(--slate-0);
+  --bg-subtle: var(--slate-50);
+  --bg-hover: var(--slate-100);
+  --bg-active: var(--slate-200);
+  --border-default: var(--slate-200);
+  --border-strong: var(--slate-300);
+  --text-primary: var(--slate-900);
+  --text-secondary: var(--slate-600);
+  --text-tertiary: var(--slate-500);
+  --text-on-accent: var(--slate-0);
+  /* Light accent-fill uses teal-600 so white ink clears AA ≥4.5:1 (AC-D20, §11.4 fallback). */
+  --accent: var(--teal-500);
+  --accent-hover: var(--teal-600);
+  --accent-fill: var(--teal-600);
+  --accent-subtle-bg: var(--teal-50);
+  --focus-ring: var(--teal-500);
+  --success-fg: var(--green-600);
+  --success-bg: var(--green-50);
+  --info-fg: var(--sky-600);
+  --info-bg: var(--sky-50);
+  --warning-fg: var(--amber-600);
+  --warning-bg: var(--amber-50);
+  --danger-fg: var(--red-600);
+  --danger-bg: var(--red-50);
+  --neutral-chip-fg: var(--slate-600);
+  --neutral-chip-bg: var(--slate-100);
+  --overlay-scrim: rgba(13, 17, 20, 0.45);
+
+  /* Method colors — light (design.md §2.2) */
+  --m-get-fg: var(--sky-600);
+  --m-get-bg: var(--sky-50);
+  --m-post-fg: var(--green-600);
+  --m-post-bg: var(--green-50);
+  --m-put-fg: var(--orange-600);
+  --m-put-bg: var(--amber-50);
+  --m-patch-fg: var(--violet-600);
+  --m-patch-bg: var(--violet-50);
+  --m-delete-fg: var(--rose-600);
+  --m-delete-bg: var(--red-50);
+  --m-head-fg: var(--slate-600);
+  --m-head-bg: var(--slate-100);
+
+  /* Served-by chips — light (design.md §2.3) */
+  --sv-rule-fg: var(--teal-500);
+  --sv-rule-bg: var(--teal-50);
+  --sv-crud-fg: var(--sky-600);
+  --sv-crud-bg: var(--sky-50);
+  --sv-mitm-fg: var(--violet-600);
+  --sv-mitm-bg: var(--violet-50);
+  --sv-tunnel-fg: var(--green-600);
+  --sv-tunnel-bg: var(--green-50);
+  --sv-default-fg: var(--slate-600);
+  --sv-default-bg: var(--slate-100);
+  --sv-cors-fg: var(--sky-600);
+  --sv-cors-bg: var(--sky-50);
+  --sv-chaos-fg: var(--red-600);
+  --sv-chaos-bg: var(--red-50);
+  --sv-ratelimit-fg: var(--amber-600);
+  --sv-ratelimit-bg: var(--amber-50);
+
+  /* Typography families (design.md §2.4) */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* Shadows (design.md §2.7) */
+  --shadow-xs: 0 1px 2px rgba(13, 17, 20, 0.05);
+  --shadow-sm: 0 1px 3px rgba(13, 17, 20, 0.08), 0 1px 2px rgba(13, 17, 20, 0.04);
+  --shadow-md: 0 4px 14px rgba(13, 17, 20, 0.1), 0 2px 4px rgba(13, 17, 20, 0.06);
+  --shadow-lg: 0 16px 40px rgba(13, 17, 20, 0.18), 0 4px 10px rgba(13, 17, 20, 0.06);
+  --shadow-focus: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--focus-ring);
+
+  /* Motion (design.md §2.8) */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0.7, 0, 1);
+  --dur-instant: 90ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+}
+
+.dark {
+  /* ── Semantic tokens — dark (design.md §2.2) ── */
+  --bg-canvas: var(--slate-950);
+  --bg-surface: var(--slate-900);
+  --bg-surface-raised: var(--slate-850);
+  --bg-subtle: var(--slate-850);
+  --bg-hover: var(--slate-800);
+  --bg-active: var(--slate-700);
+  --border-default: var(--slate-700);
+  --border-strong: var(--slate-600);
+  --text-primary: var(--slate-50);
+  --text-secondary: var(--slate-300);
+  --text-tertiary: var(--slate-400);
+  --text-on-accent: var(--slate-950);
+  --accent: var(--teal-300-dark);
+  --accent-hover: var(--teal-200);
+  --accent-fill: var(--teal-400-dark);
+  --accent-subtle-bg: rgba(63, 214, 191, 0.14);
+  --focus-ring: var(--teal-300-dark);
+  --success-fg: var(--green-400-dark);
+  --success-bg: rgba(74, 222, 128, 0.14);
+  --info-fg: var(--sky-400-dark);
+  --info-bg: rgba(86, 194, 245, 0.14);
+  --warning-fg: var(--amber-400-dark);
+  --warning-bg: rgba(251, 191, 36, 0.14);
+  --danger-fg: var(--red-400-dark);
+  --danger-bg: rgba(248, 113, 113, 0.14);
+  --neutral-chip-fg: var(--slate-200);
+  --neutral-chip-bg: var(--slate-800);
+  --overlay-scrim: rgba(0, 0, 0, 0.62);
+
+  /* Method colors — dark */
+  --m-get-fg: var(--sky-400-dark);
+  --m-get-bg: rgba(86, 194, 245, 0.14);
+  --m-post-fg: var(--green-400-dark);
+  --m-post-bg: rgba(74, 222, 128, 0.14);
+  --m-put-fg: var(--orange-400-dark);
+  --m-put-bg: rgba(251, 146, 60, 0.14);
+  --m-patch-fg: var(--violet-400-dark);
+  --m-patch-bg: rgba(167, 139, 250, 0.14);
+  --m-delete-fg: var(--rose-400-dark);
+  --m-delete-bg: rgba(251, 113, 133, 0.14);
+  --m-head-fg: var(--slate-200);
+  --m-head-bg: var(--slate-800);
+
+  /* Served-by chips — dark */
+  --sv-rule-fg: var(--teal-300-dark);
+  --sv-rule-bg: rgba(63, 214, 191, 0.14);
+  --sv-crud-fg: var(--sky-400-dark);
+  --sv-crud-bg: rgba(86, 194, 245, 0.14);
+  --sv-mitm-fg: var(--violet-400-dark);
+  --sv-mitm-bg: rgba(167, 139, 250, 0.14);
+  --sv-tunnel-fg: var(--green-400-dark);
+  --sv-tunnel-bg: rgba(74, 222, 128, 0.14);
+  --sv-default-fg: var(--slate-200);
+  --sv-default-bg: var(--slate-800);
+  --sv-cors-fg: var(--sky-400-dark);
+  --sv-cors-bg: rgba(86, 194, 245, 0.14);
+  --sv-chaos-fg: var(--red-400-dark);
+  --sv-chaos-bg: rgba(248, 113, 113, 0.14);
+  --sv-ratelimit-fg: var(--amber-400-dark);
+  --sv-ratelimit-bg: rgba(251, 191, 36, 0.14);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.55), 0 2px 4px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.62), 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+@layer base {
+  * {
+    border-color: var(--border-default);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Visible 2px focus ring on EVERY interactive control (design.md §9, AC-D15). */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Tabular numbers — status digits + latency align as the feed streams (AC-D18). */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* Skeleton shimmer — sweep on a muted block. Reduced-motion → static (AC-D16). */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-subtle);
+    border-radius: 6px;
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, var(--bg-hover), transparent);
+    animation: shimmer 1.4s infinite;
+  }
+}
+
+/* Reduced motion (design.md §2.8 / §9, AC-D16): kill animation/transition; feed
+   row arrival becomes an instant insert; skeleton becomes a static block;
+   pills/spinners carry state in text, never spin-only. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton::after {
+    display: none;
+  }
+  .skeleton {
+    background: var(--bg-hover);
+  }
+  .feed-row {
+    animation: none !important;
+  }
+}

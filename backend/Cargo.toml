@@ -1,0 +1,54 @@
+[package]
+name = "hookbox"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hookbox"
+path = "src/main.rs"
+
+[[bin]]
+name = "tunnel"
+path = "src/bin/tunnel.rs"
+
+[[bin]]
+name = "seed"
+path = "src/bin/seed.rs"
+
+[dependencies]
+# web
+axum = { version = "0.7", features = ["macros", "ws"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+# serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# db
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+# http client (rustls to avoid OpenSSL system dep) — MITM proxy
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# tunnel CLI control channel
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+async-stream = "0.3"
+http-body-util = "0.1"
+# in-process structures
+dashmap = "6"
+url = "2"
+# util
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1"
+anyhow = "1"
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
