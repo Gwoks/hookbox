@@ -111,8 +111,21 @@ async fn run_interceptor(state: &AppState, result: &PlaneResult, req: Request<Bo
             return oversize_response(&token);
         }
     }
-    let body = match req.into_body().collect().await {
+    // Bound the read at `cap` so a chunked request with no Content-Length can't
+    // buffer past the limit before the size check (AC-S18 — reject before fully
+    // buffering). `Limited` errors with `LengthLimitError` once `cap` is exceeded.
+    let body = match http_body_util::Limited::new(req.into_body(), cap)
+        .collect()
+        .await
+    {
         Ok(c) => c.to_bytes().to_vec(),
+        Err(e)
+            if e.downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some() =>
+        {
+            return oversize_response(&token);
+        }
+        // A genuine transport read error → treat as an empty body (prior behavior).
         Err(_) => Vec::new(),
     };
     if body.len() > cap {

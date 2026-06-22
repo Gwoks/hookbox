@@ -45,13 +45,16 @@ struct Channel {
 }
 
 pub struct FeedHub {
-    channels: DashMap<String, Arc<Channel>>,
+    // `Arc` so a `Subscription` can hold a handle and evict its own channel on
+    // the last drop — bounding the map to the set of *currently-subscribed*
+    // tokens rather than every token ever subscribed (memory bound, AC-S19/N3).
+    channels: Arc<DashMap<String, Arc<Channel>>>,
 }
 
 impl Default for FeedHub {
     fn default() -> Self {
         FeedHub {
-            channels: DashMap::new(),
+            channels: Arc::new(DashMap::new()),
         }
     }
 }
@@ -69,19 +72,6 @@ impl FeedHub {
         self.channels.is_empty()
     }
 
-    fn channel(&self, token: &str) -> Arc<Channel> {
-        self.channels
-            .entry(token.to_string())
-            .or_insert_with(|| {
-                let (tx, _rx) = broadcast::channel(CHANNEL_CAP);
-                Arc::new(Channel {
-                    tx,
-                    subscribers: AtomicUsize::new(0),
-                })
-            })
-            .clone()
-    }
-
     /// Current subscriber count for a token (for the connection cap).
     pub fn subscriber_count(&self, token: &str) -> usize {
         self.channels
@@ -91,16 +81,34 @@ impl FeedHub {
     }
 
     /// Subscribe to a token's channel. Increments the subscriber count; the
-    /// returned guard decrements it on drop and yields a `broadcast::Receiver`.
+    /// returned guard decrements it on drop (and evicts the channel when it
+    /// reaches zero) and yields a `broadcast::Receiver`.
     pub fn subscribe(&self, token: &str) -> Subscription {
-        let ch = self.channel(token);
-        ch.subscribers.fetch_add(1, Ordering::SeqCst);
+        // Increment WHILE holding the entry (shard) lock so a concurrent
+        // last-unsubscribe eviction (`remove_if`, which checks the count under
+        // the same lock) can never drop the channel between lookup and bump.
+        let ch = {
+            let entry = self.channels.entry(token.to_string()).or_insert_with(|| {
+                let (tx, _rx) = broadcast::channel(CHANNEL_CAP);
+                Arc::new(Channel {
+                    tx,
+                    subscribers: AtomicUsize::new(0),
+                })
+            });
+            entry.value().subscribers.fetch_add(1, Ordering::SeqCst);
+            entry.value().clone()
+        };
         let rx = ch.tx.subscribe();
-        Subscription { ch, rx }
+        Subscription {
+            channels: self.channels.clone(),
+            token: token.to_string(),
+            ch,
+            rx,
+        }
     }
 
     /// Publish an event for a token. Non-blocking; a no-op when there are zero
-    /// receivers (never affects the mock path).
+    /// receivers / no channel (never affects the mock path).
     pub fn publish(&self, token: &str, event: FeedEvent) {
         if let Some(ch) = self.channels.get(token) {
             // `send` errors only when there are no receivers — ignore (no-op).
@@ -110,15 +118,24 @@ impl FeedHub {
 }
 
 /// A live subscription. Holds the channel alive and decrements the subscriber
-/// count when dropped.
+/// count when dropped, evicting the channel from the hub on the last drop.
 pub struct Subscription {
+    channels: Arc<DashMap<String, Arc<Channel>>>,
+    token: String,
     ch: Arc<Channel>,
     pub rx: broadcast::Receiver<FeedEvent>,
 }
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        self.ch.subscribers.fetch_sub(1, Ordering::SeqCst);
+        // fetch_sub returns the PREVIOUS value; `1` means we were the last.
+        if self.ch.subscribers.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // Evict iff still at zero, checked under the shard lock so a
+            // concurrent `subscribe` (which bumps under the same lock) wins.
+            self.channels.remove_if(&self.token, |_, ch| {
+                ch.subscribers.load(Ordering::SeqCst) == 0
+            });
+        }
     }
 }
 
@@ -158,5 +175,20 @@ mod tests {
             assert_eq!(hub.subscriber_count("t"), 1);
         }
         assert_eq!(hub.subscriber_count("t"), 0);
+    }
+
+    #[tokio::test]
+    async fn channel_is_evicted_when_last_subscriber_drops() {
+        let hub = FeedHub::new();
+        let s1 = hub.subscribe("t");
+        let s2 = hub.subscribe("t");
+        assert_eq!(hub.len(), 1);
+        drop(s1);
+        // Still one subscriber → channel retained.
+        assert_eq!(hub.len(), 1);
+        drop(s2);
+        // Last subscriber gone → channel evicted (map bounded by live subs).
+        assert_eq!(hub.len(), 0);
+        assert!(hub.is_empty());
     }
 }
