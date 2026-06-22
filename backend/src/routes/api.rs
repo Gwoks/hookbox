@@ -70,7 +70,11 @@ fn endpoint_summary(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Endpoint
     }
 }
 
-fn endpoint_detail(state: &AppState, row: &sqlx::sqlite::SqliteRow, tunnel_active: bool) -> EndpointDetail {
+fn endpoint_detail(
+    state: &AppState,
+    row: &sqlx::sqlite::SqliteRow,
+    tunnel_active: bool,
+) -> EndpointDetail {
     let token: String = row.get("token");
     EndpointDetail {
         mock_url: mock_url(state, &token),
@@ -135,7 +139,11 @@ fn request_summary(row: &sqlx::sqlite::SqliteRow) -> RequestSummary {
 
 /// Insert a fresh endpoint for an owner, retrying on the (astronomically rare)
 /// token collision. Returns the new token.
-async fn new_endpoint(state: &AppState, owner_id: &str, name: Option<&str>) -> Result<String, ApiError> {
+async fn new_endpoint(
+    state: &AppState,
+    owner_id: &str,
+    name: Option<&str>,
+) -> Result<String, ApiError> {
     let mut token = gen_token(state.cfg.endpoint_id_length);
     for _ in 0..5 {
         let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM endpoints WHERE token = ?")
@@ -156,7 +164,10 @@ async fn new_endpoint(state: &AppState, owner_id: &str, name: Option<&str>) -> R
     Ok(token)
 }
 
-async fn fetch_endpoint(state: &AppState, token: &str) -> Result<sqlx::sqlite::SqliteRow, ApiError> {
+async fn fetch_endpoint(
+    state: &AppState,
+    token: &str,
+) -> Result<sqlx::sqlite::SqliteRow, ApiError> {
     sqlx::query("SELECT * FROM endpoints WHERE token = ?")
         .bind(token)
         .fetch_optional(&state.pool)
@@ -181,7 +192,10 @@ fn valid_email(email: &str) -> bool {
     let mut parts = e.splitn(2, '@');
     let local = parts.next().unwrap_or("");
     let domain = parts.next().unwrap_or("");
-    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+    !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
         && !e.contains(' ')
 }
 
@@ -223,10 +237,11 @@ async fn create_session(
     .execute(&state.pool)
     .await?;
 
-    let mut rows = sqlx::query("SELECT * FROM endpoints WHERE owner_id = ? ORDER BY created_at, token")
-        .bind(&owner_id)
-        .fetch_all(&state.pool)
-        .await?;
+    let mut rows =
+        sqlx::query("SELECT * FROM endpoints WHERE owner_id = ? ORDER BY created_at, token")
+            .bind(&owner_id)
+            .fetch_all(&state.pool)
+            .await?;
     if rows.is_empty() {
         let token = new_endpoint(&state, &owner_id, None).await?;
         rows = sqlx::query("SELECT * FROM endpoints WHERE token = ?")
@@ -235,7 +250,8 @@ async fn create_session(
             .await?;
     }
 
-    let summaries: Vec<EndpointSummary> = rows.iter().map(|r| endpoint_summary(&state, r)).collect();
+    let summaries: Vec<EndpointSummary> =
+        rows.iter().map(|r| endpoint_summary(&state, r)).collect();
     let primary = endpoint_summary(&state, &rows[0]);
     let resp = SessionResponse {
         owner_id,
@@ -283,7 +299,9 @@ async fn list_endpoints(
         .bind(&owner_id)
         .fetch_all(&state.pool)
         .await?;
-    Ok(Json(rows.iter().map(|r| endpoint_summary(&state, r)).collect()))
+    Ok(Json(
+        rows.iter().map(|r| endpoint_summary(&state, r)).collect(),
+    ))
 }
 
 // --- 3. POST /api/endpoints ---------------------------------------------------
@@ -301,7 +319,11 @@ async fn create_endpoint(
     let token = new_endpoint(&state, &owner_id, body.name.as_deref()).await?;
     let row = fetch_endpoint(&state, &token).await?;
     let active = state.tunnels.is_active(&token);
-    Ok((StatusCode::CREATED, Json(endpoint_detail(&state, &row, active))).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(endpoint_detail(&state, &row, active)),
+    )
+        .into_response())
 }
 
 // --- 4. GET /api/endpoints/{token} -------------------------------------------
@@ -342,7 +364,9 @@ async fn patch_endpoint(
         binds.push(v.clone());
     }
     if let Some(v) = obj.get("auto_crud") {
-        let b = v.as_bool().ok_or_else(|| ApiError::validation("auto_crud must be a boolean."))?;
+        let b = v
+            .as_bool()
+            .ok_or_else(|| ApiError::validation("auto_crud must be a boolean."))?;
         sets.push("auto_crud = ?".into());
         binds.push(json!(b as i64));
     }
@@ -358,36 +382,48 @@ async fn patch_endpoint(
     if let Some(v) = obj.get("default_mode") {
         let m = v.as_str().unwrap_or("");
         if m != "mock_404" && m != "echo" {
-            return Err(ApiError::validation("default_mode must be 'mock_404' or 'echo'."));
+            return Err(ApiError::validation(
+                "default_mode must be 'mock_404' or 'echo'.",
+            ));
         }
         sets.push("default_mode = ?".into());
         binds.push(json!(m));
     }
     if let Some(v) = obj.get("latency_ms") {
-        let n = v.as_i64().ok_or_else(|| ApiError::validation("latency_ms must be an integer."))?;
+        let n = v
+            .as_i64()
+            .ok_or_else(|| ApiError::validation("latency_ms must be an integer."))?;
         sets.push("latency_ms = ?".into());
         binds.push(json!(n.clamp(0, state.cfg.latency_max_ms)));
     }
     if let Some(v) = obj.get("rate_limit_per_min") {
-        let n = v.as_i64().ok_or_else(|| ApiError::validation("rate_limit_per_min must be an integer."))?;
+        let n = v
+            .as_i64()
+            .ok_or_else(|| ApiError::validation("rate_limit_per_min must be an integer."))?;
         sets.push("rate_limit_per_min = ?".into());
         binds.push(json!(n.clamp(0, state.cfg.rate_limit_max_per_min)));
     }
     if let Some(v) = obj.get("chaos_pct") {
-        let n = v.as_i64().ok_or_else(|| ApiError::validation("chaos_pct must be an integer."))?;
+        let n = v
+            .as_i64()
+            .ok_or_else(|| ApiError::validation("chaos_pct must be an integer."))?;
         sets.push("chaos_pct = ?".into());
         binds.push(json!(n.clamp(0, state.cfg.chaos_max_pct)));
     }
     if let Some(v) = obj.get("chaos_mode") {
         let m = v.as_str().unwrap_or("");
         if m != "error" && m != "dropout" {
-            return Err(ApiError::validation("chaos_mode must be 'error' or 'dropout'."));
+            return Err(ApiError::validation(
+                "chaos_mode must be 'error' or 'dropout'.",
+            ));
         }
         sets.push("chaos_mode = ?".into());
         binds.push(json!(m));
     }
     if let Some(v) = obj.get("cors_enabled") {
-        let b = v.as_bool().ok_or_else(|| ApiError::validation("cors_enabled must be a boolean."))?;
+        let b = v
+            .as_bool()
+            .ok_or_else(|| ApiError::validation("cors_enabled must be a boolean."))?;
         sets.push("cors_enabled = ?".into());
         binds.push(json!(b as i64));
     }
@@ -439,9 +475,18 @@ async fn delete_endpoint(
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     // OQ-1: tombstone rather than hard-delete so the mock plane returns 410.
     // Clear live config (rules/state/crud cascade or empty) and set gone_at.
-    sqlx::query("DELETE FROM mock_rules WHERE token = ?").bind(&token).execute(&state.pool).await?;
-    sqlx::query("DELETE FROM endpoint_state WHERE token = ?").bind(&token).execute(&state.pool).await?;
-    sqlx::query("DELETE FROM crud_collections WHERE token = ?").bind(&token).execute(&state.pool).await?;
+    sqlx::query("DELETE FROM mock_rules WHERE token = ?")
+        .bind(&token)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM endpoint_state WHERE token = ?")
+        .bind(&token)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM crud_collections WHERE token = ?")
+        .bind(&token)
+        .execute(&state.pool)
+        .await?;
     sqlx::query("UPDATE endpoints SET gone_at = datetime('now') WHERE token = ?")
         .bind(&token)
         .execute(&state.pool)
@@ -478,17 +523,23 @@ fn validate_rule(state: &AppState, r: &MockRuleCreate) -> Result<(), ApiError> {
         }
     }
     if !(0..=100000).contains(&r.priority) {
-        return Err(ApiError::validation("priority must be between 0 and 100000."));
+        return Err(ApiError::validation(
+            "priority must be between 0 and 100000.",
+        ));
     }
     if r.response.status_code < 100 || r.response.status_code > 599 {
-        return Err(ApiError::validation("response.status_code must be 100..599."));
+        return Err(ApiError::validation(
+            "response.status_code must be 100..599.",
+        ));
     }
     if r.response.body_template.len() > state.cfg.template_max_size {
         return Err(ApiError::validation("response.body_template is too large."));
     }
     if let Some(m) = &r.chaos_mode {
         if m != "error" && m != "dropout" {
-            return Err(ApiError::validation("chaos_mode must be 'error' or 'dropout'."));
+            return Err(ApiError::validation(
+                "chaos_mode must be 'error' or 'dropout'.",
+            ));
         }
     }
     Ok(())
@@ -507,7 +558,10 @@ async fn create_rule(
     let match_json = serde_json::to_string(&data.r#match).unwrap();
     let response_json = serde_json::to_string(&data.response).unwrap();
     let writes_json = serde_json::to_string(&data.state_writes).unwrap();
-    let webhook_json = data.webhook_action.as_ref().map(|w| serde_json::to_string(w).unwrap());
+    let webhook_json = data
+        .webhook_action
+        .as_ref()
+        .map(|w| serde_json::to_string(w).unwrap());
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO mock_rules
@@ -563,11 +617,12 @@ async fn patch_rule(
     Json(raw): Json<Value>,
 ) -> Result<Json<MockRule>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
-        .bind(rule_id)
-        .bind(&token)
-        .fetch_optional(&state.pool)
-        .await?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
+            .bind(rule_id)
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await?;
     if exists.is_none() {
         return Err(ApiError::not_found("Rule not found."));
     }
@@ -583,15 +638,21 @@ async fn patch_rule(
         binds.push(v.clone());
     }
     if let Some(v) = obj.get("priority") {
-        let n = v.as_i64().ok_or_else(|| ApiError::validation("priority must be an integer."))?;
+        let n = v
+            .as_i64()
+            .ok_or_else(|| ApiError::validation("priority must be an integer."))?;
         if !(0..=100000).contains(&n) {
-            return Err(ApiError::validation("priority must be between 0 and 100000."));
+            return Err(ApiError::validation(
+                "priority must be between 0 and 100000.",
+            ));
         }
         sets.push("priority = ?".into());
         binds.push(json!(n));
     }
     if let Some(v) = obj.get("enabled") {
-        let b = v.as_bool().ok_or_else(|| ApiError::validation("enabled must be a boolean."))?;
+        let b = v
+            .as_bool()
+            .ok_or_else(|| ApiError::validation("enabled must be a boolean."))?;
         sets.push("enabled = ?".into());
         binds.push(json!(b as i64));
     }
@@ -605,7 +666,9 @@ async fn patch_rule(
         let r: ResponseSpec = serde_json::from_value(v.clone())
             .map_err(|_| ApiError::validation("response is malformed."))?;
         if r.status_code < 100 || r.status_code > 599 {
-            return Err(ApiError::validation("response.status_code must be 100..599."));
+            return Err(ApiError::validation(
+                "response.status_code must be 100..599.",
+            ));
         }
         sets.push("response_json = ?".into());
         binds.push(json!(serde_json::to_string(&r).unwrap()));
@@ -617,7 +680,14 @@ async fn patch_rule(
         binds.push(json!(serde_json::to_string(&w).unwrap()));
     }
     if let Some(v) = obj.get("latency_ms") {
-        let n = if v.is_null() { None } else { Some(v.as_i64().ok_or_else(|| ApiError::validation("latency_ms must be an integer."))?) };
+        let n = if v.is_null() {
+            None
+        } else {
+            Some(
+                v.as_i64()
+                    .ok_or_else(|| ApiError::validation("latency_ms must be an integer."))?,
+            )
+        };
         sets.push("latency_ms = ?".into());
         binds.push(match clamp_opt(n, 0, state.cfg.latency_max_ms) {
             Some(x) => json!(x),
@@ -625,7 +695,14 @@ async fn patch_rule(
         });
     }
     if let Some(v) = obj.get("rate_limit_per_min") {
-        let n = if v.is_null() { None } else { Some(v.as_i64().ok_or_else(|| ApiError::validation("rate_limit_per_min must be an integer."))?) };
+        let n =
+            if v.is_null() {
+                None
+            } else {
+                Some(v.as_i64().ok_or_else(|| {
+                    ApiError::validation("rate_limit_per_min must be an integer.")
+                })?)
+            };
         sets.push("rate_limit_per_min = ?".into());
         binds.push(match clamp_opt(n, 0, state.cfg.rate_limit_max_per_min) {
             Some(x) => json!(x),
@@ -636,7 +713,9 @@ async fn patch_rule(
         if !v.is_null() {
             let m = v.as_str().unwrap_or("");
             if m != "error" && m != "dropout" {
-                return Err(ApiError::validation("chaos_mode must be 'error' or 'dropout'."));
+                return Err(ApiError::validation(
+                    "chaos_mode must be 'error' or 'dropout'.",
+                ));
             }
         }
         sets.push("chaos_mode = ?".into());
@@ -651,7 +730,10 @@ async fn patch_rule(
     }
 
     if !sets.is_empty() {
-        let sql = format!("UPDATE mock_rules SET {} WHERE id = ? AND token = ?", sets.join(", "));
+        let sql = format!(
+            "UPDATE mock_rules SET {} WHERE id = ? AND token = ?",
+            sets.join(", ")
+        );
         let mut q = sqlx::query(&sql);
         for b in &binds {
             q = bind_value(q, b);
@@ -676,11 +758,12 @@ async fn delete_rule(
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
-        .bind(rule_id)
-        .bind(&token)
-        .fetch_optional(&state.pool)
-        .await?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
+            .bind(rule_id)
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await?;
     if exists.is_none() {
         return Err(ApiError::not_found("Rule not found."));
     }
@@ -716,12 +799,13 @@ async fn list_requests(
         return Err(ApiError::validation("offset must be >= 0."));
     }
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let rows = sqlx::query("SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?")
-        .bind(&token)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&state.pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?")
+            .bind(&token)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.pool)
+            .await?;
     Ok(Json(rows.iter().map(request_summary).collect()))
 }
 
@@ -815,7 +899,11 @@ async fn peek_collection(
 ) -> Result<Json<Value>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     if !is_safe_key(&name) {
-        return Err(ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_collection", "Invalid collection name."));
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_collection",
+            "Invalid collection name.",
+        ));
     }
     let items: Option<String> = sqlx::query_scalar(
         "SELECT items_json FROM crud_collections WHERE token = ? AND name = ? AND expires_at > datetime('now')",
@@ -837,7 +925,11 @@ async fn clear_collection(
 ) -> Result<Json<Message>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     if !is_safe_key(&name) {
-        return Err(ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_collection", "Invalid collection name."));
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_collection",
+            "Invalid collection name.",
+        ));
     }
     sqlx::query("DELETE FROM crud_collections WHERE token = ? AND name = ?")
         .bind(&token)
@@ -856,7 +948,9 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/endpoints", get(list_endpoints).post(create_endpoint))
         .route(
             "/api/endpoints/:token",
-            get(get_endpoint).patch(patch_endpoint).delete(delete_endpoint),
+            get(get_endpoint)
+                .patch(patch_endpoint)
+                .delete(delete_endpoint),
         )
         .route(
             "/api/endpoints/:token/rules",
@@ -866,9 +960,15 @@ pub fn api_router() -> Router<AppState> {
             "/api/endpoints/:token/rules/:id",
             get(get_rule).patch(patch_rule).delete(delete_rule),
         )
-        .route("/api/endpoints/:token/requests", get(list_requests).delete(clear_requests))
+        .route(
+            "/api/endpoints/:token/requests",
+            get(list_requests).delete(clear_requests),
+        )
         .route("/api/requests/:id", get(get_request))
-        .route("/api/endpoints/:token/state", get(get_state).delete(clear_state))
+        .route(
+            "/api/endpoints/:token/state",
+            get(get_state).delete(clear_state),
+        )
         .route(
             "/api/endpoints/:token/collections/:name",
             get(peek_collection).delete(clear_collection),

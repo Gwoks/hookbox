@@ -277,7 +277,10 @@ pub struct Message {
 
 impl Message {
     pub fn new(message: impl Into<String>) -> Self {
-        Message { message: message.into(), success: true }
+        Message {
+            message: message.into(),
+            success: true,
+        }
     }
 }
 

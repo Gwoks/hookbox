@@ -33,7 +33,11 @@ impl From<sqlx::Error> for CrudError {
 }
 
 /// Read the current items array for a collection (live, non-expired).
-pub async fn list_items(pool: &SqlitePool, token: &str, name: &str) -> Result<Vec<Value>, sqlx::Error> {
+pub async fn list_items(
+    pool: &SqlitePool,
+    token: &str,
+    name: &str,
+) -> Result<Vec<Value>, sqlx::Error> {
     let items: Option<String> = sqlx::query_scalar(
         "SELECT items_json FROM crud_collections WHERE token = ? AND name = ? AND expires_at > datetime('now')",
     )
@@ -91,13 +95,12 @@ pub async fn append_item(
     let mut tx = pool.begin().await?;
     // BEGIN IMMEDIATE: take the write lock up front to serialize writers.
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
-    let current: Option<String> = sqlx::query_scalar(
-        "SELECT items_json FROM crud_collections WHERE token = ? AND name = ?",
-    )
-    .bind(token)
-    .bind(name)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT items_json FROM crud_collections WHERE token = ? AND name = ?")
+            .bind(token)
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await?;
     let mut items = parse_items(current);
     if items.len() >= max_items {
         tx.rollback().await.ok();
@@ -201,13 +204,12 @@ where
 {
     let mut tx = pool.begin().await?;
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
-    let current: Option<String> = sqlx::query_scalar(
-        "SELECT items_json FROM crud_collections WHERE token = ? AND name = ?",
-    )
-    .bind(token)
-    .bind(name)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT items_json FROM crud_collections WHERE token = ? AND name = ?")
+            .bind(token)
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await?;
     let mut items = parse_items(current);
     match f(&mut items) {
         Mutation::Ok(new_items, ret) => {
@@ -241,50 +243,108 @@ mod tests {
         let pool = db::pool(":memory:").await.unwrap();
         db::migrate(&pool).await.unwrap();
         sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         pool
     }
 
     fn obj(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[tokio::test]
     async fn full_lifecycle() {
         let pool = pool_ep().await;
-        let m = append_item(&pool, "tok", "books", obj(&[("title", json!("Dune"))]), 1000, 86400).await.unwrap();
-        let id = match m { Mutation::Ok(_, v) => v["id"].as_str().unwrap().to_string(), _ => panic!() };
+        let m = append_item(
+            &pool,
+            "tok",
+            "books",
+            obj(&[("title", json!("Dune"))]),
+            1000,
+            86400,
+        )
+        .await
+        .unwrap();
+        let id = match m {
+            Mutation::Ok(_, v) => v["id"].as_str().unwrap().to_string(),
+            _ => panic!(),
+        };
         assert_eq!(id.len(), 32); // uuid simple
         let items = list_items(&pool, "tok", "books").await.unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["title"], json!("Dune"));
 
         // PUT replace
-        let m = replace_item(&pool, "tok", "books", &id, obj(&[("title", json!("Foundation"))]), 86400).await.unwrap();
+        let m = replace_item(
+            &pool,
+            "tok",
+            "books",
+            &id,
+            obj(&[("title", json!("Foundation"))]),
+            86400,
+        )
+        .await
+        .unwrap();
         assert!(matches!(m, Mutation::Ok(..)));
-        assert_eq!(list_items(&pool, "tok", "books").await.unwrap()[0]["title"], json!("Foundation"));
+        assert_eq!(
+            list_items(&pool, "tok", "books").await.unwrap()[0]["title"],
+            json!("Foundation")
+        );
 
         // PATCH merge keeps id
-        merge_item(&pool, "tok", "books", &id, obj(&[("year", json!(1951))]), 64000, 86400).await.unwrap();
+        merge_item(
+            &pool,
+            "tok",
+            "books",
+            &id,
+            obj(&[("year", json!(1951))]),
+            64000,
+            86400,
+        )
+        .await
+        .unwrap();
         let after = list_items(&pool, "tok", "books").await.unwrap();
         assert_eq!(after[0]["year"], json!(1951));
         assert_eq!(after[0]["id"], json!(id));
 
         // DELETE
-        assert!(matches!(delete_item(&pool, "tok", "books", &id, 86400).await.unwrap(), Mutation::Ok(..)));
+        assert!(matches!(
+            delete_item(&pool, "tok", "books", &id, 86400)
+                .await
+                .unwrap(),
+            Mutation::Ok(..)
+        ));
         assert!(list_items(&pool, "tok", "books").await.unwrap().is_empty());
         // delete missing -> NotFound
-        assert!(matches!(delete_item(&pool, "tok", "books", "nope", 86400).await.unwrap(), Mutation::NotFound));
+        assert!(matches!(
+            delete_item(&pool, "tok", "books", "nope", 86400)
+                .await
+                .unwrap(),
+            Mutation::NotFound
+        ));
     }
 
     #[tokio::test]
     async fn max_items_cap() {
         let pool = pool_ep().await;
-        append_item(&pool, "tok", "c", obj(&[]), 1, 86400).await.unwrap();
+        append_item(&pool, "tok", "c", obj(&[]), 1, 86400)
+            .await
+            .unwrap();
         // cap=1 reached -> TooLarge
-        assert!(matches!(append_item(&pool, "tok", "c", obj(&[]), 1, 86400).await.unwrap(), Mutation::TooLarge));
+        assert!(matches!(
+            append_item(&pool, "tok", "c", obj(&[]), 1, 86400)
+                .await
+                .unwrap(),
+            Mutation::TooLarge
+        ));
     }
 
     #[tokio::test]
@@ -294,10 +354,14 @@ mod tests {
         for i in 0..20 {
             let p = pool.clone();
             handles.push(tokio::spawn(async move {
-                append_item(&p, "tok", "items", obj(&[("n", json!(i))]), 1000, 86400).await.unwrap();
+                append_item(&p, "tok", "items", obj(&[("n", json!(i))]), 1000, 86400)
+                    .await
+                    .unwrap();
             }));
         }
-        for h in handles { h.await.unwrap(); }
+        for h in handles {
+            h.await.unwrap();
+        }
         let items = list_items(&pool, "tok", "items").await.unwrap();
         assert_eq!(items.len(), 20, "no lost update under concurrent writers");
         let mut ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();

@@ -69,7 +69,10 @@ pub struct TunnelRegistry {
 
 impl Default for TunnelRegistry {
     fn default() -> Self {
-        TunnelRegistry { conns: DashMap::new(), generation: AtomicU64::new(1) }
+        TunnelRegistry {
+            conns: DashMap::new(),
+            generation: AtomicU64::new(1),
+        }
     }
 }
 
@@ -86,7 +89,11 @@ impl TunnelRegistry {
     /// Bind a new connection for `token` (last-authenticated-bind-wins). Returns
     /// `(connection, generation)`; the caller's socket task should exit when it
     /// observes a different current generation (takeover → 4409).
-    pub fn bind(&self, token: &str, outbound: mpsc::UnboundedSender<Value>) -> (Arc<TunnelConnection>, u64) {
+    pub fn bind(
+        &self,
+        token: &str,
+        outbound: mpsc::UnboundedSender<Value>,
+    ) -> (Arc<TunnelConnection>, u64) {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst);
         let conn = Arc::new(TunnelConnection::new(outbound, generation));
         self.conns.insert(token.to_string(), conn.clone());
@@ -127,7 +134,8 @@ mod tests {
         assert!(reg.is_active("tok"));
         assert_eq!(reg.current_generation("tok"), Some(gen));
         let (id, rx) = conn.register_request().await;
-        conn.resolve(id, json!({"t":"res","id":id,"status":200})).await;
+        conn.resolve(id, json!({"t":"res","id":id,"status":200}))
+            .await;
         let frame = rx.await.unwrap();
         assert_eq!(frame["status"], json!(200));
     }

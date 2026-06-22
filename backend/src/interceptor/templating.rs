@@ -37,7 +37,10 @@ pub struct TemplateContext {
 
 impl TemplateContext {
     fn header(&self, name: &str) -> String {
-        self.headers.get(&name.to_ascii_lowercase()).cloned().unwrap_or_default()
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -111,7 +114,7 @@ fn t_random(args: &[String]) -> Option<String> {
             if length == 0 || length > 4096 {
                 return None;
             }
-            let nbytes = (length + 1) / 2;
+            let nbytes = length.div_ceil(2);
             let mut rng = rand::thread_rng();
             let mut buf = vec![0u8; nbytes];
             rng.fill(&mut buf[..]);
@@ -134,10 +137,9 @@ fn t_request(ctx: &TemplateContext, expr: &str) -> Option<String> {
                 Some(ctx.path_params.get(k).cloned().unwrap_or_default())
             } else if let Some(k) = rest.strip_prefix("header.") {
                 Some(ctx.header(k))
-            } else if let Some(jp) = rest.strip_prefix("body.") {
-                Some(jsonpath_lite(&ctx.body, jp).unwrap_or_default())
             } else {
-                None
+                rest.strip_prefix("body.")
+                    .map(|jp| jsonpath_lite(&ctx.body, jp).unwrap_or_default())
             }
         }
     }
@@ -268,7 +270,12 @@ mod tests {
 
     #[test]
     fn ssti_probes_returned_verbatim() {
-        for probe in ["{{7*7}}", "{{config}}", "{{''.__class__.__mro__}}", "{{self}}"] {
+        for probe in [
+            "{{7*7}}",
+            "{{config}}",
+            "{{''.__class__.__mro__}}",
+            "{{self}}",
+        ] {
             assert_eq!(r(probe), probe, "probe must be left literal");
         }
     }
@@ -302,7 +309,10 @@ mod tests {
     #[test]
     fn size_and_tag_caps() {
         let big = "x".repeat(20);
-        assert_eq!(render("{{request.method}}", &ctx(), 5, 500), "{{request.method}}"); // over size -> unrendered
+        assert_eq!(
+            render("{{request.method}}", &ctx(), 5, 500),
+            "{{request.method}}"
+        ); // over size -> unrendered
         let _ = big;
         // tag cap: only the first tag renders, the rest stay literal.
         let out = render("{{request.method}}{{request.method}}", &ctx(), 256_000, 1);

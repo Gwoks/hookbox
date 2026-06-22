@@ -24,7 +24,10 @@ pub struct FeedEvent {
 
 impl FeedEvent {
     pub fn new(kind: impl Into<String>, data: Value) -> Self {
-        FeedEvent { kind: kind.into(), data }
+        FeedEvent {
+            kind: kind.into(),
+            data,
+        }
     }
 
     /// The WS wire envelope: `{"type": kind, "data": data}`.
@@ -47,7 +50,9 @@ pub struct FeedHub {
 
 impl Default for FeedHub {
     fn default() -> Self {
-        FeedHub { channels: DashMap::new() }
+        FeedHub {
+            channels: DashMap::new(),
+        }
     }
 }
 
@@ -69,7 +74,10 @@ impl FeedHub {
             .entry(token.to_string())
             .or_insert_with(|| {
                 let (tx, _rx) = broadcast::channel(CHANNEL_CAP);
-                Arc::new(Channel { tx, subscribers: AtomicUsize::new(0) })
+                Arc::new(Channel {
+                    tx,
+                    subscribers: AtomicUsize::new(0),
+                })
             })
             .clone()
     }

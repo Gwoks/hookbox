@@ -24,7 +24,10 @@ fn int_env(name: &str, fallback: i64) -> i64 {
 fn bool_env(name: &str, fallback: bool) -> bool {
     match std::env::var(name) {
         Ok(v) if !v.trim().is_empty() => {
-            matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
         }
         _ => fallback,
     }
@@ -184,8 +187,13 @@ mod tests {
         // remove_var -> from_env window can't observe another test's writes.
         let _guard = crate::testutil::env_lock();
         for k in [
-            "MOCK_DOMAIN", "APP_HOST", "APP_PORT", "PUBLIC_PORT", "TRACE_CAP",
-            "SESSION_RATE_LIMIT_PER_MIN", "MITM_ALLOW_PRIVATE",
+            "MOCK_DOMAIN",
+            "APP_HOST",
+            "APP_PORT",
+            "PUBLIC_PORT",
+            "TRACE_CAP",
+            "SESSION_RATE_LIMIT_PER_MIN",
+            "MITM_ALLOW_PRIVATE",
         ] {
             std::env::remove_var(k);
         }

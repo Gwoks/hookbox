@@ -37,14 +37,14 @@ text**. Unknown/malformed tags are left literal and never error the mock path.
 
 ## 5. Stateful / multi-step transactions
 
-Rules can read, require, and mutate per-endpoint state (Redis hash `state:<token>`,
+Rules can read, require, and mutate per-endpoint state (SQLite `endpoint_state`,
 24h TTL). Example: a `POST /login` rule sets `authenticated=true`; a later
 `/dashboard` rule matches only when that state holds. State is per-endpoint
 (shared across all callers of the mock) and clearable from the dashboard.
 
 ## 6. Instant Auto-CRUD
 
-Toggle Auto-CRUD and the endpoint becomes a REST DB backend over a Redis-backed
+Toggle Auto-CRUD and the endpoint becomes a REST DB backend over a SQLite-backed
 JSON array per collection: `POST/GET/PUT/PATCH/DELETE /<collection>[/<id>]`, with
 generated UUID ids, no rules required. Bounded by configurable item-count and
 size caps.
@@ -52,7 +52,7 @@ size caps.
 ## 7. Proxy / partial mocking (MITM)
 
 Set a `target_url` and unmatched requests forward to the real upstream via
-`httpx`; the real response is captured, returned to the caller, and logged as
+`reqwest`; the real response is captured, returned to the caller, and logged as
 "Proxied". A matching local rule always wins over the forward. An SSRF guard
 blocks loopback/private/link-local/metadata targets (evaluated on the resolved
 IP), strips the owner capability and sensitive headers, and caps body + timeout.
@@ -66,15 +66,15 @@ wildcard origin.
 
 ## 9. Simulated network conditions
 
-Per-endpoint / per-rule **latency** (0–10000ms), **rate limit** (req/min via a
-Redis token bucket; `0` = unlimited; covers MITM forwards and CRUD writes too),
+Per-endpoint / per-rule **latency** (0–10000ms), **rate limit** (req/min via an
+in-process token bucket; `0` = unlimited; covers MITM forwards and CRUD writes too),
 and a **chaos** percentage that injects random `502/503/504` by default with an
 opt-in connection-drop mode — all bounded by the global rate/size caps.
 
 ## 10. Real-time split-screen dashboard
 
 A live feed streams every served request over a WebSocket (SSE fallback), fanned
-out via Redis pub/sub. A deep inspector shows Headers · Query · Body · Response
+out via an in-process broadcast channel. A deep inspector shows Headers · Query · Body · Response
 Served · State & Tracing for each trace. The feed and inspector reconcile via the
 management API; the feed is **owner-gated** (capability required to subscribe).
 
@@ -86,16 +86,16 @@ never drifts between sweeps.
 
 ## 12. Local tunnel CLI
 
-`python -m tunnel --port 3000 --endpoint <slug> --secret <owner_secret>`
-reverse-tunnels public traffic for `<slug>` to your localhost over an
-authenticated WebSocket control channel, with backoff reconnect. Tunneled traffic
-appears in the live feed labeled `tunnel`.
+`tunnel --port 3000 --endpoint <slug> --secret <owner_secret>` (a Rust binary built
+alongside the server) reverse-tunnels public traffic for `<slug>` to your localhost
+over an authenticated WebSocket control channel, with backoff reconnect. Tunneled
+traffic appears in the live feed labeled `tunnel`.
 
 ## 13. Deployment
 
-`docker compose up` brings up the app + Redis on an internal network, each
-healthchecked, with named persistent volumes for the SQLite data and Redis AOF.
-The app waits for Redis to be healthy before starting.
+`docker compose up` brings up a single healthchecked app container (the Rust binary
++ SQLite), with a named persistent volume for the SQLite data. No Redis, no
+Postgres — all four former Redis duties run in-process.
 
 ---
 

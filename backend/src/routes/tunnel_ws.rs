@@ -67,7 +67,9 @@ pub async fn forward_to_tunnel(
     // Build the response from the CLI's res frame.
     let status = res.get("status").and_then(Value::as_i64).unwrap_or(200) as u16;
     let body_b64 = res.get("body_b64").and_then(Value::as_str).unwrap_or("");
-    let body_bytes = base64::engine::general_purpose::STANDARD.decode(body_b64).unwrap_or_default();
+    let body_bytes = base64::engine::general_purpose::STANDARD
+        .decode(body_b64)
+        .unwrap_or_default();
     let mut resp = Response::builder()
         .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
         .body(Body::from(body_bytes))
@@ -75,7 +77,14 @@ pub async fn forward_to_tunnel(
     if let Some(h) = res.get("headers").and_then(Value::as_object) {
         for (k, v) in h {
             let kl = k.to_ascii_lowercase();
-            if matches!(kl.as_str(), "connection" | "keep-alive" | "transfer-encoding" | "content-length" | "content-encoding") {
+            if matches!(
+                kl.as_str(),
+                "connection"
+                    | "keep-alive"
+                    | "transfer-encoding"
+                    | "content-length"
+                    | "content-encoding"
+            ) {
                 continue;
             }
             if let (Ok(name), Some(val)) = (HeaderName::from_bytes(k.as_bytes()), v.as_str()) {
@@ -145,7 +154,9 @@ async fn run_tunnel(state: AppState, slug: String, socket: WebSocket) {
     publish_endpoint_updated(&state, &slug);
 
     // Greet the CLI.
-    let _ = sink.send(Message::Text(json!({"t":"bound","slug": slug}).to_string())).await;
+    let _ = sink
+        .send(Message::Text(json!({"t":"bound","slug": slug}).to_string()))
+        .await;
 
     // Outbound pump: forward queued frames (req / rebound err) to the socket.
     let pump = tokio::spawn(async move {
@@ -167,7 +178,9 @@ async fn run_tunnel(state: AppState, slug: String, socket: WebSocket) {
     while let Some(Ok(msg)) = stream.next().await {
         // If a newer bind took over, stop serving this socket.
         if state.tunnels.current_generation(&slug) != Some(generation) {
-            let _ = conn.outbound.send(json!({"t":"err","message":"rebound elsewhere"}));
+            let _ = conn
+                .outbound
+                .send(json!({"t":"err","message":"rebound elsewhere"}));
             break;
         }
         match msg {
@@ -209,6 +222,9 @@ async fn handle_cli_frame(conn: &crate::tunnels::TunnelConnection, raw: &str) {
 fn publish_endpoint_updated(state: &AppState, token: &str) {
     state.feed_hub.publish(
         token,
-        FeedEvent::new("endpoint_updated", json!({"token": token, "fields": ["tunnel_active"]})),
+        FeedEvent::new(
+            "endpoint_updated",
+            json!({"token": token, "fields": ["tunnel_active"]}),
+        ),
     );
 }

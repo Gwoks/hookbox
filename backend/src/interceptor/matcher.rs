@@ -18,7 +18,9 @@
 use std::collections::BTreeMap;
 
 use crate::helpers::jsonpath_lite;
-use crate::models::{BodyCondition, MatchCriteria, ResponseSpec, StateRequirement, StateWrite, WebhookAction};
+use crate::models::{
+    BodyCondition, MatchCriteria, ResponseSpec, StateRequirement, StateWrite, WebhookAction,
+};
 
 /// A compiled path: a sequence of segment matchers plus a trailing-wildcard flag.
 #[derive(Debug, Clone)]
@@ -40,12 +42,20 @@ enum Segment {
 /// Compile a match path (`/users/:id`, `/v1/*`, `/exact`) into a `CompiledPath`.
 /// Mirrors `matcher.py::compile_path` semantics.
 pub fn compile_path(path: &str) -> CompiledPath {
-    let mut p = if path.is_empty() { "/*".to_string() } else { path.to_string() };
+    let mut p = if path.is_empty() {
+        "/*".to_string()
+    } else {
+        path.to_string()
+    };
     if !p.starts_with('/') {
         p = format!("/{p}");
     }
     if p == "/*" || p == "*" || p == "/**" {
-        return CompiledPath { segments: Vec::new(), wildcard: false, catch_all: true };
+        return CompiledPath {
+            segments: Vec::new(),
+            wildcard: false,
+            catch_all: true,
+        };
     }
     let mut wildcard = false;
     if let Some(stripped) = p.strip_suffix("/*") {
@@ -63,7 +73,11 @@ pub fn compile_path(path: &str) -> CompiledPath {
             }
         })
         .collect();
-    CompiledPath { segments, wildcard, catch_all: false }
+    CompiledPath {
+        segments,
+        wildcard,
+        catch_all: false,
+    }
 }
 
 impl CompiledPath {
@@ -169,11 +183,15 @@ fn method_ok(rule: &CompiledRule, method: &str) -> bool {
 }
 
 fn headers_ok(rule: &CompiledRule, headers: &BTreeMap<String, String>) -> bool {
-    rule.headers.iter().all(|(name, want)| headers.get(name) == Some(want))
+    rule.headers
+        .iter()
+        .all(|(name, want)| headers.get(name) == Some(want))
 }
 
 fn query_ok(rule: &CompiledRule, query: &BTreeMap<String, String>) -> bool {
-    rule.query.iter().all(|(key, want)| query.get(key) == Some(want))
+    rule.query
+        .iter()
+        .all(|(key, want)| query.get(key) == Some(want))
 }
 
 fn body_ok(rule: &CompiledRule, body: &str) -> bool {
@@ -254,7 +272,10 @@ pub fn select<'a>(
         if rule.gates_on_state() && !state_ok(rule, state) {
             continue;
         }
-        return Some(MatchResult { rule, path_params: params });
+        return Some(MatchResult {
+            rule,
+            path_params: params,
+        });
     }
     None
 }
@@ -264,8 +285,23 @@ mod tests {
     use super::*;
 
     fn rule(id: i64, priority: i64, method: &str, path: &str) -> CompiledRule {
-        let mc = MatchCriteria { method: method.into(), path: path.into(), ..Default::default() };
-        compile_rule(id, priority, true, &mc, ResponseSpec::default(), vec![], None, None, None, None)
+        let mc = MatchCriteria {
+            method: method.into(),
+            path: path.into(),
+            ..Default::default()
+        };
+        compile_rule(
+            id,
+            priority,
+            true,
+            &mc,
+            ResponseSpec::default(),
+            vec![],
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     fn empty() -> BTreeMap<String, String> {
@@ -307,19 +343,54 @@ mod tests {
         r.enabled = false;
         assert!(select(&[r], "POST", "/x", &empty(), &empty(), "", &empty()).is_none());
         let r2 = rule(1, 10, "POST", "/*");
-        assert!(select(&[r2.clone()], "GET", "/x", &empty(), &empty(), "", &empty()).is_none());
+        assert!(select(
+            std::slice::from_ref(&r2),
+            "GET",
+            "/x",
+            &empty(),
+            &empty(),
+            "",
+            &empty()
+        )
+        .is_none());
         assert!(select(&[r2], "post", "/x", &empty(), &empty(), "", &empty()).is_some());
     }
 
     #[test]
     fn body_and_state_conditions() {
         let mut r = rule(1, 10, "ANY", "/*");
-        r.body_conditions = vec![BodyCondition { path: "kind".into(), op: "eq".into(), value: Some("vip".into()) }];
-        assert!(select(&[r.clone()], "POST", "/x", &empty(), &empty(), r#"{"kind":"vip"}"#, &empty()).is_some());
-        assert!(select(&[r], "POST", "/x", &empty(), &empty(), r#"{"kind":"std"}"#, &empty()).is_none());
+        r.body_conditions = vec![BodyCondition {
+            path: "kind".into(),
+            op: "eq".into(),
+            value: Some("vip".into()),
+        }];
+        assert!(select(
+            &[r.clone()],
+            "POST",
+            "/x",
+            &empty(),
+            &empty(),
+            r#"{"kind":"vip"}"#,
+            &empty()
+        )
+        .is_some());
+        assert!(select(
+            &[r],
+            "POST",
+            "/x",
+            &empty(),
+            &empty(),
+            r#"{"kind":"std"}"#,
+            &empty()
+        )
+        .is_none());
 
         let mut sr = rule(2, 10, "ANY", "/*");
-        sr.state_requirements = vec![StateRequirement { key: "logged_in".into(), op: "eq".into(), value: Some("1".into()) }];
+        sr.state_requirements = vec![StateRequirement {
+            key: "logged_in".into(),
+            op: "eq".into(),
+            value: Some("1".into()),
+        }];
         // fail-closed: empty state -> skip.
         assert!(select(&[sr.clone()], "GET", "/x", &empty(), &empty(), "", &empty()).is_none());
         let mut state = BTreeMap::new();

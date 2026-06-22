@@ -46,7 +46,9 @@ pub struct RuleCache {
 
 impl Default for RuleCache {
     fn default() -> Self {
-        RuleCache { entries: DashMap::new() }
+        RuleCache {
+            entries: DashMap::new(),
+        }
     }
 }
 
@@ -62,7 +64,11 @@ impl RuleCache {
 
     /// Resolve a token: serve from cache, else cold-load from SQLite. Returns
     /// `None` for a genuinely unknown endpoint (no row at all → 404).
-    pub async fn get(&self, pool: &SqlitePool, token: &str) -> Result<Option<Resolved>, sqlx::Error> {
+    pub async fn get(
+        &self,
+        pool: &SqlitePool,
+        token: &str,
+    ) -> Result<Option<Resolved>, sqlx::Error> {
         if let Some(hit) = self.entries.get(token) {
             return Ok(Some(hit.clone()));
         }
@@ -80,10 +86,11 @@ impl RuleCache {
             return Ok(Some(Resolved::Gone));
         }
 
-        let rule_rows = sqlx::query("SELECT * FROM mock_rules WHERE token = ? ORDER BY priority, id")
-            .bind(token)
-            .fetch_all(pool)
-            .await?;
+        let rule_rows =
+            sqlx::query("SELECT * FROM mock_rules WHERE token = ? ORDER BY priority, id")
+                .bind(token)
+                .fetch_all(pool)
+                .await?;
         let mut rules = Vec::with_capacity(rule_rows.len());
         let mut any_state = false;
         for r in &rule_rows {
@@ -94,7 +101,8 @@ impl RuleCache {
             let mc: MatchCriteria = serde_json::from_str(&match_json).unwrap_or_default();
             let rsp: ResponseSpec = serde_json::from_str(&response_json).unwrap_or_default();
             let writes: Vec<StateWrite> = serde_json::from_str(&writes_json).unwrap_or_default();
-            let webhook: Option<WebhookAction> = webhook_json.and_then(|w| serde_json::from_str(&w).ok());
+            let webhook: Option<WebhookAction> =
+                webhook_json.and_then(|w| serde_json::from_str(&w).ok());
             let compiled = compile_rule(
                 r.get("id"),
                 r.get("priority"),
@@ -141,7 +149,9 @@ mod tests {
         let p = db::pool(":memory:").await.unwrap();
         db::migrate(&p).await.unwrap();
         sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&p).await.unwrap();
+            .execute(&p)
+            .await
+            .unwrap();
         p
     }
 
@@ -149,7 +159,9 @@ mod tests {
     async fn cold_load_compile_and_invalidate() {
         let p = pool().await;
         sqlx::query("INSERT INTO endpoints (token, owner_id, auto_crud) VALUES ('tok','o',1)")
-            .execute(&p).await.unwrap();
+            .execute(&p)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO mock_rules (token, priority, enabled, match_json, response_json, state_writes_json)
              VALUES ('tok', 50, 1, '{\"method\":\"GET\",\"path\":\"/*\"}', '{\"status_code\":200}', '[]')",
@@ -168,8 +180,13 @@ mod tests {
         assert!(cache.get(&p, "nope").await.unwrap().is_none());
         // tombstone -> Gone
         sqlx::query("UPDATE endpoints SET gone_at = datetime('now') WHERE token='tok'")
-            .execute(&p).await.unwrap();
+            .execute(&p)
+            .await
+            .unwrap();
         cache.invalidate("tok");
-        assert!(matches!(cache.get(&p, "tok").await.unwrap().unwrap(), Resolved::Gone));
+        assert!(matches!(
+            cache.get(&p, "tok").await.unwrap().unwrap(),
+            Resolved::Gone
+        ));
     }
 }

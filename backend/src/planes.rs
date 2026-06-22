@@ -5,12 +5,12 @@
 //! The router middleware (`router.rs`) applies it.
 //!
 //! Planes:
-//!   * `Mock` (P1) — the public wildcard mock surface `<token>.<MOCK_DOMAIN>/<path>`
-//!                   and the localhost path-fallback `/e/<token>/<path>`. On a
-//!                   mock host EVERYTHING (incl. `/api`, `/static`) is the mock's
-//!                   own path — management is unreachable there by construction.
-//!   * `Api`  (P2) — the management REST API `/api/**` (app host only).
-//!   * `Ui`   (P3) — dashboard + static + WS/SSE feed + health (app host).
+//! - `Mock` (P1) — the public wildcard mock surface `<token>.<MOCK_DOMAIN>/<path>`
+//!   and the localhost path-fallback `/e/<token>/<path>`. On a mock host
+//!   EVERYTHING (incl. `/api`, `/static`) is the mock's own path — management is
+//!   unreachable there by construction.
+//! - `Api` (P2) — the management REST API `/api/**` (app host only).
+//! - `Ui` (P3) — dashboard + static + WS/SSE feed + health (app host).
 //!
 //! The bare apex, `localhost`, `127.0.0.1`, `[::1]`, `<APP_HOST>` all resolve to
 //! the UI plane (AC-6a). The single load-bearing guarantee carried verbatim:
@@ -44,13 +44,25 @@ pub struct PlaneResult {
 
 impl PlaneResult {
     fn ui() -> Self {
-        PlaneResult { plane: Plane::Ui, token: None, mock_path: None }
+        PlaneResult {
+            plane: Plane::Ui,
+            token: None,
+            mock_path: None,
+        }
     }
     fn api() -> Self {
-        PlaneResult { plane: Plane::Api, token: None, mock_path: None }
+        PlaneResult {
+            plane: Plane::Api,
+            token: None,
+            mock_path: None,
+        }
     }
     fn mock(token: String, mock_path: String) -> Self {
-        PlaneResult { plane: Plane::Mock, token: Some(token), mock_path: Some(mock_path) }
+        PlaneResult {
+            plane: Plane::Mock,
+            token: Some(token),
+            mock_path: Some(mock_path),
+        }
     }
 }
 
@@ -126,7 +138,11 @@ pub fn resolve_plane(
     if let Some(sub) = subdomain_of(host, mock_domain) {
         // A subdomain that collides with an app host stays UI (token==app host probe).
         if !app_hosts.contains(&sub) {
-            let mock_path = if path.is_empty() { "/".to_string() } else { path.to_string() };
+            let mock_path = if path.is_empty() {
+                "/".to_string()
+            } else {
+                path.to_string()
+            };
             return PlaneResult::mock(sub, mock_path);
         }
     }
@@ -241,7 +257,10 @@ mod tests {
     #[test]
     fn api_and_ui_classification_on_app_host() {
         assert_eq!(resolve("localhost", "/api").plane, Plane::Api);
-        assert_eq!(resolve("localhost", "/api/endpoints/x/rules").plane, Plane::Api);
+        assert_eq!(
+            resolve("localhost", "/api/endpoints/x/rules").plane,
+            Plane::Api
+        );
         assert_eq!(resolve("localhost", "/ws/tok").plane, Plane::Ui);
         assert_eq!(resolve("localhost", "/sse/tok").plane, Plane::Ui);
         assert_eq!(resolve("localhost", "/static/app.css").plane, Plane::Ui);

@@ -44,7 +44,8 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
 ) -> Response {
     let authed = crate::auth::verify_cap_owns_token(&state.pool, &token, q.cap.as_deref()).await;
-    let at_cap = state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint;
+    let at_cap =
+        state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint;
     ws.on_upgrade(move |socket| async move {
         if !authed {
             close_ws(socket, 4401, "unauthorized").await;
@@ -122,13 +123,22 @@ pub async fn sse_handler(
         return ApiError::unauthorized("Valid owner capability required.").into_response();
     }
     if state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint {
-        return ApiError::new(axum::http::StatusCode::SERVICE_UNAVAILABLE, "too_many_connections", "Too many feed connections.").into_response();
+        return ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "too_many_connections",
+            "Too many feed connections.",
+        )
+        .into_response();
     }
     let sub = state.feed_hub.subscribe(&token);
     let token_for_hello = token.clone();
     let stream = sse_stream(sub, token_for_hello);
     Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(SSE_HEARTBEAT_S)).text("ping"))
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(SSE_HEARTBEAT_S))
+                .text("ping"),
+        )
         .into_response()
 }
 
@@ -152,5 +162,7 @@ fn sse_stream(
 }
 
 fn sse_event(event: &FeedEvent) -> Event {
-    Event::default().event(&event.kind).data(event.data.to_string())
+    Event::default()
+        .event(&event.kind)
+        .data(event.data.to_string())
 }

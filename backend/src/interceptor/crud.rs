@@ -30,16 +30,28 @@ pub struct CrudResponse {
 
 impl CrudResponse {
     fn json(status: u16, body: Value) -> Self {
-        CrudResponse { status, body: Some(body) }
+        CrudResponse {
+            status,
+            body: Some(body),
+        }
     }
     fn no_content() -> Self {
-        CrudResponse { status: 204, body: None }
+        CrudResponse {
+            status: 204,
+            body: None,
+        }
     }
     fn bad_request(detail: &str) -> Self {
-        CrudResponse::json(400, serde_json::json!({"error": "bad_request", "detail": detail}))
+        CrudResponse::json(
+            400,
+            serde_json::json!({"error": "bad_request", "detail": detail}),
+        )
     }
     fn not_found() -> Self {
-        CrudResponse::json(404, serde_json::json!({"error": "not_found", "detail": "No such item."}))
+        CrudResponse::json(
+            404,
+            serde_json::json!({"error": "not_found", "detail": "No such item."}),
+        )
     }
 }
 
@@ -69,14 +81,18 @@ pub fn matches(mock_path: &str) -> bool {
     parse_path(mock_path).is_some()
 }
 
-fn parse_object_body(body_text: &str, cfg: &Config) -> Result<serde_json::Map<String, Value>, String> {
+fn parse_object_body(
+    body_text: &str,
+    cfg: &Config,
+) -> Result<serde_json::Map<String, Value>, String> {
     if body_text.trim().is_empty() {
         return Err("empty body".into());
     }
     if body_text.len() > cfg.crud_max_item_bytes {
         return Err("item too large".into());
     }
-    let v: Value = serde_json::from_str(body_text).map_err(|_| "body is not valid JSON".to_string())?;
+    let v: Value =
+        serde_json::from_str(body_text).map_err(|_| "body is not valid JSON".to_string())?;
     match v {
         Value::Object(m) => Ok(m),
         _ => Err("body must be a JSON object".into()),
@@ -84,7 +100,9 @@ fn parse_object_body(body_text: &str, cfg: &Config) -> Result<serde_json::Map<St
 }
 
 fn find<'a>(items: &'a [Value], id: &str) -> Option<&'a Value> {
-    items.iter().find(|it| it.get("id").and_then(|v| v.as_str()) == Some(id))
+    items
+        .iter()
+        .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(id))
 }
 
 /// Execute one Auto-CRUD operation. Returns a `CrudResponse`, or `Err(())` on a
@@ -108,7 +126,9 @@ pub async fn handle(
     if ident.is_none() {
         match method.as_str() {
             "GET" | "HEAD" => {
-                let items = crud_store::list_items(&state.pool, token, &coll).await.map_err(|_| ())?;
+                let items = crud_store::list_items(&state.pool, token, &coll)
+                    .await
+                    .map_err(|_| ())?;
                 return Ok(CrudResponse::json(200, Value::Array(items)));
             }
             "POST" => {
@@ -116,14 +136,27 @@ pub async fn handle(
                     Ok(o) => o,
                     Err(e) => return Ok(CrudResponse::bad_request(&e)),
                 };
-                return match crud_store::append_item(&state.pool, token, &coll, obj, cfg.crud_max_items, ttl).await {
+                return match crud_store::append_item(
+                    &state.pool,
+                    token,
+                    &coll,
+                    obj,
+                    cfg.crud_max_items,
+                    ttl,
+                )
+                .await
+                {
                     Ok(Mutation::Ok(_, item)) => Ok(CrudResponse::json(201, item)),
                     Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("collection is full")),
                     Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
                     Err(_) => Err(()),
                 };
             }
-            _ => return Ok(CrudResponse::bad_request("an item id is required for this method")),
+            _ => {
+                return Ok(CrudResponse::bad_request(
+                    "an item id is required for this method",
+                ))
+            }
         }
     }
 
@@ -131,7 +164,9 @@ pub async fn handle(
     let id = ident.unwrap();
     match method.as_str() {
         "GET" | "HEAD" => {
-            let items = crud_store::list_items(&state.pool, token, &coll).await.map_err(|_| ())?;
+            let items = crud_store::list_items(&state.pool, token, &coll)
+                .await
+                .map_err(|_| ())?;
             match find(&items, &id) {
                 Some(item) => Ok(CrudResponse::json(200, item.clone())),
                 None => Ok(CrudResponse::not_found()),
@@ -154,7 +189,17 @@ pub async fn handle(
                 Ok(o) => o,
                 Err(e) => return Ok(CrudResponse::bad_request(&e)),
             };
-            match crud_store::merge_item(&state.pool, token, &coll, &id, patch, cfg.crud_max_item_bytes, ttl).await {
+            match crud_store::merge_item(
+                &state.pool,
+                token,
+                &coll,
+                &id,
+                patch,
+                cfg.crud_max_item_bytes,
+                ttl,
+            )
+            .await
+            {
                 Ok(Mutation::Ok(_, item)) => Ok(CrudResponse::json(200, item)),
                 Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
                 Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("item too large")),
@@ -179,7 +224,10 @@ mod tests {
     fn parse_path_rules() {
         assert_eq!(parse_path("/books"), Some(("books".into(), None)));
         assert_eq!(parse_path("/books/"), Some(("books".into(), None)));
-        assert_eq!(parse_path("/books/abc"), Some(("books".into(), Some("abc".into()))));
+        assert_eq!(
+            parse_path("/books/abc"),
+            Some(("books".into(), Some("abc".into())))
+        );
         // 3 segments -> not CRUD
         assert_eq!(parse_path("/books/abc/x"), None);
         // unsafe segment -> not CRUD

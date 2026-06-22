@@ -164,7 +164,10 @@ mod tests {
             axum::http::StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            require_owner(&pool, Some("Basic xyz")).await.unwrap_err().status,
+            require_owner(&pool, Some("Basic xyz"))
+                .await
+                .unwrap_err()
+                .status,
             axum::http::StatusCode::UNAUTHORIZED
         );
         assert_eq!(
@@ -182,7 +185,10 @@ mod tests {
         // Presenting the public owner_id as the bearer must 401 (it is not a secret).
         let header = format!("Bearer {owner_id}");
         assert_eq!(
-            require_owner(&pool, Some(&header)).await.unwrap_err().status,
+            require_owner(&pool, Some(&header))
+                .await
+                .unwrap_err()
+                .status,
             axum::http::StatusCode::UNAUTHORIZED
         );
     }
@@ -204,11 +210,17 @@ mod tests {
 
         // Old secret now 401s; new secret works.
         assert_eq!(
-            require_owner(&pool, Some(&old_header)).await.unwrap_err().status,
+            require_owner(&pool, Some(&old_header))
+                .await
+                .unwrap_err()
+                .status,
             axum::http::StatusCode::UNAUTHORIZED
         );
         let new_header = format!("Bearer {new_secret}");
-        assert_eq!(require_owner(&pool, Some(&new_header)).await.unwrap(), owner_id);
+        assert_eq!(
+            require_owner(&pool, Some(&new_header)).await.unwrap(),
+            owner_id
+        );
     }
 
     #[tokio::test]
@@ -233,13 +245,19 @@ mod tests {
             .unwrap();
 
         // Owner A owns it.
-        assert!(assert_owns_endpoint(&pool, "tokAAAAAAA", &owner_id).await.is_ok());
+        assert!(assert_owns_endpoint(&pool, "tokAAAAAAA", &owner_id)
+            .await
+            .is_ok());
         // Owner B sees 404 (never 403) for a token that exists but is not theirs.
-        let err = assert_owns_endpoint(&pool, "tokAAAAAAA", &b_id).await.unwrap_err();
+        let err = assert_owns_endpoint(&pool, "tokAAAAAAA", &b_id)
+            .await
+            .unwrap_err();
         assert_eq!(err.status, axum::http::StatusCode::NOT_FOUND);
         assert_eq!(err.code, "not_found");
         // A token that does not exist is also 404 (indistinguishable).
-        let err2 = assert_owns_endpoint(&pool, "doesnotexi", &owner_id).await.unwrap_err();
+        let err2 = assert_owns_endpoint(&pool, "doesnotexi", &owner_id)
+            .await
+            .unwrap_err();
         assert_eq!(err2.status, axum::http::StatusCode::NOT_FOUND);
 
         // Feed/tunnel cap gate: correct cap+token true; wrong-owner cap false.

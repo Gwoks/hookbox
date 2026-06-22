@@ -25,11 +25,22 @@ use crate::interceptor::ssrf::resolve_and_check;
 /// Response headers never copied back from upstream (hop-by-hop + Set-Cookie +
 /// upstream CORS + framing — we inject our own P1 CORS and re-send the body).
 const STRIP_RESPONSE_HEADERS: [&str; 16] = [
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade",
-    "content-length", "content-encoding", "set-cookie",
-    "access-control-allow-origin", "access-control-allow-credentials",
-    "access-control-expose-headers", "access-control-max-age", "vary",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-encoding",
+    "set-cookie",
+    "access-control-allow-origin",
+    "access-control-allow-credentials",
+    "access-control-expose-headers",
+    "access-control-max-age",
+    "vary",
 ];
 
 /// The captured upstream response (or an error mapped to 502/504 by the caller).
@@ -50,12 +61,25 @@ pub enum ProxyError {
 }
 
 /// Build `target_url + mock_path + ?query` (arch §4.4).
-fn build_target_url(target_url: &str, mock_path: &str, query: &BTreeMap<String, String>) -> Result<Url, ProxyError> {
-    let base = Url::parse(target_url).map_err(|e| ProxyError::Unreachable(format!("bad target_url: {e}")))?;
+fn build_target_url(
+    target_url: &str,
+    mock_path: &str,
+    query: &BTreeMap<String, String>,
+) -> Result<Url, ProxyError> {
+    let base = Url::parse(target_url)
+        .map_err(|e| ProxyError::Unreachable(format!("bad target_url: {e}")))?;
     let base_path = base.path().trim_end_matches('/');
-    let mp = if mock_path.starts_with('/') { mock_path.to_string() } else { format!("/{mock_path}") };
+    let mp = if mock_path.starts_with('/') {
+        mock_path.to_string()
+    } else {
+        format!("/{mock_path}")
+    };
     let full_path = format!("{base_path}{mp}");
-    let full_path = if full_path.is_empty() { "/".to_string() } else { full_path };
+    let full_path = if full_path.is_empty() {
+        "/".to_string()
+    } else {
+        full_path
+    };
     let mut url = base.clone();
     url.set_path(&full_path);
     if query.is_empty() {
@@ -74,8 +98,14 @@ fn build_target_url(target_url: &str, mock_path: &str, query: &BTreeMap<String, 
 fn safe_response_headers(resp: &reqwest::Response) -> Vec<(String, String)> {
     resp.headers()
         .iter()
-        .filter(|(k, _)| !STRIP_RESPONSE_HEADERS.contains(&k.as_str().to_ascii_lowercase().as_str()))
-        .filter_map(|(k, v)| v.to_str().ok().map(|vs| (k.as_str().to_string(), vs.to_string())))
+        .filter(|(k, _)| {
+            !STRIP_RESPONSE_HEADERS.contains(&k.as_str().to_ascii_lowercase().as_str())
+        })
+        .filter_map(|(k, v)| {
+            v.to_str()
+                .ok()
+                .map(|vs| (k.as_str().to_string(), vs.to_string()))
+        })
         .collect()
 }
 
@@ -92,9 +122,15 @@ pub async fn forward(
 ) -> Result<ProxyResponse, ProxyError> {
     let target_url = target_url.trim();
     if target_url.is_empty() {
-        return Err(ProxyError::Unreachable("no upstream target configured".into()));
+        return Err(ProxyError::Unreachable(
+            "no upstream target configured".into(),
+        ));
     }
-    let redirects_allowed = if cfg.mitm_follow_redirects { cfg.mitm_max_redirects } else { 0 };
+    let redirects_allowed = if cfg.mitm_follow_redirects {
+        cfg.mitm_max_redirects
+    } else {
+        0
+    };
     let fwd_headers = strip_forward_headers(headers_lower);
 
     let mut current_url = build_target_url(target_url, mock_path, query)?;
@@ -142,13 +178,20 @@ pub async fn forward(
         let status = resp.status();
         // Manual redirect handling so each hop is re-validated (AC-S4 redirects).
         if status.is_redirection() && redirects_left > 0 {
-            if let Some(loc) = resp.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()) {
+            if let Some(loc) = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+            {
                 redirects_left -= 1;
                 current_url = current_url
                     .join(loc)
                     .map_err(|e| ProxyError::Unreachable(format!("bad redirect: {e}")))?;
                 let code = status.as_u16();
-                if (code == 301 || code == 302 || code == 303) && current_method != "GET" && current_method != "HEAD" {
+                if (code == 301 || code == 302 || code == 303)
+                    && current_method != "GET"
+                    && current_method != "HEAD"
+                {
                     current_method = "GET".into();
                     current_body.clear();
                 } else {
@@ -160,14 +203,22 @@ pub async fn forward(
 
         let out_status = status.as_u16();
         let mut out_headers = safe_response_headers(&resp);
-        let full = resp.bytes().await.map_err(|e| ProxyError::Unreachable(format!("read body: {e}")))?;
+        let full = resp
+            .bytes()
+            .await
+            .map_err(|e| ProxyError::Unreachable(format!("read body: {e}")))?;
         let mut body = full.to_vec();
         let truncated = body.len() > cfg.mitm_max_body_bytes;
         if truncated {
             body.truncate(cfg.mitm_max_body_bytes);
             out_headers.push(("X-HookBox-Truncated".into(), "true".into()));
         }
-        return Ok(ProxyResponse { status: out_status, headers: out_headers, body, truncated });
+        return Ok(ProxyResponse {
+            status: out_status,
+            headers: out_headers,
+            body,
+            truncated,
+        });
     }
 }
 
@@ -193,7 +244,16 @@ mod tests {
     #[tokio::test]
     async fn ssrf_blocked_target_is_unreachable() {
         // A loopback target must be refused before any connection (502).
-        let res = forward(&cfg(), "http://127.0.0.1:9/x", "GET", "/x", &BTreeMap::new(), &BTreeMap::new(), b"").await;
+        let res = forward(
+            &cfg(),
+            "http://127.0.0.1:9/x",
+            "GET",
+            "/x",
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            b"",
+        )
+        .await;
         assert!(matches!(res, Err(ProxyError::Unreachable(_))));
     }
 }

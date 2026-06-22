@@ -24,7 +24,12 @@ pub struct RateLimitResult {
 
 impl RateLimitResult {
     fn unlimited() -> Self {
-        RateLimitResult { allowed: true, limit: 0, remaining: -1, retry_after: 0 }
+        RateLimitResult {
+            allowed: true,
+            limit: 0,
+            remaining: -1,
+            retry_after: 0,
+        }
     }
 }
 
@@ -43,7 +48,9 @@ pub struct Limiter {
 
 impl Default for Limiter {
     fn default() -> Self {
-        Limiter { buckets: DashMap::new() }
+        Limiter {
+            buckets: DashMap::new(),
+        }
     }
 }
 
@@ -85,10 +92,16 @@ impl Limiter {
         let mut entry = self
             .buckets
             .entry(key.to_string())
-            .or_insert_with(|| Bucket { tokens: limit as f64, last_refill: now, last_seen: now });
+            .or_insert_with(|| Bucket {
+                tokens: limit as f64,
+                last_refill: now,
+                last_seen: now,
+            });
 
         // Proportional refill since last_refill, capped at `limit`.
-        let elapsed = now.saturating_duration_since(entry.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(entry.last_refill)
+            .as_secs_f64();
         entry.tokens = (entry.tokens + elapsed * refill_per_sec).min(limit as f64);
         entry.last_refill = now;
         entry.last_seen = now;
@@ -134,7 +147,11 @@ impl Limiter {
         let stale: Vec<String> = self
             .buckets
             .iter()
-            .filter(|kv| now.saturating_duration_since(kv.value().last_seen).as_secs() >= idle_secs)
+            .filter(|kv| {
+                now.saturating_duration_since(kv.value().last_seen)
+                    .as_secs()
+                    >= idle_secs
+            })
             .map(|kv| kv.key().clone())
             .collect();
         for k in stale {
@@ -174,7 +191,9 @@ mod tests {
         assert_eq!(Limiter::key("tok", Some(7)), "rl:tok:7");
         let l = Limiter::new();
         // exhaust endpoint bucket; rule bucket is independent.
-        for _ in 0..2 { l.check("rl:tok", 2, 60); }
+        for _ in 0..2 {
+            l.check("rl:tok", 2, 60);
+        }
         assert!(!l.check("rl:tok", 2, 60).allowed);
         assert!(l.check("rl:tok:7", 2, 60).allowed);
     }

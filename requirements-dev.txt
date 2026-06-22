@@ -1,6 +1,0 @@
-# Dev/test dependencies (not needed at runtime).
--r requirements.txt
-pytest>=8.0
-pytest-asyncio>=0.23
-websockets>=12.0       # WS feed tests
-pip-audit>=2.7         # dependency CVE scan (CI)

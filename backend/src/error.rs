@@ -141,6 +141,9 @@ mod tests {
 
     #[test]
     fn validation_is_422() {
-        assert_eq!(ApiError::validation("bad").status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            ApiError::validation("bad").status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 }

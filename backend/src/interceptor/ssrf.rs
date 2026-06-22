@@ -67,7 +67,9 @@ pub fn resolve_and_check(host: &str, allow_private: bool) -> Result<Vec<IpAddr>,
     // Literal IP target: check directly, no DNS.
     if let Ok(literal) = host.parse::<IpAddr>() {
         if !allow_private && is_blocked_ip(&literal) {
-            return Err(SsrfBlocked(format!("target IP {host} is in a blocked range")));
+            return Err(SsrfBlocked(format!(
+                "target IP {host} is in a blocked range"
+            )));
         }
         return Ok(vec![literal]);
     }
@@ -79,12 +81,16 @@ pub fn resolve_and_check(host: &str, allow_private: bool) -> Result<Vec<IpAddr>,
     for sa in addrs {
         let ip = sa.ip();
         if !allow_private && is_blocked_ip(&ip) {
-            return Err(SsrfBlocked(format!("host {host:?} resolves to blocked address {ip}")));
+            return Err(SsrfBlocked(format!(
+                "host {host:?} resolves to blocked address {ip}"
+            )));
         }
         resolved.push(ip);
     }
     if resolved.is_empty() {
-        return Err(SsrfBlocked(format!("host {host:?} produced no usable address")));
+        return Err(SsrfBlocked(format!(
+            "host {host:?} produced no usable address"
+        )));
     }
     Ok(resolved)
 }
@@ -101,9 +107,20 @@ mod tests {
     #[test]
     fn blocks_the_resolved_ip_set() {
         for s in [
-            "127.0.0.1", "10.0.0.1", "172.16.5.5", "192.168.1.1", "169.254.169.254",
-            "0.0.0.0", "224.0.0.1", "100.100.0.1",
-            "::1", "fe80::1", "fc00::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::",
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.5.5",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "224.0.0.1",
+            "100.100.0.1",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::",
         ] {
             assert!(is_blocked_ip(&ip(s)), "{s} must be blocked");
         }
@@ -111,7 +128,12 @@ mod tests {
 
     #[test]
     fn allows_public_addresses() {
-        for s in ["8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"] {
+        for s in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:2800:220:1:248:1893:25c8:1946",
+        ] {
             assert!(!is_blocked_ip(&ip(s)), "{s} should be allowed");
         }
     }
@@ -122,8 +144,14 @@ mod tests {
         // metadata always blocked
         assert!(resolve_and_check("169.254.169.254", false).is_err());
         // allow_private bypasses the classifier for a literal IP.
-        assert_eq!(resolve_and_check("127.0.0.1", true).unwrap(), vec![ip("127.0.0.1")]);
+        assert_eq!(
+            resolve_and_check("127.0.0.1", true).unwrap(),
+            vec![ip("127.0.0.1")]
+        );
         // public literal passes.
-        assert_eq!(resolve_and_check("8.8.8.8", false).unwrap(), vec![ip("8.8.8.8")]);
+        assert_eq!(
+            resolve_and_check("8.8.8.8", false).unwrap(),
+            vec![ip("8.8.8.8")]
+        );
     }
 }

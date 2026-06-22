@@ -15,7 +15,10 @@ use sqlx::{Row, SqlitePool};
 use crate::helpers::is_safe_key;
 
 /// Read the live (non-expired) state map for an endpoint.
-pub async fn read_state(pool: &SqlitePool, token: &str) -> Result<BTreeMap<String, String>, sqlx::Error> {
+pub async fn read_state(
+    pool: &SqlitePool,
+    token: &str,
+) -> Result<BTreeMap<String, String>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT key, value FROM endpoint_state WHERE token = ? AND expires_at > datetime('now')",
     )
@@ -79,23 +82,33 @@ mod tests {
         let pool = db::pool(":memory:").await.unwrap();
         db::migrate(&pool).await.unwrap();
         sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         pool
     }
 
     #[tokio::test]
     async fn write_read_roundtrip_and_unsafe_skipped() {
         let pool = pool_with_endpoint().await;
-        assert!(write_state(&pool, "tok", "logged_in", "1", 86400).await.unwrap());
+        assert!(write_state(&pool, "tok", "logged_in", "1", 86400)
+            .await
+            .unwrap());
         // unsafe key skipped, not persisted.
-        assert!(!write_state(&pool, "tok", "bad key", "x", 86400).await.unwrap());
+        assert!(!write_state(&pool, "tok", "bad key", "x", 86400)
+            .await
+            .unwrap());
         let m = read_state(&pool, "tok").await.unwrap();
         assert_eq!(m.get("logged_in").map(String::as_str), Some("1"));
         assert!(!m.contains_key("bad key"));
         // upsert overwrites.
-        write_state(&pool, "tok", "logged_in", "2", 86400).await.unwrap();
+        write_state(&pool, "tok", "logged_in", "2", 86400)
+            .await
+            .unwrap();
         assert_eq!(read_state(&pool, "tok").await.unwrap()["logged_in"], "2");
         clear_state(&pool, "tok").await.unwrap();
         assert!(read_state(&pool, "tok").await.unwrap().is_empty());

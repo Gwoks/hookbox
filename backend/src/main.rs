@@ -22,9 +22,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::from_env();
 
     if cfg.path_fallback_only {
-        tracing::warn!(
-            "MOCK_DOMAIN is unset/misconfigured — serving path-fallback-only mode"
-        );
+        tracing::warn!("MOCK_DOMAIN is unset/misconfigured — serving path-fallback-only mode");
     }
 
     // Ensure the SQLite parent directory exists before opening.

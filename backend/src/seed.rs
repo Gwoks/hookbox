@@ -10,7 +10,10 @@ use crate::ids::{gen_owner_secret, gen_token, hash_email, hash_secret};
 
 /// Seed demo data if the DB is empty. Returns `Some((email, secret, token))` when
 /// it seeded (first run), `None` when data already existed.
-pub async fn seed_if_empty(pool: &SqlitePool, id_len: usize) -> Result<Option<(String, String, String)>, sqlx::Error> {
+pub async fn seed_if_empty(
+    pool: &SqlitePool,
+    id_len: usize,
+) -> Result<Option<(String, String, String)>, sqlx::Error> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM endpoints")
         .fetch_one(pool)
         .await?;
@@ -33,11 +36,13 @@ pub async fn seed_if_empty(pool: &SqlitePool, id_len: usize) -> Result<Option<(S
     .await?;
 
     let token = gen_token(id_len);
-    sqlx::query("INSERT INTO endpoints (token, owner_id, name, auto_crud) VALUES (?, ?, 'Demo API', 1)")
-        .bind(&token)
-        .bind(&owner_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO endpoints (token, owner_id, name, auto_crud) VALUES (?, ?, 'Demo API', 1)",
+    )
+    .bind(&token)
+    .bind(&owner_id)
+    .execute(pool)
+    .await?;
 
     // A demo rule: GET /hello -> 200 {"hello":"world"} with a template tag.
     let match_json = json!({"method":"GET","path":"/hello"}).to_string();
@@ -59,7 +64,10 @@ pub async fn seed_if_empty(pool: &SqlitePool, id_len: usize) -> Result<Option<(S
     .await?;
 
     // A couple of sample traces so the first-run feed is populated.
-    for (i, (path, sb)) in [("/hello", "rule"), ("/widgets", "crud")].iter().enumerate() {
+    for (i, (path, sb)) in [("/hello", "rule"), ("/widgets", "crud")]
+        .iter()
+        .enumerate()
+    {
         sqlx::query(
             "INSERT INTO request_logs (token, method, path, status_code, served_by, duration_ms, overhead_ms,
                  request_headers, query_params, response_headers, trace_json, state_snapshot)
@@ -90,10 +98,16 @@ mod tests {
         assert!(first.is_some());
         let (_e, _s, token) = first.unwrap();
         let rules: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mock_rules WHERE token = ?")
-            .bind(&token).fetch_one(&pool).await.unwrap();
+            .bind(&token)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(rules, 1);
         let traces: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM request_logs WHERE token = ?")
-            .bind(&token).fetch_one(&pool).await.unwrap();
+            .bind(&token)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(traces, 2);
         // second run is a no-op.
         assert!(seed_if_empty(&pool, 10).await.unwrap().is_none());

@@ -3,214 +3,205 @@
 **Self-hosted, Beeceptor-class API mocking & HTTP interception platform.**
 
 Mock, intercept, inspect, and virtualize HTTP APIs without standing up a backend.
-HookBox is a low-overhead interceptor (target: **< 10 ms** of our own overhead on
-the mock fast path) that serves rule-driven mock responses with dynamic
-templating, persists per-endpoint state, can act as an instant CRUD backend, can
-forward unmatched traffic to a real upstream (MITM) and capture it, auto-handles
-CORS, simulates adverse network conditions, and streams every transaction to a
-real-time split-screen debugging dashboard — behind a **no-password, email-keyed**
-session, shipped as `docker compose up` with a local-tunnel CLI.
+HookBox serves rule-driven mock responses with dynamic templating, persists
+per-endpoint state, can act as an instant CRUD backend, can forward unmatched
+traffic to a real upstream (MITM) and capture it, auto-handles CORS, simulates
+adverse network conditions, and streams every transaction to a real-time
+split-screen debugging dashboard — behind a **no-password, email-keyed** session,
+with a local-tunnel CLI.
+
+It ships as a **single Rust binary over one SQLite file** that also serves the
+React dashboard. No Redis, no Postgres, no Node at runtime — one process, one
+file. Single-instance by design (in-process cache/queues/pub-sub) — the self-host
+sweet spot; scale vertically.
+
+> Re-platformed from the original Python (FastAPI + Jinja + Redis + WebSockets)
+> implementation to Rust/Axum + SQLite for a feather-weight, self-contained
+> deployment. Design & specs: [`docs/superpowers/specs/`](docs/superpowers/specs/)
+> and [`docs/features/hookbox-rust-replatform/`](docs/features/hookbox-rust-replatform/).
 
 ## Stack
 
 | Layer | Technology |
 | --- | --- |
-| Web / proxy | FastAPI on `uvicorn[standard]` (async, uvloop + httptools) |
-| Durable store | SQLite via `aiosqlite` (WAL) — endpoints, rules, request logs, owners |
-| Ephemeral store / cache / pub-sub | Redis — per-endpoint state, Auto-CRUD collections, rate-limit token buckets, real-time fan-out |
-| Outbound HTTP (MITM) | `httpx` async client |
-| Frontend | Server-rendered **Jinja2 + HTMX + Alpine.js + Tailwind** (no Node build, no React/SPA) |
+| Web / proxy | **Rust + Axum** (tokio), one binary |
+| Durable store | **SQLite (WAL)** — endpoints, rules, traces, per-endpoint state, Auto-CRUD collections |
+| Real-time fan-out | in-process `tokio::sync::broadcast` (WebSocket + SSE feed) |
+| Rate limiting | in-memory token bucket (`DashMap`), bounded, fails open |
+| Retention | in-process tokio interval sweep |
+| Outbound HTTP (MITM) | `reqwest`, with a resolved-IP SSRF guard |
+| Frontend | **Vite + React + TypeScript** SPA (Tailwind + Radix), served from `dist/` |
 
-## Quick start (Docker)
-
-```bash
-docker compose up -d --build            # build the app image, start Redis + app
-# Redis starts first; the app waits until it is healthy (depends_on), then
-# listens on :8000. Confirm readiness, then open the dashboard:
-curl -s http://localhost:8000/healthz   # {"status":"ok","redis":true,"db":true}
-open http://localhost:8000
+```
+Browser ─▶ [ Rust / Axum binary ]  ──▶  SQLite (data/app.db, WAL)
+              ├─ <token>.<MOCK_DOMAIN>/… , /e/<token>/…   P1 mock interceptor
+              ├─ /api/**                                  P2 management API (capability-gated)
+              ├─ /ws/<token> , /sse/<token>               owner-gated live feed
+              ├─ /ws/tunnel/<token>                        tunnel control channel
+              └─ static + SPA fallback                     P3 dashboard (dist/)
 ```
 
-Enter an email on the landing page to instantly get an endpoint session — no
-password, no registration. Your owner identity + capability live in browser
-`localStorage`; the same email always recovers access.
+## Quick start
 
-Stop and keep data: `docker compose down` (named volumes persist config, rules,
-history, and best-effort Redis state). Wipe everything: `docker compose down -v`.
-
-## Quick start (local, no Docker)
+### Prerequisites
+- **Rust** (stable, ≥1.80) — install via [rustup](https://rustup.rs/)
+- **Node 22+** and **pnpm 10** — only to *build* the SPA (not at runtime)
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-# Redis must be reachable (e.g. `docker run -p 6379:6379 redis:7-alpine`).
-export REDIS_URL=redis://localhost:6379/0
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+bash scripts/start.sh      # builds SPA (Vite → dist/) + backend (cargo --release),
+                           # applies migrations, seeds demo data on first run,
+                           # then serves → http://localhost:8080
 ```
 
-The app **degrades gracefully** if Redis is down (see "Redis-down behavior"); it
-never crashes on startup for a missing Redis or an unset `MOCK_DOMAIN`.
+Open **http://localhost:8080**, enter an email on the landing page, and you get an
+endpoint session instantly — no password, no registration. Your owner identity +
+capability live in browser `localStorage`; the same email always recovers access
+(the capability rotates on each sign-in, so an old leaked secret stops working).
+
+### Docker
+
+```bash
+docker compose up -d --build       # one app container (Rust binary + SQLite); no Redis
+curl -s http://localhost:8080/healthz   # 200
+open http://localhost:8080
+```
+
+`docker compose down` keeps the named volume (config, rules, history, state);
+`docker compose down -v` wipes it.
 
 ## Drive it from the CLI
 
-No dashboard needed — create a session, add a rule, and hit the mock surface:
-
 ```bash
-# 1. Get an owner session → returns {owner_id, owner_secret, primary:{token,…}}
-curl -s -X POST localhost:8000/api/session \
+# 1. Get an owner session → {owner_id, owner_secret, primary:{token,…}}
+curl -s -X POST localhost:8080/api/session \
   -H 'content-type: application/json' -d '{"email":"you@example.com"}'
 
 # 2. Add a mock rule (owner_secret as the bearer; <token> from step 1)
-curl -s -X POST localhost:8000/api/endpoints/<token>/rules \
+curl -s -X POST localhost:8080/api/endpoints/<token>/rules \
   -H 'Authorization: Bearer <owner_secret>' -H 'content-type: application/json' \
   -d '{"match":{"method":"GET","path":"/hello"},
        "response":{"status_code":200,"content_type":"application/json",
                    "body_template":"{\"hi\":\"{{request.query.name}}\"}"}}'
 
 # 3. Hit the PUBLIC mock surface (no auth on the mock plane)
-curl -s 'localhost:8000/e/<token>/hello?name=ada'    # → {"hi":"ada"}
+curl -s 'localhost:8080/e/<token>/hello?name=ada'    # → {"hi":"ada"}
 ```
-
-The full management API is documented at `/docs` (OpenAPI / Swagger UI).
 
 ## Addressing a mock endpoint
 
-Every endpoint has a token `<token>` and is reachable two equivalent ways:
+Every endpoint has a token `<token>`, reachable two equivalent ways:
 
 1. **Wildcard subdomain (production):** `http(s)://<token>.<MOCK_DOMAIN>/<path>`
-2. **Path fallback (local dev):** `http://<APP_HOST>:8000/e/<token>/<path>`
+2. **Path fallback (local dev):** `http://<APP_HOST>:8080/e/<token>/<path>`
 
 Both reach the same interceptor; the `/e/<token>` prefix is stripped so a rule
 written for `/users` matches identically either way.
 
 ### Local wildcard DNS recipe
+- **`*.localhost`** resolves to `127.0.0.1` on most OSes → `http://<token>.localhost:8080/<path>`.
+- **`nip.io`**: `http://<token>.127.0.0.1.nip.io:8080/<path>`.
+- Otherwise just use the **path fallback** `http://localhost:8080/e/<token>/<path>`.
 
-Real wildcard DNS is awkward on localhost. Options:
-
-- **`*.localhost`** resolves to `127.0.0.1` on most OSes, so
-  `http://<token>.localhost:8000/<path>` often works out of the box.
-- **`nip.io`** wildcard DNS: `http://<token>.127.0.0.1.nip.io:8000/<path>`.
-- Otherwise just use the **path fallback** `http://localhost:8000/e/<token>/<path>`.
-
-If `MOCK_DOMAIN` is unset or misconfigured, the app logs a warning and serves
+If `MOCK_DOMAIN` is unset or has no dot, the app logs a warning and serves
 **path-fallback-only** mode (it does not crash); the dashboard then shows only the
-`/e/<token>` URL chip.
-
-## Configuration (environment variables)
-
-All config is env-driven with safe defaults (nothing is required to boot). Set via
-the shell, a `.env` file next to `docker-compose.yml`, or the compose `environment:`
-block.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MOCK_DOMAIN` | `mock.local` | Wildcard mock surface base (`*.<MOCK_DOMAIN>`). Blank/invalid → path-fallback-only. |
-| `APP_HOST` | `localhost` | Canonical UI/API host (the apex + this host never hit the interceptor). |
-| `APP_PORT` | `8000` | Published HTTP port. |
-| `REDIS_URL` | `redis://localhost:6379/0` (compose: `redis://redis:6379/0`) | Redis connection. |
-| `DATABASE_PATH` | `./data/hookbox.db` (compose: `/app/data/hookbox.db`) | SQLite file (on the `hookbox_data` volume in compose). |
-| `TRACE_CAP` | `100` | Hard per-endpoint trace cap (prune oldest beyond this). |
-| `TRACE_TTL_HOURS` | `24` | Traces older than this are swept. |
-| `RETENTION_SWEEP_SECONDS` | `300` | Interval of the background sweep that enforces **both** caps. |
-| `STATE_TTL_SECONDS` | `86400` | TTL of the per-endpoint Redis state hash (refreshed on write). |
-| `CRUD_TTL_SECONDS` | `86400` | TTL of Auto-CRUD collections (refreshed on write). |
-| `MITM_TIMEOUT_S` | `10` | Upstream forward timeout → `504` on timeout. |
-| `MITM_MAX_BODY_BYTES` | `5000000` | Max captured upstream response body. |
-| `MITM_ALLOW_PRIVATE` | `false` | When `false`, MITM **blocks** loopback/private/link-local/metadata targets (SSRF guard, evaluated on the resolved IP). |
-| `MITM_FOLLOW_REDIRECTS` | `false` | If `true`, follow up to `MITM_MAX_REDIRECTS`, re-validating each hop's IP. |
-| `LATENCY_MAX_MS` | `10000` | Upper clamp for simulated latency. |
-| `RATE_LIMIT_MAX_PER_MIN` | `100000` | Upper bound for the configurable rate limit (`0` = unlimited). |
-| `MAX_INGEST_BODY_BYTES` | `1000000` | Max mock-request body before a `413` (rejected before full buffering). |
-| `MAX_BODY_BYTES` | `256000` | Max request/response body persisted to a trace (truncated beyond). |
-| `CRUD_MAX_ITEMS` / `CRUD_MAX_ITEM_BYTES` | `1000` / `64000` | Auto-CRUD per-collection bounds. |
-| `WS_MAX_CONN_PER_ENDPOINT` | `50` | Cap on concurrent live-feed connections per endpoint. |
-| `ENDPOINT_ID_LENGTH` | `10` | Endpoint token length (ambiguity-stripped alphabet). |
-| `OWNER_SECRET_BYTES` | `32` | Owner capability entropy (256-bit `token_urlsafe`). |
+`/e/<token>` URL.
 
 ## Real-time feed is owner-gated
 
 The dashboard's live feed (WebSocket `/ws/<token>` and SSE fallback `/sse/<token>`)
 **requires the owner capability**, presented as `?cap=<owner_secret>` and verified
 server-side **before** the socket is accepted / before any event is sent. The
-**mock surface itself stays fully public** (callers must be able to hit the mock
-URL); only the observability feed is gated.
+**mock surface itself stays fully public**; only the observability feed is gated.
 
 ## Local tunnel CLI
 
-Reverse-tunnel public traffic hitting `<slug>.<MOCK_DOMAIN>` to your localhost:
+Reverse-tunnel public traffic hitting `<token>.<MOCK_DOMAIN>` (or the path
+fallback) to a server on your localhost — a Rust binary built alongside the server:
 
 ```bash
-python -m tunnel --port 3000 --endpoint <slug> \
-  --server ws://localhost:8000 --secret <owner_secret>
+./backend/target/release/tunnel \
+  --endpoint <token> --secret <owner_secret> \
+  --port 3000 [--host ws://localhost:8080]
 ```
 
-The CLI authenticates with the endpoint's owner capability over the WebSocket
-control channel. See `tunnel/README.md` for protocol details and reconnect
-behavior. A Go binary would be the production-grade choice; this Python reference
-satisfies the blueprint.
+It authenticates with the endpoint's owner capability over the WebSocket control
+channel, reconnects with backoff, and stops on a rejected secret. Tunneled traffic
+appears in the live feed labeled `tunnel`.
 
-## Redis-down behavior (degradation)
+## Configuration (environment variables)
 
-| Feature | When Redis is down |
+All config is env-driven with safe defaults (nothing is required to boot). Set via
+the shell, a `.env` file next to `docker-compose.yml`, or the compose
+`environment:` block. The full list lives in `backend/src/config.rs`; the common
+knobs:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MOCK_DOMAIN` | `mock.local` | Wildcard mock surface base (`*.<MOCK_DOMAIN>`). Blank/dotless → path-fallback-only. |
+| `APP_HOST` | `localhost` | Canonical UI/API host (apex + this host never hit the interceptor). |
+| `APP_PORT` / `APP_BIND_HOST` | `8080` / `0.0.0.0` | Published HTTP port / bind address. |
+| `DATABASE_PATH` | `data/app.db` | SQLite file (WAL). |
+| `STATIC_DIR` | `dist` | Built SPA directory served as P3. |
+| `TRACE_CAP` / `TRACE_TTL_HOURS` | `100` / `24` | Per-endpoint trace cap + TTL (enforced at write **and** by the sweep). |
+| `RETENTION_SWEEP_SECONDS` | `300` | Background sweep interval. |
+| `GONE_TTL_HOURS` | `168` | A deleted endpoint serves `410` until this tombstone window elapses, then `404`. |
+| `MITM_TIMEOUT_S` / `MITM_MAX_BODY_BYTES` | `10` / `5000000` | Upstream forward timeout (→`504`) / max captured body. |
+| `MITM_ALLOW_PRIVATE` | `false` | When `false`, MITM **blocks** loopback/private/link-local/metadata targets (SSRF guard on the **resolved** IP). |
+| `LATENCY_MAX_MS` | `10000` | Upper clamp for simulated latency. |
+| `RATE_LIMIT_MAX_PER_MIN` | `100000` | Upper bound for the configurable rate limit (`0` = unlimited). |
+| `MAX_INGEST_BODY_BYTES` | `1000000` | Max mock-request body before a `413`. |
+
+## Degradation behavior
+
+With SQLite as the single local store, the old Redis-down failure modes collapse to
+ordinary error handling:
+
+| Feature | Behavior under an internal store error |
 | --- | --- |
 | Static mock matching | **Survives** (served from the in-process rule cache). |
-| State-gated rules | **Fail closed** (state condition does not match; rule skipped). |
-| Auto-CRUD | **503** (no fabricated/lost data). |
-| Rate limiter | **Fails open** but bounded by the in-process body/size caps. |
-| Real-time feed | Mock serving + SQLite logging unaffected; dashboard shows a "degraded" pill. |
+| State-gated rules | **Fail closed** (state condition does not hold → rule skipped, never silently matched). |
+| Auto-CRUD | **5xx** (no fabricated/lost data; writes are one SQLite transaction). |
+| Rate limiter | **Fails open**, but the bucket map is bounded so it can't be weaponized into memory growth. |
+| Real-time feed | Mock serving + SQLite trace logging are unaffected. |
 
 ## Development & tests
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt     # runtime deps + pytest, pip-audit, websockets
-pytest                                   # 44 unit + integration tests
+# Backend (Rust)
+cd backend && cargo test            # 81 unit + 12 integration tests
+cargo fmt --all -- --check          # formatting gate
+cargo clippy --all-targets -- -D warnings
+
+# Frontend (Vite + React)
+pnpm install
+pnpm exec tsc --noEmit              # typecheck
+pnpm build                          # Vite → dist/
+pnpm e2e                            # Playwright (builds + serves dist/, backend mocked in-spec)
 ```
 
-Integration tests boot a real `uvicorn` on a random port and need a reachable
-Redis (`REDIS_URL`, default `redis://localhost:6379/0`); they **skip** automatically
-if Redis is unavailable. Unit tests (templating, matcher, SSRF guard) need nothing
-external. CI (`.github/workflows/ci.yml`) runs the suite + `pip-audit` against a
-Redis service container and validates/builds the Docker image on every push and PR.
-
-## Operations
-
-```bash
-docker compose logs -f app          # tail logs
-docker compose ps                   # health status of app + redis
-curl -s http://localhost:8000/healthz   # {"status":"ok","redis":true,"db":true}
-./reset_db.sh                       # wipe the SQLite DB for a fresh schema (dev)
-```
-
-API docs (OpenAPI/Swagger) are served at `/docs`.
+CI (`.github/workflows/ci.yml`) runs the Rust suite (fmt + clippy + build + test),
+a `cargo audit` dependency check, the frontend (typecheck + build + Playwright), and
+validates/builds the Docker image on every push and PR.
 
 ## Project layout
 
 ```
-app/
-  main.py                 # app factory, lifespan, plane dispatch, mock catch-all
-  middleware.py, planes.py# 3-plane Host+path dispatch (mock / api / ui)
-  auth.py                 # owner-capability auth (bearer owner_secret)
-  database.py             # SQLite WAL, §5.8 DDL, fire-and-forget trace writer
-  redis_state.py          # state KV, Auto-CRUD store, rate-limit bucket, pub/sub
-  rule_cache.py           # in-process compiled-rule cache (the <10ms path)
-  pubsub.py               # Redis relay: trace fan-out + cfg cache-invalidation
-  websocket.py            # owner-gated WS + SSE live feed
-  routes/api.py           # the management REST API
-  routes/ui.py            # server-rendered dashboard routes
-  routes/tunnel.py        # tunnel WS control-channel server
-  interceptor/
-    engine.py             # the ordered mock pipeline (resolution + conditions)
-    matcher.py            # rule selection (method/path/header/query/body/state)
-    templating.py         # sandboxed {{...}} engine (no eval/Jinja over user text)
-    crud.py               # Auto-CRUD over Redis JSON arrays
-    proxy.py              # MITM forward + SSRF guard
-    conditions.py         # latency / rate-limit / chaos
-    cors.py               # auto-CORS preflight + per-response headers
-  utils/cleanup.py        # retention sweep (both caps)
-templates/, static/       # frontend lane (Jinja2 + HTMX + Alpine + Tailwind)
-tunnel/                   # mock-tunnel reference CLI
-config.py                 # env-driven configuration
+backend/                 Rust crate
+  Cargo.toml             bins: hookbox (server), tunnel (CLI), seed
+  migrations/            SQLite schema (applied on startup)
+  src/
+    main.rs, config.rs, state.rs, error.rs, db.rs, auth.rs, ids.rs
+    planes.rs, router.rs           # 3-plane Host+path dispatch (mock / api / ui)
+    routes/{api,health,feed,tunnel_ws,spa}.rs
+    interceptor/{engine,matcher,templating,crud,proxy,cors,conditions}.rs
+    feed.rs, state_store.rs, crud_store.rs, rule_cache.rs, limiter.rs, ssrf.rs
+    tasks/sweep.rs                  # retention sweep (both caps)
+    bin/tunnel.rs, seed.rs
+  tests/api.rs                      # integration tests
+src/                     Vite + React + TS SPA (landing, dashboard, rule builder, settings, cli)
+public/, index.html, vite.config.ts, tailwind.config.ts
+e2e/                     Playwright suite
+scripts/start.sh         build + seed + serve
 Dockerfile, docker-compose.yml
 ```
 

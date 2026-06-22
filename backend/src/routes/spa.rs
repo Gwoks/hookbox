@@ -62,7 +62,8 @@ pub async fn serve_spa(State(state): State<AppState>, req: Request<Body>) -> Res
 fn file_response(path: &str, bytes: Vec<u8>) -> Response {
     let ct = content_type_for(path);
     let mut resp = Response::new(Body::from(bytes));
-    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
     resp
 }
 

@@ -8,13 +8,25 @@ use serde_json::Value;
 /// Sensitive inbound headers that must never be forwarded upstream (AC-S9) on top
 /// of the hop-by-hop set. The owner capability rides `Authorization` to the
 /// management plane only; it is dropped here so it never reaches an MITM target.
-pub const SENSITIVE_FORWARD_HEADERS: [&str; 5] =
-    ["authorization", "cookie", "x-owner-id", "x-user-id", "x-hookbox-cap"];
+pub const SENSITIVE_FORWARD_HEADERS: [&str; 5] = [
+    "authorization",
+    "cookie",
+    "x-owner-id",
+    "x-user-id",
+    "x-hookbox-cap",
+];
 
 /// Hop-by-hop headers (RFC 7230 §6.1) — never forwarded/echoed upstream.
 pub const HOP_BY_HOP: [&str; 9] = [
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade", "host",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
 ];
 
 /// Owner-capability / cookie headers redacted before a trace is persisted OR
@@ -87,7 +99,13 @@ pub fn jsonpath_lite(body: &str, path: &str) -> Option<String> {
 pub fn value_to_string(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
-        Value::Bool(b) => if *b { "true".into() } else { "false".into() },
+        Value::Bool(b) => {
+            if *b {
+                "true".into()
+            } else {
+                "false".into()
+            }
+        }
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         other => serde_json::to_string(other).unwrap_or_default(),
@@ -189,10 +207,14 @@ mod tests {
 
     #[test]
     fn target_url_scheme_allow_list() {
-        assert_eq!(validate_target_url(Some("https://api.example.com")).unwrap(),
-                   Some("https://api.example.com".to_string()));
-        assert_eq!(validate_target_url(Some("http://h/x")).unwrap(),
-                   Some("http://h/x".to_string()));
+        assert_eq!(
+            validate_target_url(Some("https://api.example.com")).unwrap(),
+            Some("https://api.example.com".to_string())
+        );
+        assert_eq!(
+            validate_target_url(Some("http://h/x")).unwrap(),
+            Some("http://h/x".to_string())
+        );
         // "" / None clears.
         assert_eq!(validate_target_url(Some("  ")).unwrap(), None);
         assert_eq!(validate_target_url(None).unwrap(), None);

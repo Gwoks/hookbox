@@ -30,8 +30,8 @@ pub mod rule_cache;
 pub mod tunnels;
 
 // Background retention sweep.
-pub mod tasks;
 pub mod seed;
+pub mod tasks;
 
 // Test-only helpers (e.g. a process-global lock to serialize env-var mutation).
 #[cfg(test)]

@@ -19,7 +19,10 @@ use crate::limiter::Limiter;
 
 /// Run one sweep pass. Returned tuple is `(traces_pruned, state_reaped,
 /// crud_reaped, tombstones_reaped)` for observability/tests.
-pub async fn sweep_once(pool: &SqlitePool, cfg: &Config) -> Result<(u64, u64, u64, u64), sqlx::Error> {
+pub async fn sweep_once(
+    pool: &SqlitePool,
+    cfg: &Config,
+) -> Result<(u64, u64, u64, u64), sqlx::Error> {
     // (a) TTL prune of traces past TRACE_TTL_HOURS.
     let ttl = format!("-{} hours", cfg.trace_ttl_hours);
     let traces_ttl = sqlx::query("DELETE FROM request_logs WHERE created_at < datetime('now', ?)")
@@ -44,30 +47,44 @@ pub async fn sweep_once(pool: &SqlitePool, cfg: &Config) -> Result<(u64, u64, u6
     .rows_affected();
 
     // (b) expired state + crud.
-    let state_reaped = sqlx::query("DELETE FROM endpoint_state WHERE expires_at <= datetime('now')")
-        .execute(pool)
-        .await?
-        .rows_affected();
-    let crud_reaped = sqlx::query("DELETE FROM crud_collections WHERE expires_at <= datetime('now')")
-        .execute(pool)
-        .await?
-        .rows_affected();
+    let state_reaped =
+        sqlx::query("DELETE FROM endpoint_state WHERE expires_at <= datetime('now')")
+            .execute(pool)
+            .await?
+            .rows_affected();
+    let crud_reaped =
+        sqlx::query("DELETE FROM crud_collections WHERE expires_at <= datetime('now')")
+            .execute(pool)
+            .await?
+            .rows_affected();
 
     // (c) tombstones older than GONE_TTL_HOURS -> hard delete (token degrades to 404).
     let gone_ttl = format!("-{} hours", cfg.gone_ttl_hours);
-    let tombstones = sqlx::query("DELETE FROM endpoints WHERE gone_at IS NOT NULL AND gone_at < datetime('now', ?)")
-        .bind(&gone_ttl)
-        .execute(pool)
-        .await?
-        .rows_affected();
+    let tombstones = sqlx::query(
+        "DELETE FROM endpoints WHERE gone_at IS NOT NULL AND gone_at < datetime('now', ?)",
+    )
+    .bind(&gone_ttl)
+    .execute(pool)
+    .await?
+    .rows_affected();
 
-    Ok((traces_ttl + cap_pruned, state_reaped, crud_reaped, tombstones))
+    Ok((
+        traces_ttl + cap_pruned,
+        state_reaped,
+        crud_reaped,
+        tombstones,
+    ))
 }
 
 /// Spawn the periodic sweep loop. Returns the join handle (kept alive by main).
-pub fn spawn(pool: SqlitePool, cfg: Arc<Config>, limiter: Arc<Limiter>) -> tokio::task::JoinHandle<()> {
+pub fn spawn(
+    pool: SqlitePool,
+    cfg: Arc<Config>,
+    limiter: Arc<Limiter>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(cfg.retention_sweep_seconds.max(1)));
+        let mut tick =
+            tokio::time::interval(Duration::from_secs(cfg.retention_sweep_seconds.max(1)));
         // Skip the immediate first tick fire.
         tick.tick().await;
         loop {
@@ -90,9 +107,13 @@ mod tests {
         let p = db::pool(":memory:").await.unwrap();
         db::migrate(&p).await.unwrap();
         sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&p).await.unwrap();
+            .execute(&p)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&p).await.unwrap();
+            .execute(&p)
+            .await
+            .unwrap();
         p
     }
 
@@ -121,7 +142,9 @@ mod tests {
         assert_eq!(crud_reaped, 1);
         assert_eq!(tombstones, 1);
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM endpoints WHERE token='gone'")
-            .fetch_one(&p).await.unwrap();
+            .fetch_one(&p)
+            .await
+            .unwrap();
         assert_eq!(n, 0);
     }
 
@@ -142,7 +165,9 @@ mod tests {
         }
         sweep_once(&p, &c).await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM request_logs WHERE token='tok'")
-            .fetch_one(&p).await.unwrap();
+            .fetch_one(&p)
+            .await
+            .unwrap();
         assert_eq!(n, 5);
     }
 }

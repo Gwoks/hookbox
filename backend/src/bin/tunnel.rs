@@ -44,7 +44,12 @@ fn parse_args() -> Option<Args> {
     if endpoint.is_empty() || secret.is_empty() {
         return None;
     }
-    Some(Args { port, endpoint, secret, host })
+    Some(Args {
+        port,
+        endpoint,
+        secret,
+        host,
+    })
 }
 
 #[tokio::main]
@@ -84,13 +89,23 @@ enum Outcome {
 }
 
 async fn run_once(args: &Args) -> Outcome {
-    let url = format!("{}/ws/tunnel/{}?cap={}", args.host.trim_end_matches('/'), args.endpoint, args.secret);
+    let url = format!(
+        "{}/ws/tunnel/{}?cap={}",
+        args.host.trim_end_matches('/'),
+        args.endpoint,
+        args.secret
+    );
     let host_display = args.host.replace("ws://", "").replace("wss://", "");
-    println!("Connecting to {host_display} for endpoint {}…", args.endpoint);
+    println!(
+        "Connecting to {host_display} for endpoint {}…",
+        args.endpoint
+    );
 
     let ws = match tokio_tungstenite::connect_async(&url).await {
         Ok((ws, _)) => ws,
-        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) if resp.status() == 401 || resp.status() == 403 => {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp))
+            if resp.status() == 401 || resp.status() == 403 =>
+        {
             return Outcome::Unauthorized;
         }
         Err(_) => return Outcome::Disconnected,
@@ -108,7 +123,10 @@ async fn run_once(args: &Args) -> Outcome {
                 };
                 match frame.get("t").and_then(Value::as_str) {
                     Some("bound") => {
-                        println!("Tunnel up. Forwarding {} → http://localhost:{}", args.endpoint, args.port);
+                        println!(
+                            "Tunnel up. Forwarding {} → http://localhost:{}",
+                            args.endpoint, args.port
+                        );
                     }
                     Some("req") => {
                         let resp = handle_request(&http, args.port, &frame).await;
@@ -117,7 +135,9 @@ async fn run_once(args: &Args) -> Outcome {
                         }
                     }
                     Some("ping") => {
-                        let _ = sink.send(Message::Text(json!({"t":"pong"}).to_string())).await;
+                        let _ = sink
+                            .send(Message::Text(json!({"t":"pong"}).to_string()))
+                            .await;
                     }
                     Some("err") => {
                         // server-side rebound notice precedes a 4409 close.
@@ -149,7 +169,9 @@ async fn handle_request(http: &reqwest::Client, port: u16, frame: &Value) -> Val
     let method = frame.get("method").and_then(Value::as_str).unwrap_or("GET");
     let path = frame.get("path").and_then(Value::as_str).unwrap_or("/");
     let body_b64 = frame.get("body_b64").and_then(Value::as_str).unwrap_or("");
-    let body = base64::engine::general_purpose::STANDARD.decode(body_b64).unwrap_or_default();
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(body_b64)
+        .unwrap_or_default();
     let url = format!("http://localhost:{port}{path}");
 
     let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
@@ -157,7 +179,10 @@ async fn handle_request(http: &reqwest::Client, port: u16, frame: &Value) -> Val
     if let Some(h) = frame.get("headers").and_then(Value::as_object) {
         for (k, v) in h {
             if let Some(vs) = v.as_str() {
-                if !matches!(k.to_ascii_lowercase().as_str(), "host" | "content-length" | "connection") {
+                if !matches!(
+                    k.to_ascii_lowercase().as_str(),
+                    "host" | "content-length" | "connection"
+                ) {
                     req = req.header(k, vs);
                 }
             }

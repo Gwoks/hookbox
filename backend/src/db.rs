@@ -51,14 +51,18 @@ pub struct TraceRecord {
     pub request_body: Option<String>,
     pub response_headers: String, // JSON
     pub response_body: Option<String>,
-    pub trace_json: String,    // JSON array of {step, detail}
+    pub trace_json: String,     // JSON array of {step, detail}
     pub state_snapshot: String, // JSON
 }
 
 /// Insert a trace and prune to the newest `trace_cap` rows for that token
 /// (write-time prune so the per-endpoint cap never drifts — AC-48). Returns the
 /// new row id. Runs off the response path (spawned by the engine, never awaited).
-pub async fn insert_trace(pool: &SqlitePool, rec: &TraceRecord, trace_cap: i64) -> Result<i64, sqlx::Error> {
+pub async fn insert_trace(
+    pool: &SqlitePool,
+    rec: &TraceRecord,
+    trace_cap: i64,
+) -> Result<i64, sqlx::Error> {
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO request_logs
             (token, method, path, status_code, served_by, matched_rule_id,
@@ -111,36 +115,37 @@ mod tests {
         migrate(&pool).await.unwrap();
 
         // owners -> endpoints FK round trip, parameterized SQL (AC-S17).
-        sqlx::query(
-            "INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)",
-        )
-        .bind("ownerabc12345678")
-        .bind("a@b.com")
-        .bind("hash")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "INSERT INTO endpoints (token, owner_id, name) VALUES (?, ?, ?)",
-        )
-        .bind("tok1234567")
-        .bind("ownerabc12345678")
-        .bind("demo")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Defaults from the §5.6 DDL apply.
-        let (default_mode, latency, chaos_mode, cors, gone): (String, i64, String, i64, Option<String>) =
-            sqlx::query_as(
-                "SELECT default_mode, latency_ms, chaos_mode, cors_enabled, gone_at
-                 FROM endpoints WHERE token = ?",
-            )
-            .bind("tok1234567")
-            .fetch_one(&pool)
+        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
+            .bind("ownerabc12345678")
+            .bind("a@b.com")
+            .bind("hash")
+            .execute(&pool)
             .await
             .unwrap();
+
+        sqlx::query("INSERT INTO endpoints (token, owner_id, name) VALUES (?, ?, ?)")
+            .bind("tok1234567")
+            .bind("ownerabc12345678")
+            .bind("demo")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Defaults from the §5.6 DDL apply.
+        let (default_mode, latency, chaos_mode, cors, gone): (
+            String,
+            i64,
+            String,
+            i64,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT default_mode, latency_ms, chaos_mode, cors_enabled, gone_at
+                 FROM endpoints WHERE token = ?",
+        )
+        .bind("tok1234567")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(default_mode, "mock_404");
         assert_eq!(latency, 0);
         assert_eq!(chaos_mode, "error"); // OQ-2 default
