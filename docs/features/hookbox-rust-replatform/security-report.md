@@ -110,3 +110,16 @@ These are explicitly accepted and do **not** block the gate.
 All 19 AC-S verified PASS against the implemented code; all design-time threats
 F1–F13 are covered. **No exploitable vulnerability found; no bd bug filed; the gate
 `hookbox-sks.35` is cleared.**
+
+### Post-review hardening (2026-06-22)
+
+The two low/info notes were additionally addressed (defense-in-depth; neither was
+exploitable):
+- **N1 — P1 ingest body bound.** `run_interceptor` now reads the mock body through
+  `http_body_util::Limited(MAX_INGEST_BODY_BYTES)`, so a chunked request with no
+  `Content-Length` is rejected with `413` before buffering past the cap (no longer
+  relying on Axum's 2 MB default). `router.rs`.
+- **N3 — feed channel map bound.** `FeedHub` now evicts a token's broadcast channel
+  when its last subscriber drops (increment under the entry lock; `remove_if` to
+  stay race-free), bounding the map to currently-live subscriptions. `feed.rs`
+  (+ unit test `channel_is_evicted_when_last_subscriber_drops`).
