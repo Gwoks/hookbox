@@ -48,7 +48,7 @@ jobs:
             SERVICE_NAME="hookbox"
             DOMAIN="hookbox.lgtm.my.id"
             APP_PORT="8080"
-            MOCK_DOMAIN="lgtm.my.id"
+            MOCK_DOMAIN="localhost"
 
             # Pull latest code
             cd "$APP_DIR"
