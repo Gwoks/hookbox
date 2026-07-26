@@ -266,6 +266,7 @@ Environment="DATABASE_PATH=/home/ubuntu/hookbox/data/app.db"
 Environment="STATIC_DIR=/home/ubuntu/hookbox/dist"
 Environment="APP_HOST=0.0.0.0"
 Environment="APP_PORT=8080"
+Environment="MOCK_DOMAIN=localhost"
 Restart=unless-stopped
 RestartSec=5
 
@@ -307,6 +308,16 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Mock endpoint proxy — path format: /e/<token>
+    location /e/ {
+        proxy_pass http://127.0.0.1:8080/e/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 EOF
@@ -394,3 +405,4 @@ sudo certbot certificates
 ## License
 
 MIT
+
