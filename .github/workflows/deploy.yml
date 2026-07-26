@@ -43,18 +43,46 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
+
+            APP_DIR="/home/ubuntu/hookbox"
+            SERVICE_NAME="hookbox"
+            DOMAIN="hookbox.lgtm.my.id"
+            APP_PORT="8080"
+            MOCK_DOMAIN="lgtm.my.id"
+
             # Pull latest code
-            cd /home/ubuntu/hookbox
+            cd "$APP_DIR"
             git fetch origin main
             git reset --hard origin/main
 
-            # Rebuild in case of code changes
+            # Rebuild
             pnpm install --frozen-lockfile 2>/dev/null || pnpm install
             pnpm build
-
             . "$HOME/.cargo/env"
             cd backend
             cargo build --release
+            cd ..
 
-            # Restart service
-            sudo systemctl restart hookbox
+            # Fix permissions
+            chmod 755 /home/ubuntu
+
+            # Render and install systemd service
+            mkdir -p "$APP_DIR/data"
+            chown -R ubuntu:ubuntu "$APP_DIR/data"
+            sed "s|{{APP_DIR}}|$APP_DIR|g; s|{{APP_PORT}}|$APP_PORT|g; s|{{MOCK_DOMAIN}}|$MOCK_DOMAIN|g" \
+              "$APP_DIR/deploy/hookbox.service" | sudo tee /etc/systemd/system/$SERVICE_NAME.service
+
+            # Render and install nginx config
+            sed "s|{{APP_DIR}}|$APP_DIR|g; s|{{APP_PORT}}|$APP_PORT|g; s|{{DOMAIN}}|$DOMAIN|g" \
+              "$APP_DIR/deploy/nginx.conf" | sudo tee /etc/nginx/sites-available/$SERVICE_NAME
+
+            sudo ln -sf /etc/nginx/sites-available/$SERVICE_NAME /etc/nginx/sites-enabled/$SERVICE_NAME
+            sudo rm -f /etc/nginx/sites-enabled/default
+
+            # Get SSL cert (no email)
+            sudo certbot --nginx -d "$DOMAIN" \
+              --noninteractive --agree-tos --register-unsafely-without-email --redirect || true
+
+            sudo nginx -t
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now "$SERVICE_NAME"
