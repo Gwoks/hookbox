@@ -11,7 +11,7 @@ Environment="DATABASE_PATH={{APP_DIR}}/data/app.db"
 Environment="STATIC_DIR={{APP_DIR}}/dist"
 Environment="APP_HOST=0.0.0.0"
 Environment="APP_PORT={{APP_PORT}}"
-Environment="MOCK_DOMAIN={{MOCK_DOMAIN}}"
+Environment="MOCK_DOMAIN=localhost"
 Restart=unless-stopped
 RestartSec=5
 
