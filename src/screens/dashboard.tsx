@@ -33,6 +33,7 @@ import {
 import { useFeed, connLabel, connTooltip } from "@/feed";
 import { t } from "@/lib/copy";
 import { cn } from "@/lib/cn";
+import { absolutize } from "@/lib/url";
 import { AppShell } from "@/components/hookbox/app-shell";
 import { SplitPane } from "@/components/hookbox/split-pane";
 import { FeedRow } from "@/components/hookbox/feed-row";
@@ -381,6 +382,7 @@ function FeedPane({
 }
 
 function FeedEmpty({ mockUrl }: { mockUrl: string }) {
+  const displayUrl = absolutize(mockUrl);
   return (
     <div className="flex flex-col items-center gap-4 px-6 py-12 text-center">
       <div className="space-y-1">
@@ -393,14 +395,14 @@ function FeedEmpty({ mockUrl }: { mockUrl: string }) {
         <p className="text-caption font-medium uppercase tracking-wide text-text-tertiary">
           {t("dash.mockUrl.label")}
         </p>
-        <CodeBlock value={mockUrl} ariaLabel={t("dash.mockUrl.label")} />
+        <CodeBlock value={displayUrl} ariaLabel={t("dash.mockUrl.label")} />
         <p className="pt-2 text-caption font-medium uppercase tracking-wide text-text-tertiary">
           {t("feed.empty.sampleLabel")}
         </p>
         {/* A static, illustrative curl sample — copy-only, never executed. */}
         <CodeBlock
-          value={t("feed.empty.sample", { mock_url: mockUrl })}
-          ariaLabel={t("feed.empty.sample", { mock_url: mockUrl })}
+          value={t("feed.empty.sample", { mock_url: displayUrl })}
+          ariaLabel={t("feed.empty.sample", { mock_url: displayUrl })}
         />
         <p className="text-caption text-text-tertiary">
           {t("feed.empty.sampleHint")}

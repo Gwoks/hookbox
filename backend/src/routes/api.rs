@@ -31,14 +31,16 @@ use crate::state::AppState;
 
 fn mock_url(state: &AppState, token: &str) -> String {
     if state.cfg.path_fallback_only {
-        format!("/e/{token}")
+        // PUBLIC_BASE_URL makes this copy-pasteable (e.g.
+        // `https://hookbox.example.com/e/<token>`); blank keeps it relative.
+        format!("{}/e/{token}", state.cfg.public_base_url)
     } else {
         format!("https://{token}.{}", state.cfg.mock_domain)
     }
 }
 
-fn path_url(token: &str) -> String {
-    format!("/e/{token}")
+fn path_url(state: &AppState, token: &str) -> String {
+    format!("{}/e/{token}", state.cfg.public_base_url)
 }
 
 /// Normalize a stored TEXT timestamp to an RFC3339 string. SQLite
@@ -61,7 +63,7 @@ fn endpoint_summary(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Endpoint
     let token: String = row.get("token");
     EndpointSummary {
         mock_url: mock_url(state, &token),
-        path_url: path_url(&token),
+        path_url: path_url(state, &token),
         name: row.get("name"),
         created_at: to_rfc3339(row.get("created_at")).unwrap_or_default(),
         last_hit: to_rfc3339(row.get("last_hit")),
@@ -78,7 +80,7 @@ fn endpoint_detail(
     let token: String = row.get("token");
     EndpointDetail {
         mock_url: mock_url(state, &token),
-        path_url: path_url(&token),
+        path_url: path_url(state, &token),
         name: row.get("name"),
         auto_crud: row.get::<i64, _>("auto_crud") != 0,
         target_url: row.get("target_url"),

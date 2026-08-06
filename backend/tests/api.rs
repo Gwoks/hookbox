@@ -104,6 +104,70 @@ async fn add_rule(app: &axum::Router, secret: &str, token: &str, rule: Value) ->
 // --- §5.2 management surface --------------------------------------------------
 
 #[tokio::test]
+async fn mock_url_uses_public_base_url_in_path_fallback_mode() {
+    // Explicit Config override (no env mutation — parallel tests also read
+    // Config::from_env()).
+    std::env::set_var("MOCK_DOMAIN", "mock.local");
+    std::env::set_var("APP_HOST", "app.local");
+    let pool = db::pool(":memory:").await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let mut cfg = Config::from_env();
+    cfg.path_fallback_only = true;
+    cfg.public_base_url = "https://hookbox.example.com".to_string();
+    let state = AppState::new(pool, cfg);
+    let app = build_app(state);
+
+    let (s, body, _) = call(
+        &app,
+        "POST",
+        "app.local",
+        "/api/session",
+        None,
+        Some(json!({"email":"base@e.com"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let ep = &body["primary"];
+    let token = ep["token"].as_str().unwrap();
+    assert_eq!(
+        ep["mock_url"],
+        json!(format!("https://hookbox.example.com/e/{token}"))
+    );
+    assert_eq!(
+        ep["path_url"],
+        json!(format!("https://hookbox.example.com/e/{token}"))
+    );
+}
+
+#[tokio::test]
+async fn mock_url_stays_relative_in_path_fallback_mode_without_base_url() {
+    std::env::set_var("MOCK_DOMAIN", "mock.local");
+    std::env::set_var("APP_HOST", "app.local");
+    let pool = db::pool(":memory:").await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let mut cfg = Config::from_env();
+    cfg.path_fallback_only = true;
+    cfg.public_base_url = String::new();
+    let state = AppState::new(pool, cfg);
+    let app = build_app(state);
+
+    let (s, body, _) = call(
+        &app,
+        "POST",
+        "app.local",
+        "/api/session",
+        None,
+        Some(json!({"email":"rel@e.com"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let ep = &body["primary"];
+    let token = ep["token"].as_str().unwrap();
+    assert_eq!(ep["mock_url"], json!(format!("/e/{token}")));
+    assert_eq!(ep["path_url"], json!(format!("/e/{token}")));
+}
+
+#[tokio::test]
 async fn session_shape_and_flat_error_envelope() {
     let (app, _secret) = app().await;
     // Unauthed /api -> 401 flat envelope + WWW-Authenticate.

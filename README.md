@@ -138,6 +138,7 @@ knobs:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MOCK_DOMAIN` | `mock.local` | Wildcard mock surface base (`*.<MOCK_DOMAIN>`). Blank/dotless → path-fallback-only. |
+| `PUBLIC_BASE_URL` | *(blank)* | Public origin (e.g. `https://hookbox.example.com`) prefixed onto `/e/<token>` mock URLs so the UI/API hand out absolute, copy-pasteable URLs in path-fallback mode. Blank keeps them relative. |
 | `APP_HOST` | `localhost` | Canonical UI/API host (apex + this host never hit the interceptor). |
 | `APP_PORT` / `APP_BIND_HOST` | `8080` / `0.0.0.0` | Published HTTP port / bind address. |
 | `DATABASE_PATH` | `data/app.db` | SQLite file (WAL). |
@@ -267,6 +268,7 @@ Environment="STATIC_DIR=/home/ubuntu/hookbox/dist"
 Environment="APP_HOST=0.0.0.0"
 Environment="APP_PORT=8080"
 Environment="MOCK_DOMAIN=localhost"
+Environment="PUBLIC_BASE_URL=https://hookbox.yourdomain.com"
 Restart=unless-stopped
 RestartSec=5
 
@@ -308,6 +310,23 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Long-lived socket: outlive nginx's 60s default between frames.
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # SSE fallback feed (used when WebSocket connections fail)
+    location /sse/ {
+        proxy_pass http://127.0.0.1:8080/sse/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 
     # Mock endpoint proxy — path format: /e/<token>
