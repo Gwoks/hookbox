@@ -38,6 +38,12 @@ export const router = createBrowserRouter([
   { path: "/d/:token/rules", element: <RulesManager /> },
   { path: "/d/:token/settings", element: <Settings /> },
   { path: "/cli", element: <Cli /> },
-  { path: "/_gallery", element: <PrimitivesGallery /> },
+  // Dev-only route: `import.meta.env.DEV` is a build-time constant, so Vite
+  // dead-code-eliminates this branch (and the PrimitivesGallery import with
+  // it) from the production bundle — nginx's SPA fallback never has a page
+  // to serve here in prod, and /_gallery falls through to NotFound.
+  ...(import.meta.env.DEV
+    ? [{ path: "/_gallery", element: <PrimitivesGallery /> }]
+    : []),
   { path: "*", element: <NotFound /> },
 ]);

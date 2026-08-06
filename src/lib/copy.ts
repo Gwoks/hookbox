@@ -402,7 +402,8 @@ export const copy = {
   'cli.intro':
     'The tunnel forwards public traffic for an endpoint to a server on your localhost — so you can test webhooks and integrations against code you\'re running right now. Tunneled requests show up in the feed labeled tunnel.',
   'cli.command.label': 'Run this',
-  'cli.command.template': 'tunnel --port {port} --endpoint {token} --secret {secret}',
+  'cli.command.template':
+    'tunnel --port {port} --endpoint {token} --secret {secret} --host {host}',
   'cli.command.portDefault': '3000',
   'cli.command.copy.aria': 'Copy tunnel command',
   'cli.secret.reveal': 'Reveal secret',

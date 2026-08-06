@@ -265,11 +265,12 @@ WorkingDirectory=/home/ubuntu/hookbox/backend
 ExecStart=/home/ubuntu/hookbox/backend/target/release/hookbox
 Environment="DATABASE_PATH=/home/ubuntu/hookbox/data/app.db"
 Environment="STATIC_DIR=/home/ubuntu/hookbox/dist"
-Environment="APP_HOST=0.0.0.0"
+Environment="APP_HOST=hookbox.yourdomain.com"
+Environment="APP_BIND_HOST=127.0.0.1"
 Environment="APP_PORT=8080"
 Environment="MOCK_DOMAIN=localhost"
 Environment="PUBLIC_BASE_URL=https://hookbox.yourdomain.com"
-Restart=unless-stopped
+Restart=always
 RestartSec=5
 
 [Install]
@@ -291,6 +292,11 @@ server {
 
     location / {
         try_files $uri $uri/ /index.html;
+    }
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8080/healthz;
+        proxy_set_header Host $host;
     }
 
     location /api/ {
@@ -337,6 +343,9 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # Above the default MAX_INGEST_BODY_BYTES (1,000,000) so the app's own
+        # 413 (not nginx's bare-HTML one) governs the mock ingest cap.
+        client_max_body_size 2m;
     }
 }
 EOF

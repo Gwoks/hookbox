@@ -99,8 +99,8 @@ export function PrimitivesGallery() {
       </section>
 
       <Section title="CodeBlock / MockUrlChip (copy-only, not link-colored)">
-        <CodeBlock value="curl https://abc123.hookbox.dev/ping" />
-        <MockUrlChip url="https://abc123.hookbox.dev" />
+        <CodeBlock value="curl https://<your-host>/e/<token>/ping" />
+        <MockUrlChip url="https://<your-host>/e/<token>" />
       </Section>
 
       <div className="grid gap-4 sm:grid-cols-2">

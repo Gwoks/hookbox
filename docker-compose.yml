@@ -16,10 +16,15 @@ services:
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/app.db}
       STATIC_DIR: ${STATIC_DIR:-/app/dist}
       # --- routing (LOCKED §2; OQ-4 default port 8080) -----------------------
+      # APP_PORT is NOT set here on purpose: the container's internal listen
+      # port stays fixed at 8080 (Dockerfile ENV/EXPOSE/HEALTHCHECK all
+      # assume it). Relocate the published port via the host side of the
+      # `ports:` mapping below instead — setting APP_PORT here would move the
+      # binary's listen port out from under that fixed container-side mapping.
       MOCK_DOMAIN: ${MOCK_DOMAIN:-mock.local}
       APP_HOST: ${APP_HOST:-localhost}
-      APP_PORT: ${APP_PORT:-8080}
       APP_BIND_HOST: ${APP_BIND_HOST:-0.0.0.0}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # --- retention (LOCKED §5.6) -------------------------------------------
       TRACE_CAP: ${TRACE_CAP:-100}
       TRACE_TTL_HOURS: ${TRACE_TTL_HOURS:-24}
@@ -34,7 +39,8 @@ services:
       RATE_LIMIT_MAX_PER_MIN: ${RATE_LIMIT_MAX_PER_MIN:-100000}
       MAX_INGEST_BODY_BYTES: ${MAX_INGEST_BODY_BYTES:-1000000}
     ports:
-      # host:container — change the host side to relocate the published port.
+      # host:container — the container always listens on 8080 (see the note
+      # above); change the host side to relocate the published port.
       - "${APP_PORT:-8080}:8080"
     volumes:
       - hookbox_data:/app/data

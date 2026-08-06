@@ -52,10 +52,16 @@ export function Cli() {
   // The command (display + copy) shows the real secret only once revealed, so a
   // copy carries the live capability; masked otherwise (cli.secret.warning).
   const secretSlot = secret ? (revealed ? secret : "•".repeat(24)) : "<secret>";
+  // The tunnel binary defaults --host to ws://localhost:8080, which only works
+  // for a local dev server; derive the real host from the page origin so the
+  // copied command reaches this deployment (nginx proxies /ws/ in prod, Vite
+  // proxies it in dev).
+  const hostSlot = window.location.origin.replace(/^http/, "ws");
   const command = t("cli.command.template", {
     port: t("cli.command.portDefault"),
     token: tokenSlot,
     secret: secretSlot,
+    host: hostSlot,
   });
 
   return (
