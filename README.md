@@ -319,6 +319,11 @@ server {
         # Long-lived socket: outlive nginx's 60s default between frames.
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        # The feed/tunnel handshake carries the owner secret in `?cap=`
+        # (browsers can't set a custom Authorization header on a WS/SSE
+        # handshake); don't let the request line — query string included —
+        # land in the access log.
+        access_log off;
     }
 
     # SSE fallback feed (used when WebSocket connections fail)
@@ -333,6 +338,8 @@ server {
         proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        # Same ?cap= exposure as /ws/ above.
+        access_log off;
     }
 
     # Mock endpoint proxy — path format: /e/<token>
