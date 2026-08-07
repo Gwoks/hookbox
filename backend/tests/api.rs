@@ -412,6 +412,85 @@ async fn auto_crud_lifecycle() {
     assert_eq!(body["error"], json!("bad_request"));
 }
 
+/// AC-122(e): a backend regression test asserting that `auto_crud = true`
+/// PLUS the frozen §5.5.7 catch-all rule is served by `rule`, not `crud` — so
+/// the shadowing (matched rules return before `resolve_unmatched()`, which is
+/// what Auto-CRUD lives behind — `interceptor/engine.rs`) is chosen and
+/// tested behaviour, not something discovered in production.
+#[tokio::test]
+async fn auto_crud_endpoint_with_catch_all_rule_is_served_by_rule_not_crud() {
+    let (app, secret) = app().await;
+    let token = new_endpoint(&app, &secret).await;
+    call(
+        &app,
+        "PATCH",
+        "app.local",
+        &format!("/api/endpoints/{token}"),
+        Some(&secret),
+        Some(json!({"auto_crud": true})),
+    )
+    .await;
+    let host = format!("{token}.mock.local");
+
+    // Before the catch-all: Auto-CRUD answers a collection path itself.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/widgets")
+        .header("host", &host)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("x-hookbox-served-by").unwrap(), "crud");
+
+    // Add the frozen §5.5.7 default catch-all rule (payload as amended by
+    // AC-125's copy.md strings).
+    add_rule(
+        &app,
+        &secret,
+        &token,
+        json!({
+            "name": "Catch-all (default)",
+            "priority": 1000,
+            "enabled": true,
+            "match": { "method": "ANY", "path": "/*", "headers": {}, "query": {},
+                       "body_conditions": [], "state_requirements": [] },
+            "response": { "status_code": 200, "headers": {}, "content_type": "application/json",
+                          "body_template": "{\n  \"ok\": true,\n  \"hookbox\": \"default catch-all\",\n  \"message\": \"Edit this rule in HookBox to return your own response.\"\n}" },
+            "state_writes": [], "latency_ms": null, "rate_limit_per_min": null,
+            "chaos_mode": null, "webhook_action": null
+        }),
+    )
+    .await;
+
+    // AC-122(e): the SAME Auto-CRUD collection path is now shadowed — served
+    // by the rule, not crud, and the body is the catch-all placeholder.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/widgets")
+        .header("host", &host)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("x-hookbox-served-by").unwrap(), "rule");
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["hookbox"], json!("default catch-all"));
+
+    // AC-63: an arbitrary deep path/verb is caught too, not just the
+    // Auto-CRUD collection route.
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/anything/at/all")
+        .header("host", &host)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("x-hookbox-served-by").unwrap(), "rule");
+}
+
 // --- §5.5 Auto-CORS -----------------------------------------------------------
 
 #[tokio::test]
