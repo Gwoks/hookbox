@@ -1433,6 +1433,75 @@ async fn share_row_invariant_masked_value_never_appears_elsewhere() {
     assert!(!raw.contains("super-secret-value-12345"));
 }
 
+/// Re-validates journey F4-viewer + PRD §5.5.4 / AC-77: `request_count` is a
+/// monotonic lifetime counter, bumped on the same write path as the trace
+/// (`db::insert_trace`), so it can never drift from the number of rows the
+/// viewer (and the owner) actually see listed.
+#[tokio::test]
+async fn request_count_and_last_hit_increment_on_the_trace_write_path() {
+    let (app, secret) = app().await;
+    let token = new_endpoint(&app, &secret).await;
+    add_rule(
+        &app,
+        &secret,
+        &token,
+        json!({"match":{"method":"GET","path":"/p"},"response":{"status_code":200}}),
+    )
+    .await;
+    let (_s, body, _) = mint_share(&app, &secret, &token, None).await;
+    let code = body["code"].as_str().unwrap().to_string();
+
+    // Before any mock request: zero, and last_hit is null.
+    let (s, detail, _) = call(
+        &app,
+        "GET",
+        "app.local",
+        &format!("/api/endpoints/{token}"),
+        Some(&secret),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(detail["request_count"], json!(0));
+    assert!(detail["last_hit"].is_null());
+
+    // Serve N=3 mock requests against the endpoint.
+    let host = format!("{token}.mock.local");
+    for _ in 0..3 {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/p")
+            .header("host", &host)
+            .body(Body::empty())
+            .unwrap();
+        let _ = app.clone().oneshot(req).await.unwrap();
+    }
+    // Give the spawned trace task a moment (fire-and-forget, AC-73(a)).
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+    // The owner-authenticated endpoint detail agrees...
+    let (s, detail, _) = call(
+        &app,
+        "GET",
+        "app.local",
+        &format!("/api/endpoints/{token}"),
+        Some(&secret),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(detail["request_count"], json!(3));
+    assert!(!detail["last_hit"].is_null());
+
+    // ...and so does the PUBLIC share viewer, right next to the 3 listed
+    // rows it renders underneath the subject line (the exact contradiction
+    // this bug reported: "0 requests received in total" beside 3 rows).
+    let (s, feed, _) = public_list(&app, &code, "").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(feed["endpoint"]["request_count"], json!(3));
+    assert_eq!(feed["requests"].as_array().unwrap().len(), 3);
+}
+
 #[tokio::test]
 async fn share_last_used_at_written_off_path_and_coalesced() {
     let (app, secret) = app().await;

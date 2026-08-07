@@ -55,9 +55,11 @@ pub struct TraceRecord {
     pub state_snapshot: String, // JSON
 }
 
-/// Insert a trace and prune to the newest `trace_cap` rows for that token
-/// (write-time prune so the per-endpoint cap never drifts — AC-48). Returns the
-/// new row id. Runs off the response path (spawned by the engine, never awaited).
+/// Insert a trace, prune to the newest `trace_cap` rows for that token
+/// (write-time prune so the per-endpoint cap never drifts — AC-48), and bump
+/// the endpoint's lifetime counters. Returns the new row id. Runs off the
+/// response path (spawned by the engine, never awaited) — every write here,
+/// including the counter bump, is fire-and-forget per AC-73(a).
 pub async fn insert_trace(
     pool: &SqlitePool,
     rec: &TraceRecord,
@@ -86,6 +88,21 @@ pub async fn insert_trace(
     .bind(&rec.trace_json)
     .bind(&rec.state_snapshot)
     .fetch_one(pool)
+    .await?;
+
+    // Every traced request is a real hit on a live endpoint (unknown-token
+    // 404s and tombstoned 410s never reach `spawn_trace` — see
+    // `unknown_404_and_gone_410_not_traced`), so bump the endpoint's lifetime
+    // counters here, on the exact same write path, rather than tracking a
+    // second source of truth. `request_count` is monotonic — it is never
+    // reset or decremented — matching AC-77's premise, which F4 now
+    // publishes to the public viewer (§5.5.4).
+    sqlx::query(
+        "UPDATE endpoints SET request_count = request_count + 1, last_hit = datetime('now')
+          WHERE token = ?",
+    )
+    .bind(&rec.token)
+    .execute(pool)
     .await?;
 
     // Write-time prune: keep only the newest `trace_cap` rows for this token.
