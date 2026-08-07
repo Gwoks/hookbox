@@ -14,7 +14,7 @@
  *   (g) (NOT this hook — a DETAIL 404 is handled per-row, never terminal.)
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, ApiError, type PublicRequestSummary, type PublicShareFeed } from '@/api'
+import { api, ApiError, type PublicRequestSummary, type PublicShareFeed } from '@/api/public-client'
 
 const POLL_INTERVAL_MS = 5000
 const BACKOFF_CEILING_MS = 60_000

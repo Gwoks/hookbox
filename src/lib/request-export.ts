@@ -55,14 +55,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   })
 }
 
-async function fetchOne(id: number): Promise<DetailCell> {
+async function fetchOne(id: number, signal: AbortSignal): Promise<DetailCell> {
   try {
-    const detail = await withTimeout(api.getRequest(id), ROW_TIMEOUT_MS)
+    const detail = await withTimeout(api.getRequest(id, { signal }), ROW_TIMEOUT_MS)
     return cellsFor(detail)
   } catch (err) {
     // A 404 is the documented just-streamed-trace case (pending); every
-    // other failure — 5xx, network, contract_mismatch, our own timeout —
-    // is unavailable. Per-row failure never aborts the export (AC-52).
+    // other failure — 5xx, network, contract_mismatch, our own timeout, an
+    // abort — is unavailable. Per-row failure never aborts the export
+    // (AC-52); an abort's sentinel result is discarded by the caller anyway
+    // (AC-48/AC-53), since the worker loop returns without reporting progress.
     const status = err instanceof ApiError ? err.status : 0
     return sentinelCells(status === 404 ? CSV_PENDING : CSV_UNAVAILABLE)
   }
@@ -71,11 +73,11 @@ async function fetchOne(id: number): Promise<DetailCell> {
 /** Fetch every row's detail with a fixed pool of `EXPORT_CONCURRENCY`
  * workers pulling from a shared cursor, so completion order never affects
  * row order — results land in a pre-sized array BY INDEX. `onProgress` fires
- * once per settled row. Cooperative cancellation: once `signal` is aborted,
- * workers stop pulling new work and progress stops firing; requests already
- * in flight are left to finish in the background and their results are
- * discarded by the caller (the underlying fetch has no abort hook to wire
- * without touching src/api/client.ts, which this feature does not touch). */
+ * once per settled row. Cancellation (AC-48/AC-53): once `signal` is
+ * aborted, workers stop pulling new work AND every in-flight
+ * `GET /api/requests/{id}` is aborted through this same shared
+ * `AbortController` (threaded into `api.getRequest`) — nothing keeps running
+ * in the background. */
 export async function fetchDetails(
   rows: readonly RequestSummary[],
   signal: AbortSignal,
@@ -90,7 +92,7 @@ export async function fetchDetails(
     while (!signal.aborted) {
       const i = cursor++
       if (i >= total) return
-      results[i] = await fetchOne(rows[i].id)
+      results[i] = await fetchOne(rows[i].id, signal)
       if (signal.aborted) return
       done += 1
       onProgress(done, total)

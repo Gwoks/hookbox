@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronRight, RotateCw } from 'lucide-react'
-import { api, ApiError, type PublicRequestDetail, type PublicRequestSummary } from '@/api'
+import { api, ApiError, type PublicRequestDetail, type PublicRequestSummary } from '@/api/public-client'
 import { t } from '@/lib/copy'
 import { cn } from '@/lib/cn'
 import { relTime } from '@/lib/time'

@@ -211,6 +211,47 @@ test.describe("F5 Export CSV", () => {
     expect(downloadFired).toBe(false);
   });
 
+  test("AC-48/AC-53: cancelling the export aborts every in-flight GET /api/requests/{id}", async ({
+    page,
+  }) => {
+    await installMockBackend(page, { authed: true });
+    await page.route(/\/api\/requests\/\d+$/, async (route) => {
+      await new Promise((r) => setTimeout(r, 300));
+      await route.fallback();
+    });
+    await page.goto(`/d/${TOKEN}`);
+    await expect(page.getByRole("option")).toHaveCount(3);
+
+    const failedDetailUrls: string[] = [];
+    const finishedDetailUrls: string[] = [];
+    page.on("requestfailed", (req) => {
+      if (/\/api\/requests\/\d+$/.test(req.url())) failedDetailUrls.push(req.url());
+    });
+    page.on("requestfinished", (req) => {
+      if (/\/api\/requests\/\d+$/.test(req.url())) finishedDetailUrls.push(req.url());
+    });
+
+    await page.getByRole("button", { name: "Feed actions" }).click();
+    await page
+      .getByRole("menuitem", { name: "Export the listed requests as CSV" })
+      .click();
+    await expect(page.getByText(/Exporting \d+ of 3…/)).toBeVisible();
+    await page.getByRole("button", { name: "Cancel the export" }).click();
+    await expect(
+      page.getByText("Export cancelled. No file was downloaded.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+
+    // All 3 rows' detail fetches were in flight when Cancel fired (the route
+    // above delays 300ms) — every one must be observably aborted through the
+    // one shared AbortController, and none may go on to finish normally in
+    // the background (AC-48/AC-53).
+    await page.waitForTimeout(500);
+    expect(failedDetailUrls.length).toBe(3);
+    expect(finishedDetailUrls).toHaveLength(0);
+  });
+
   test("§5.6 fetch mechanism: at most 4 requests in flight, and results stay index-aligned under out-of-order completion", async ({
     page,
   }) => {
