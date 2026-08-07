@@ -2045,6 +2045,78 @@ async fn f7_default_echo_response_body_redacted_at_rest_while_client_gets_raw() 
     assert!(!stored_raw.contains("super-secret-echo-value"));
 }
 
+// hookbox-mun.36 — F4 channel C: the wildcard mock host IS `<token>.<MOCK_DOMAIN>`,
+// so on a `default_mode = "echo"` row the persisted `response_body`'s `headers`
+// sub-object used to carry the endpoint token verbatim via `host`/`origin`/
+// `referer`. The public share projection filters `request_headers` and
+// `response_headers` for exactly that set (AC-43, AC-S2, hookbox-mun.34) but
+// passed `response_body` through untouched, so the token reappeared there.
+// Re-validates AC-43 / journey.md F4 VIEWER step 6.
+#[tokio::test]
+async fn f4_channel_c_echo_response_body_has_no_token_or_mock_host_publicly() {
+    let (app, secret) = app().await;
+    let token = new_endpoint(&app, &secret).await;
+    call(
+        &app,
+        "PATCH",
+        "app.local",
+        &format!("/api/endpoints/{token}"),
+        Some(&secret),
+        Some(json!({"default_mode":"echo"})),
+    )
+    .await;
+    let host = format!("{token}.mock.local");
+    let req = Request::builder()
+        .method("POST")
+        .uri("/hooks/order")
+        .header("host", &host)
+        .header("origin", format!("https://{host}"))
+        .header("referer", format!("https://{host}/somewhere"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let client_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let client_body: Value = serde_json::from_slice(&client_bytes).unwrap();
+    // The §2 non-goal / AC-72: the CLIENT's own echo body is untouched — it
+    // still carries the real host/origin/referer.
+    assert_eq!(client_body["headers"]["host"], json!(host));
+    assert_eq!(
+        client_body["headers"]["origin"],
+        json!(format!("https://{host}"))
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let detail = latest_request_detail(&app, &secret, &token).await;
+    let request_id = detail["id"].as_i64().unwrap();
+    let stored_raw = detail["response_body"].as_str().unwrap();
+    // The fix is scoped to the echo payload's `headers` sub-object only: the
+    // stored top-level `request_headers` column stays verbatim per §5.11 (it
+    // is a different column, filtered only at the public projection).
+    assert_eq!(detail["request_headers"]["host"], json!(host));
+    let stored: Value = serde_json::from_str(stored_raw).unwrap();
+    assert!(stored["headers"].get("host").is_none());
+    assert!(stored["headers"].get("origin").is_none());
+    assert!(stored["headers"].get("referer").is_none());
+    assert!(
+        !stored_raw.contains(&token),
+        "persisted response_body must not carry the endpoint token: {stored_raw}"
+    );
+
+    let (_s, share_body, _) = mint_share(&app, &secret, &token, None).await;
+    let code = share_body["code"].as_str().unwrap().to_string();
+    let (s, public, _) = public_detail(&app, &code, request_id).await;
+    assert_eq!(s, StatusCode::OK);
+    let public_raw = serde_json::to_string(&public["response_body"]).unwrap();
+    assert!(
+        !public_raw.contains(&token),
+        "public response_body must not carry the endpoint token: {public_raw}"
+    );
+    assert!(
+        !public_raw.to_ascii_lowercase().contains("mock.local"),
+        "public response_body must not carry the mock host: {public_raw}"
+    );
+}
+
 #[tokio::test]
 async fn f7_mitm_response_body_captured_from_real_upstream() {
     let (app, secret) = app_with_mitm_allowed().await;

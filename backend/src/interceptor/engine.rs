@@ -388,14 +388,18 @@ pub async fn handle_mock(
     // must not carry the caller's raw headers, even though the client's echo
     // body still does (that response is already built, above, in `resp`/
     // `rb`). Rebuild ONLY the bytes handed to `spawn_trace` from
-    // `redact(&headers_lower)`.
+    // `redact_echo_persisted_headers(&headers_lower)` (hookbox-mun.36:
+    // extends AC-S3's own precedent to also drop the structural
+    // `host`/`origin`/`referer` headers, which is what carries the endpoint
+    // token on wildcard-mock-host traffic straight back into the public
+    // detail's `response_body` — see that function's doc comment).
     let persisted_body: std::borrow::Cow<'_, [u8]> =
         if served_by == "default" && ep.default_mode == "echo" {
             let redacted = echo_payload(
                 &method,
                 mock_path,
                 &query,
-                &redact(&headers_lower),
+                &redact_echo_persisted_headers(&headers_lower),
                 &body_text,
             );
             std::borrow::Cow::Owned(serde_json::to_vec(&redacted).unwrap_or_default())
@@ -595,6 +599,34 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
     ) {
         headers.insert(n, v);
     }
+}
+
+/// Structural request headers dropped from the echo payload's persisted
+/// `headers` sub-object (hookbox-mun.36, channel C of AC-43/AC-S2). In
+/// wildcard mock-host mode `Host` IS `<token>.<MOCK_DOMAIN>` on every
+/// request, and a cross-origin browser echoes it back via `Origin`/
+/// `Referer` — exactly the set `routes::share::PUBLIC_REQUEST_HEADER_DROP`
+/// removes from the public projection's `request_headers` column. That
+/// projection filters `request_headers` and `response_headers` but passes
+/// `response_body` through verbatim, so without this the same host/origin/
+/// referer value re-enters an anonymous share viewer's response through the
+/// echo body instead of the header maps. Dropped entirely (not masked) to
+/// mirror `PUBLIC_REQUEST_HEADER_DROP` exactly.
+const ECHO_PERSIST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
+
+/// The AC-S3 persist-path redaction (`redact()`, masking
+/// authorization/cookie/x-owner-id) PLUS the hookbox-mun.36 follow-up:
+/// dropping `ECHO_PERSIST_HEADER_DROP` entirely. Applied ONLY to the
+/// `headers` sub-object rebuilt for the persisted `response_body` of a
+/// `default_mode = "echo"` row (`handle_mock`, below) — the client's own
+/// echo body still carries the raw headers (AC-72, the §2 non-goal), and
+/// every other row shape / column (including the stored `request_headers`
+/// column, the owner Inspector and F5's CSV) is untouched.
+fn redact_echo_persisted_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    redact(headers)
+        .into_iter()
+        .filter(|(k, _)| !ECHO_PERSIST_HEADER_DROP.contains(&k.to_ascii_lowercase().as_str()))
+        .collect()
 }
 
 /// The `default_mode = "echo"` payload shape, factored out so the client
