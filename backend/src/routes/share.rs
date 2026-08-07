@@ -54,12 +54,12 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
 use crate::auth::{assert_owns_endpoint, OwnerId};
 use crate::error::ApiError;
+use crate::helpers::contains_ci;
 use crate::ids::{gen_share_code, hash_secret};
 use crate::models::{
     PublicEndpointInfo, PublicRequestDetail, PublicRequestSummary, PublicShareFeed, ShareLink,
@@ -93,16 +93,24 @@ const PUBLIC_RESPONSE_HEADER_REDACT: [&str; 5] = [
 const PUBLIC_REQUEST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
 
 /// Mask `value` to `"<redacted>"` iff it is a JSON string containing `token`
-/// verbatim — the second half of the AC-S2/AC-43 fix, applied to BOTH
-/// `request_headers` and `response_headers` in the PUBLIC projection so a
-/// server-generated echo of the token (e.g. a CORS
-/// `access-control-allow-origin` reflecting the wildcard mock `Origin`)
-/// cannot survive the name-based filters above. Never applied to `path`,
-/// `query_params`, or either body — those are caller-supplied and a caller
-/// choosing to paste the token into their own body is out of scope (AC-S2).
+/// case-insensitively — the second half of the AC-S2/AC-43 fix, applied to
+/// BOTH `request_headers` and `response_headers` in the PUBLIC projection so
+/// a server-generated echo of the token (e.g. a CORS
+/// `access-control-allow-origin` reflecting the wildcard mock `Origin`, or a
+/// reverse proxy's `X-Forwarded-Host`) cannot survive the name-based filters
+/// above. Never applied to `path`, `query_params`, or either body — those
+/// are caller-supplied and a caller choosing to paste the token into their
+/// own body is out of scope (AC-S2). The comparison is case-insensitive
+/// (`helpers::contains_ci`, hookbox-mun.38): nginx's `$host` variable is
+/// documented as lowercase, so a case-sensitive `contains` let a
+/// case-folded token survive verbatim. The `response_body` column is NOT
+/// filtered here at all (§5.11) — that channel is closed on the persist path
+/// instead, in `interceptor::engine::redact_echo_persisted_headers`, which
+/// shares this exact case-insensitive comparison via `helpers::contains_ci`
+/// so the two can never drift apart again (hookbox-mun.37).
 fn mask_token_in_value(token: &str, value: Value) -> Value {
     match &value {
-        Value::String(s) if !token.is_empty() && s.contains(token) => json!("<redacted>"),
+        Value::String(s) if contains_ci(s, token) => json!("<redacted>"),
         _ => value,
     }
 }
@@ -486,25 +494,59 @@ async fn revoke_share(
 
 // === #22 GET /api/share/{code}/requests?limit&offset (PUBLIC) ================
 
-#[derive(Deserialize)]
 struct PublicRequestsQuery {
     limit: Option<i64>,
     offset: Option<i64>,
+}
+
+/// Parse `limit`/`offset` out of the RAW `?key=value` map (hookbox-mun.41).
+/// The route used to take `Query<PublicRequestsQuery>` directly as an axum
+/// extractor argument — but a fallible typed extractor runs BEFORE the
+/// handler body, so `?limit=abc` 400'd at the axum layer and
+/// `check_share_rate_limit` never ran at all, making the only unauthenticated
+/// surface unmetered for any malformed query. Taking
+/// `Query<HashMap<String, String>>` instead can never fail to extract (every
+/// query string parses into string→string pairs), so the rate limit check in
+/// `public_list_requests_inner` below always runs first; a non-numeric value
+/// now fails HERE, inside the handler, with the SAME validation error as an
+/// out-of-range one — consistent, and counted against the limiter either way.
+fn parse_public_requests_query(
+    raw: &std::collections::HashMap<String, String>,
+) -> Result<PublicRequestsQuery, ApiError> {
+    let limit = match raw.get("limit") {
+        None => None,
+        Some(s) => Some(
+            s.trim()
+                .parse::<i64>()
+                .map_err(|_| ApiError::validation("limit must be between 1 and 200."))?,
+        ),
+    };
+    let offset = match raw.get("offset") {
+        None => None,
+        Some(s) => Some(
+            s.trim()
+                .parse::<i64>()
+                .map_err(|_| ApiError::validation("offset must be >= 0."))?,
+        ),
+    };
+    Ok(PublicRequestsQuery { limit, offset })
 }
 
 async fn public_list_requests_inner(
     state: &AppState,
     ip: &str,
     code: &str,
-    q: PublicRequestsQuery,
+    raw_q: &std::collections::HashMap<String, String>,
 ) -> Result<Json<PublicShareFeed>, ApiError> {
-    // 1. Rate limit — before any DB read.
+    // 1. Rate limit — before any DB read, and before `limit`/`offset` are
+    // even parsed (hookbox-mun.41): a malformed query must still be counted.
     check_share_rate_limit(state, ip)?;
 
     // 2. Parameter validation MUST precede code resolution (AC-101): if
     // `limit` were validated after resolving the code, `?limit=999` would
     // return 422 for a live code and 404 for a dead one — a boolean
     // existence oracle that defeats AC-36.
+    let q = parse_public_requests_query(raw_q)?;
     let limit = q.limit.unwrap_or(50);
     let offset = q.offset.unwrap_or(0);
     if !(1..=200).contains(&limit) {
@@ -553,10 +595,10 @@ async fn public_list_requests(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Path(code): Path<String>,
-    Query(q): Query<PublicRequestsQuery>,
+    Query(raw_q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     let ip = effective_client_ip(connect_info, &headers);
-    match public_list_requests_inner(&state, &ip, &code, q).await {
+    match public_list_requests_inner(&state, &ip, &code, &raw_q).await {
         Ok(v) => no_store(v.into_response()),
         Err(e) => no_store(e.into_response()),
     }
@@ -568,10 +610,22 @@ async fn public_get_request_inner(
     state: &AppState,
     ip: &str,
     code: &str,
-    request_id: i64,
+    request_id_raw: &str,
 ) -> Result<Json<PublicRequestDetail>, ApiError> {
-    // 1. Rate limit — before any DB read.
+    // 1. Rate limit — before any DB read, and before the id is even parsed
+    // (hookbox-mun.41's same root cause applied here too: `Path<(String,
+    // i64)>` is a fallible extractor that used to run BEFORE this handler,
+    // so a non-numeric `{id}` 400'd at the axum layer and never reached
+    // `check_share_rate_limit`). Taking the id as a raw `String` instead
+    // means this route can never fail to extract, so the rate limit check
+    // always runs first.
     check_share_rate_limit(state, ip)?;
+
+    // A non-numeric id can never resolve to a real row — collapsed into the
+    // SAME 404 as an unknown/cross-endpoint one (AC-36's one negative
+    // outcome), not a distinct error that would tell a scanner it guessed a
+    // syntactically-plausible id.
+    let request_id: i64 = request_id_raw.parse().map_err(|_| share_not_found())?;
 
     // 3. Code shape (no `limit`/`offset`, so no step 2 here).
     if !is_share_code_shape(code) {
@@ -604,10 +658,10 @@ async fn public_get_request(
     State(state): State<AppState>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
-    Path((code, request_id)): Path<(String, i64)>,
+    Path((code, request_id_raw)): Path<(String, String)>,
 ) -> Response {
     let ip = effective_client_ip(connect_info, &headers);
-    match public_get_request_inner(&state, &ip, &code, request_id).await {
+    match public_get_request_inner(&state, &ip, &code, &request_id_raw).await {
         Ok(v) => no_store(v.into_response()),
         Err(e) => no_store(e.into_response()),
     }
@@ -691,6 +745,38 @@ mod tests {
         assert!(!obj.contains_key("referer"));
         assert_eq!(obj["x-forwarded-for"], json!("<redacted>"));
         assert_eq!(obj["accept"], json!("application/json"));
+    }
+
+    #[test]
+    fn filter_masks_a_case_folded_token_case_insensitively() {
+        // hookbox-mun.38: nginx's `$host` variable is documented as
+        // lowercase, so `proxy_set_header X-Forwarded-Host $host;` delivers
+        // a case-FOLDED token. A case-sensitive `contains` used to let this
+        // survive verbatim in both request AND response header filters.
+        let token = "ixaU3viom4"; // mixed-case, as gen_token produces it
+        let req_raw = json!({
+            "x-forwarded-host": "ixau3viom4.mock.local", // lowercased
+            "accept": "application/json",
+        });
+        let req_out = filter_public_request_headers(req_raw, token);
+        assert_eq!(
+            req_out["x-forwarded-host"],
+            json!("<redacted>"),
+            "a case-folded token in request_headers must still be masked"
+        );
+        assert_eq!(req_out["accept"], json!("application/json"));
+
+        let resp_raw = json!({
+            "access-control-allow-origin": format!("https://{}.mock.local", token.to_ascii_uppercase()),
+            "content-type": "application/json",
+        });
+        let resp_out = filter_public_response_headers(resp_raw, token);
+        assert_eq!(
+            resp_out["access-control-allow-origin"],
+            json!("<redacted>"),
+            "an upper-cased token in response_headers must still be masked"
+        );
+        assert_eq!(resp_out["content-type"], json!("application/json"));
     }
 
     #[test]

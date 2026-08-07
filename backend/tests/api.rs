@@ -1156,6 +1156,130 @@ async fn share_limit_validation_precedes_code_resolution() {
     assert_eq!(body["error"], json!("validation_error"));
 }
 
+// hookbox-mun.41: a malformed query string (`?limit=abc`) used to be
+// rejected by axum's `Query<PublicRequestsQuery>` extractor with a 400
+// BEFORE the handler — and therefore `check_share_rate_limit` — ever ran,
+// so it was completely unmetered. Assert both halves of the fix: (a) a
+// malformed `limit` gets the SAME 422 validation error as an out-of-range
+// one (not axum's generic 400), and (b) it is counted against the limiter
+// exactly like a well-formed request.
+#[tokio::test]
+async fn share_malformed_query_returns_422_and_is_still_rate_limited() {
+    std::env::set_var("MOCK_DOMAIN", "mock.local");
+    std::env::set_var("SESSION_RATE_LIMIT_PER_MIN", "1000000");
+    std::env::set_var("APP_HOST", "app.local");
+    let pool = db::pool(":memory:").await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let mut cfg = Config::from_env();
+    cfg.share_rate_limit_per_min = 2;
+    let state = AppState::new(pool, cfg);
+    let app = build_app(state);
+    let (_s, sbody, _) = call(
+        &app,
+        "POST",
+        "app.local",
+        "/api/session",
+        None,
+        Some(json!({"email":"malformed-q@e.com"})),
+    )
+    .await;
+    let secret = sbody["owner_secret"].as_str().unwrap().to_string();
+    let token = new_endpoint(&app, &secret).await;
+    let (_s, body, _) = mint_share(&app, &secret, &token, None).await;
+    let code = body["code"].as_str().unwrap().to_string();
+
+    // A malformed `limit` is a 422 validation error, not axum's bare 400 —
+    // consistent with the existing out-of-range message, never a live/dead
+    // code oracle (AC-36/AC-101 unaffected: it fails identically before any
+    // code resolution).
+    let (s1, body1, _) = public_list(&app, &code, "limit=abc").await;
+    assert_eq!(s1, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body1["error"], json!("validation_error"));
+
+    // The FIRST malformed request above already consumed one unit of the
+    // `share_rate_limit_per_min = 2` bucket. One more malformed request
+    // consumes the second...
+    let (s2, _b2, _) = public_list(&app, &code, "limit=abc").await;
+    assert_eq!(s2, StatusCode::UNPROCESSABLE_ENTITY);
+    // ...and the THIRD — still malformed — must now be rate limited, proving
+    // the limiter counted the two malformed requests above rather than
+    // letting them through for free.
+    let (s3, body3, h3) = public_list(&app, &code, "limit=abc").await;
+    assert_eq!(s3, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body3["error"], json!("rate_limited"));
+    assert!(h3.get("retry-after").is_some());
+}
+
+// Same root cause as hookbox-mun.41, on the SIBLING public route: `Path<
+// (String, i64)>` on GET /api/share/{code}/requests/{id} is just as fallible
+// as the query extractor was — a non-numeric `{id}` used to 400 at the axum
+// layer before `check_share_rate_limit` ever ran. Assert it is now counted,
+// and collapses into the SAME 404 as an unknown id (AC-36), not a distinct
+// error that would tell a scanner it guessed a syntactically-plausible id.
+#[tokio::test]
+async fn share_non_numeric_request_id_is_404_and_still_rate_limited() {
+    std::env::set_var("MOCK_DOMAIN", "mock.local");
+    std::env::set_var("SESSION_RATE_LIMIT_PER_MIN", "1000000");
+    std::env::set_var("APP_HOST", "app.local");
+    let pool = db::pool(":memory:").await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let mut cfg = Config::from_env();
+    cfg.share_rate_limit_per_min = 2;
+    let state = AppState::new(pool, cfg);
+    let app = build_app(state);
+    let (_s, sbody, _) = call(
+        &app,
+        "POST",
+        "app.local",
+        "/api/session",
+        None,
+        Some(json!({"email":"malformed-id@e.com"})),
+    )
+    .await;
+    let secret = sbody["owner_secret"].as_str().unwrap().to_string();
+    let token = new_endpoint(&app, &secret).await;
+    let (_s, body, _) = mint_share(&app, &secret, &token, None).await;
+    let code = body["code"].as_str().unwrap().to_string();
+
+    let (s1, _b1, _) = call(
+        &app,
+        "GET",
+        "app.local",
+        &format!("/api/share/{code}/requests/not-a-number"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        s1,
+        StatusCode::NOT_FOUND,
+        "a non-numeric id must 404 like any other unresolvable id, never axum's bare 400"
+    );
+
+    let (s2, _b2, _) = call(
+        &app,
+        "GET",
+        "app.local",
+        &format!("/api/share/{code}/requests/not-a-number"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(s2, StatusCode::NOT_FOUND);
+
+    let (s3, _b3, h3) = call(
+        &app,
+        "GET",
+        "app.local",
+        &format!("/api/share/{code}/requests/not-a-number"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(s3, StatusCode::TOO_MANY_REQUESTS);
+    assert!(h3.get("retry-after").is_some());
+}
+
 #[tokio::test]
 async fn share_rate_limit_429_per_ip_with_retry_after() {
     std::env::set_var("MOCK_DOMAIN", "mock.local");
@@ -2114,6 +2238,119 @@ async fn f4_channel_c_echo_response_body_has_no_token_or_mock_host_publicly() {
     assert!(
         !public_raw.to_ascii_lowercase().contains("mock.local"),
         "public response_body must not carry the mock host: {public_raw}"
+    );
+}
+
+/// Recursively collect every JSON leaf (string, bool, number, null) as its
+/// string form. Used by the AC-S4 generic row-walk invariant below: "nothing
+/// masked in `request_headers` appears verbatim anywhere else in the same
+/// public row" is checked structurally, not by re-deriving the shape of one
+/// specific channel.
+fn collect_leaf_strings(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Object(m) => {
+            for val in m.values() {
+                collect_leaf_strings(val, out);
+            }
+        }
+        Value::Array(a) => {
+            for val in a {
+                collect_leaf_strings(val, out);
+            }
+        }
+        Value::Null => {}
+        Value::String(s) => out.push(s.clone()),
+        other => out.push(other.to_string()),
+    }
+}
+
+// hookbox-mun.37 + hookbox-mun.38 — F4 "channel D": a proxy header whose
+// NAME is outside the fixed host/origin/referer drop list, but whose VALUE
+// embeds the endpoint token (here CASE-FOLDED, as a real reverse proxy's
+// documented-lowercase `$host` variable would deliver it via the
+// near-universal `proxy_set_header X-Forwarded-Host $host;` snippet — Apache
+// mod_proxy / Caddy / Traefik add this header by DEFAULT, no operator
+// template and no attacker setup required) used to survive the
+// `request_headers` name filter AND the echo-persist path untouched, then
+// resurface verbatim inside the SAME row's `response_body`, handing an
+// anonymous share viewer a write-capable endpoint token.
+//
+// This is deliberately a GENERIC AC-S4 row-walk invariant, not a
+// name-specific regression: `x-forwarded-host` in case-folded form is a
+// header/casing combination none of the channel A/B/C tests above exercise,
+// so a hypothetical channel E cannot slip through the same way channel D
+// did.
+#[tokio::test]
+async fn f4_channel_d_ac_s4_generic_row_walk_no_masked_value_leaks_elsewhere() {
+    let (app, secret) = app().await;
+    let token = new_endpoint(&app, &secret).await;
+    call(
+        &app,
+        "PATCH",
+        "app.local",
+        &format!("/api/endpoints/{token}"),
+        Some(&secret),
+        Some(json!({"default_mode":"echo"})),
+    )
+    .await;
+    let host = format!("{token}.mock.local");
+    let folded_host = host.to_ascii_lowercase();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ingress")
+        .header("host", &host)
+        .header("x-forwarded-host", &folded_host)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let client_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let client_body: Value = serde_json::from_slice(&client_bytes).unwrap();
+    // Sanity: the §2 non-goal / AC-72 — the CLIENT's own echo body is
+    // untouched and really does carry the case-folded header back.
+    assert_eq!(
+        client_body["headers"]["x-forwarded-host"],
+        json!(folded_host)
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let detail = latest_request_detail(&app, &secret, &token).await;
+    let request_id = detail["id"].as_i64().unwrap();
+
+    let (_s, share_body, _) = mint_share(&app, &secret, &token, None).await;
+    let code = share_body["code"].as_str().unwrap().to_string();
+    let (s, public, _) = public_detail(&app, &code, request_id).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // The mechanism actually engaged: `x-forwarded-host` is not in the fixed
+    // host/origin/referer name-drop list, so it must be MASKED (value
+    // replaced), not silently absent.
+    assert_eq!(
+        public["request_headers"]["x-forwarded-host"],
+        json!("<redacted>"),
+        "a header outside the host/origin/referer name list, but carrying \
+         the token by VALUE, must still be masked in request_headers"
+    );
+
+    // AC-S4, generic row-walk: the exact value masked above (the token's
+    // own case-folded host form) must appear verbatim NOWHERE else in the
+    // same public row — including inside response_body's echoed `headers`
+    // sub-object, the precise shape of channel D.
+    let mut leaves = Vec::new();
+    collect_leaf_strings(&public, &mut leaves);
+    for leaf in &leaves {
+        assert!(
+            !leaf.contains(&folded_host),
+            "a value masked in request_headers ('{folded_host}') leaked \
+             verbatim into another leaf of the same public row: {leaf}"
+        );
+    }
+    // Belt-and-braces over the whole serialized row: the raw token never
+    // appears anywhere, in ANY letter case (catches every other channel at
+    // once, not just this one header).
+    let row_raw = serde_json::to_string(&public).unwrap().to_ascii_lowercase();
+    assert!(
+        !row_raw.contains(&token.to_ascii_lowercase()),
+        "endpoint token leaked (case-insensitively) somewhere in the public row: {row_raw}"
     );
 }
 

@@ -49,6 +49,27 @@ pub fn redact(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Case-insensitive substring test — does `haystack` contain `needle`
+/// anywhere, ignoring ASCII letter case? `needle` (the endpoint token) is
+/// never empty-matched: an empty `needle` always returns `false`, so a
+/// blank/unresolved token can never "match" every value.
+///
+/// Shared by the two independent token-disclosure masks that must never
+/// drift apart again (`routes::share::mask_token_in_value` and
+/// `interceptor::engine::redact_echo_persisted_headers`, hookbox-mun.37 /
+/// hookbox-mun.38): a case-SENSITIVE `str::contains` lets a case-folded
+/// token survive both filters, because nginx's `$host` variable is
+/// documented as returning its value in lowercase, so the near-universal
+/// `proxy_set_header X-Forwarded-Host $host;` snippet delivers a lowercased
+/// endpoint token to the backend even though the token alphabet itself is
+/// mixed-case (`ids::gen_token`).
+pub fn contains_ci(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty()
+        && haystack
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
+}
+
 /// Headers safe to forward to an MITM upstream: hop-by-hop + sensitive removed
 /// (AC-S9). PORT of `helpers.py::strip_forward_headers`.
 pub fn strip_forward_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -229,6 +250,19 @@ mod tests {
         assert_eq!(jsonpath_lite(body, "nope"), None);
         assert_eq!(jsonpath_lite("not json", "a"), None);
         assert_eq!(jsonpath_lite(body, ""), None);
+    }
+
+    #[test]
+    fn contains_ci_matches_regardless_of_letter_case() {
+        // The exact repro shape from hookbox-mun.38: nginx's lowercase
+        // `$host` case-folds a mixed-case token.
+        assert!(contains_ci("ixau3viom4.mock.local", "ixaU3viom4"));
+        assert!(contains_ci("IXAU3VIOM4.MOCK.LOCAL", "ixaU3viom4"));
+        assert!(contains_ci("https://Q3L3jRQ7oY.mock.local", "q3l3jrq7oy"));
+        assert!(!contains_ci("no token here", "ixaU3viom4"));
+        // An empty needle never matches, so a blank/unresolved token can
+        // never redact every value.
+        assert!(!contains_ci("anything at all", ""));
     }
 
     #[test]
