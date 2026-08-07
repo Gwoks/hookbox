@@ -179,6 +179,60 @@ export const messageSchema = z.object({
 export const stateResponseSchema = z.object({ state: z.record(z.string()) })
 export const collectionResponseSchema = z.object({ items: z.array(z.record(z.unknown())) })
 
+// ── F4 share links (operator-toolkit §5.1/§5.5.1-3) ──
+export const shareLinkCreateSchema = z.object({
+  label: z.string().max(80).nullable().optional(),
+})
+
+// Owner list item — carries NO secret material (§5.5.2). Never a code, never a URL.
+export const shareLinkSchema = z.object({
+  id: z.number().int(),
+  label: z.string().nullable(),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(),
+})
+
+// The 201 body for #19 — the ONLY place `code`/`url` ever appear (§5.5.3).
+export const shareLinkCreatedSchema = z.object({
+  id: z.number().int(),
+  code: z.string(),
+  url: z.string(),
+  label: z.string().nullable(),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(),
+})
+
+// ── F4 public projections (operator-toolkit §5.2/§5.5.4-5) — reduced from the
+// owner shapes. Omitted vs RequestSummary/RequestDetail: token, matched_rule_id,
+// overhead_ms, trace, state_snapshot. The five detail fields are PRESENT keys
+// (present-with-null), never omitted.
+export const publicRequestSummarySchema = z.object({
+  id: z.number().int(),
+  method: z.string(),
+  path: z.string(),
+  status_code: z.number().int(),
+  served_by: servedBySchema,
+  duration_ms: z.number().int(),
+  timestamp: z.string(),
+})
+
+export const publicRequestDetailSchema = publicRequestSummarySchema.extend({
+  request_headers: z.record(z.string()),
+  query_params: z.record(z.string()),
+  request_body: z.string().nullable(),
+  response_headers: z.record(z.string()),
+  response_body: z.string().nullable(),
+})
+
+export const publicShareFeedSchema = z.object({
+  endpoint: z.object({
+    name: z.string().nullable(),
+    created_at: z.string(),
+    request_count: z.number().int(),
+  }),
+  requests: z.array(publicRequestSummarySchema),
+})
+
 // Flat error envelope (AC-60): {"error": "<code>", "detail": "<human>"}.
 export const errorEnvelopeSchema = z.object({
   error: z.string(),
@@ -209,3 +263,9 @@ export type ChaosMode = z.infer<typeof chaosModeSchema>
 export type DefaultMode = z.infer<typeof defaultModeSchema>
 export type ServedBy = z.infer<typeof servedBySchema>
 export type ErrorEnvelope = z.infer<typeof errorEnvelopeSchema>
+export type ShareLinkCreate = z.infer<typeof shareLinkCreateSchema>
+export type ShareLink = z.infer<typeof shareLinkSchema>
+export type ShareLinkCreated = z.infer<typeof shareLinkCreatedSchema>
+export type PublicRequestSummary = z.infer<typeof publicRequestSummarySchema>
+export type PublicRequestDetail = z.infer<typeof publicRequestDetailSchema>
+export type PublicShareFeed = z.infer<typeof publicShareFeedSchema>

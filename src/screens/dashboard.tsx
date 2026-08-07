@@ -21,7 +21,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { Pause, Play } from "lucide-react";
+import { MoreHorizontal, Pause, Play } from "lucide-react";
 import {
   api,
   ApiError,
@@ -34,15 +34,39 @@ import { useFeed, connLabel, connTooltip } from "@/feed";
 import { t } from "@/lib/copy";
 import { cn } from "@/lib/cn";
 import { absolutize } from "@/lib/url";
+import { remapEndpointGone } from "@/lib/api-errors";
+import { downloadBlob } from "@/lib/download";
+import {
+  buildRequestCsv,
+  exportFilename,
+  fetchDetails,
+  isSentinelCell,
+  type DetailCell,
+} from "@/lib/request-export";
 import { AppShell } from "@/components/hookbox/app-shell";
 import { SplitPane } from "@/components/hookbox/split-pane";
 import { FeedRow } from "@/components/hookbox/feed-row";
 import { ConnectionPill } from "@/components/hookbox/connection-pill";
 import { CodeBlock } from "@/components/hookbox/code-block";
+import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
 import { Button } from "@/components/ui/button";
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu";
+import { Progress } from "@/components/ui/progress";
 import { SkeletonLines } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 import { Inspector } from "./dashboard/inspector";
+
+type ExportPhase =
+  | { kind: "idle" }
+  | { kind: "fetching"; done: number; total: number }
+  | { kind: "serialising"; total: number };
 
 type Shell =
   | { kind: "loading" }
@@ -196,18 +220,38 @@ function DashboardLoaded({
   offline: boolean;
   onEndpointUpdated: (fields: string[]) => void;
 }) {
+  const { toast } = useToast();
   const [paused, setPaused] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Track which selected ids came from the live stream (their detail may 404 →
   // pending) vs. a reconciled historical row (a 404 there is a real error).
   const liveIds = useRef<Set<number>>(new Set());
   const [loaded, setLoaded] = useState(false);
-
-  const { rows, connState, attempt, newCount, flushBuffered } = useFeed({
-    token,
-    paused,
-    onEndpointUpdated,
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  // F5 export state (AC-48/117/120). `exporting` (AC-82's shared contract)
+  // derives from this rather than a separate flag, so the two can never
+  // drift out of sync.
+  const [exportPhase, setExportPhase] = useState<ExportPhase>({
+    kind: "idle",
   });
+  const [exportDetailNote, setExportDetailNote] = useState(false);
+  const exportController = useRef<AbortController | null>(null);
+  const exporting = exportPhase.kind !== "idle";
+
+  // AC-53: unmounting (e.g. a 401 bounce) aborts any in-flight export so no
+  // late state update or download fires against a gone screen.
+  useEffect(() => {
+    return () => {
+      exportController.current?.abort();
+    };
+  }, []);
+
+  const { rows, connState, attempt, newCount, flushBuffered, clearRows } =
+    useFeed({
+      token,
+      paused,
+      onEndpointUpdated,
+    });
 
   useEffect(() => {
     // Mark the loading→content transition: the first reconcile/new_request fills
@@ -231,6 +275,100 @@ function DashboardLoaded({
     setPaused((p) => !p);
   }
 
+  // F1 "Clear all" (AC-76): enabled iff there's anything to clear, accounting
+  // for the paused buffer; disabled while an export is in flight or offline —
+  // never two reasons stacked (offline takes precedence, then busy, then empty).
+  const hasClearable = rows.length > 0 || newCount > 0;
+  const clearAllDisabled = !hasClearable || exporting || offline;
+  const clearAllHint = offline
+    ? t("feed.actions.offlineHint")
+    : exporting
+      ? t("feed.actions.busyHint")
+      : !hasClearable
+        ? t("feed.actions.emptyHint")
+        : null;
+
+  async function handleClearAll() {
+    try {
+      await api.clearRequests(token);
+    } catch (err) {
+      toast(t("feed.clearAll.error"), "danger");
+      remapEndpointGone(err);
+    }
+    clearRows();
+    // AC-78: the Inspector must not sit on a row that no longer exists.
+    setSelectedId((id) => {
+      if (id != null) liveIds.current.delete(id);
+      return null;
+    });
+    // AC-79: refresh request_count rather than leaving it stale — reuses the
+    // endpoint_updated "refetch everything" path (empty fields list).
+    onEndpointUpdated([]);
+    toast(t("set.toast.historyCleared"));
+  }
+
+  // F5 "Export CSV" (AC-46..56, AC-115..121). Snapshot rows at activation
+  // (AC-115/116) — buffered ("N new") arrivals are excluded because they are
+  // not visible, and later arrivals never join the run.
+  async function handleExportCsv() {
+    const snapshot = rows.slice();
+    const total = snapshot.length;
+    const controller = new AbortController();
+    exportController.current = controller;
+    setExportDetailNote(false);
+    setExportPhase({ kind: "fetching", done: 0, total });
+
+    let details: ReadonlyArray<DetailCell>;
+    try {
+      details = await fetchDetails(snapshot, controller.signal, (done) => {
+        if (!controller.signal.aborted) {
+          setExportPhase({ kind: "fetching", done, total });
+        }
+      });
+    } catch {
+      if (exportController.current === controller) {
+        setExportPhase({ kind: "idle" });
+        toast(t("feed.export.error"), "danger");
+      }
+      return;
+    }
+
+    if (controller.signal.aborted) {
+      setExportPhase({ kind: "idle" });
+      toast(t("feed.export.cancelled"));
+      return;
+    }
+
+    // AC-117: "Preparing file…", Cancel disabled (not removed) — this phase
+    // is synchronous and cannot itself be interrupted.
+    setExportPhase({ kind: "serialising", total });
+    try {
+      const csv = buildRequestCsv(snapshot, details);
+      downloadBlob(
+        exportFilename(token, new Date()),
+        "text/csv;charset=utf-8",
+        csv,
+      );
+    } catch {
+      setExportPhase({ kind: "idle" });
+      toast(t("feed.export.error.file"), "danger");
+      return;
+    }
+
+    setExportPhase({ kind: "idle" });
+    const missing = details.filter(isSentinelCell).length;
+    if (missing > 0) {
+      setExportDetailNote(true);
+      toast(t("feed.export.done.partial", { n: total, m: missing }));
+    } else {
+      toast(t("feed.export.done", { n: total }));
+    }
+  }
+
+  function cancelExport() {
+    exportController.current?.abort();
+  }
+
   const pill = (
     <ConnectionPill
       state={connState}
@@ -250,6 +388,14 @@ function DashboardLoaded({
       onSelect={setSelectedId}
       onTogglePause={togglePause}
       onFlush={flushBuffered}
+      clearAllDisabled={clearAllDisabled}
+      clearAllHint={clearAllHint}
+      onClearAllSelect={() => setConfirmClearOpen(true)}
+      exportPhase={exportPhase}
+      onExportSelect={() => void handleExportCsv()}
+      onExportCancel={cancelExport}
+      exportDetailNote={exportDetailNote}
+      onDismissExportDetailNote={() => setExportDetailNote(false)}
     />
   );
 
@@ -282,6 +428,26 @@ function DashboardLoaded({
           />
         }
       />
+      <ConfirmDialog
+        open={confirmClearOpen}
+        onClose={() => setConfirmClearOpen(false)}
+        title={t("feed.clearAll.confirm.title")}
+        body={
+          <>
+            <p>
+              {t("feed.clearAll.confirm.body", {
+                endpoint: endpoint.name || endpoint.token,
+              })}
+            </p>
+            <p className="mt-2 text-caption text-text-tertiary">
+              {t("feed.clearAll.confirm.note")}
+            </p>
+          </>
+        }
+        confirmLabel={t("feed.clearAll.confirm.confirm")}
+        errorFallback={t("feed.clearAll.error")}
+        onConfirm={handleClearAll}
+      />
     </AppShell>
   );
 }
@@ -296,6 +462,14 @@ function FeedPane({
   onSelect,
   onTogglePause,
   onFlush,
+  clearAllDisabled,
+  clearAllHint,
+  onClearAllSelect,
+  exportPhase,
+  onExportSelect,
+  onExportCancel,
+  exportDetailNote,
+  onDismissExportDetailNote,
 }: {
   rows: RequestSummary[];
   mockUrl: string;
@@ -306,11 +480,35 @@ function FeedPane({
   onSelect: (id: number) => void;
   onTogglePause: () => void;
   onFlush: () => void;
+  /** AC-76/AC-82: enable predicate shared by both feed-actions menu items. */
+  clearAllDisabled: boolean;
+  /** Exactly one reason (empty/busy/offline), or null when both items are
+   * enabled with nothing to explain. */
+  clearAllHint: string | null;
+  onClearAllSelect: () => void;
+  exportPhase: ExportPhase;
+  onExportSelect: () => void;
+  onExportCancel: () => void;
+  /** AC-121: at least one row in the last completed export had no detail. */
+  exportDetailNote: boolean;
+  onDismissExportDetailNote: () => void;
 }) {
   const list = rows;
+  const exportLabel =
+    exportPhase.kind === "fetching"
+      ? t("feed.export.progress", {
+          done: exportPhase.done,
+          total: exportPhase.total,
+        })
+      : exportPhase.kind === "serialising"
+        ? t("feed.export.preparing")
+        : "";
+  const exportValue =
+    exportPhase.kind === "fetching" ? exportPhase.done : 0;
+  const exportTotal = exportPhase.kind !== "idle" ? exportPhase.total : 0;
   return (
     <div className="flex h-full min-h-0 flex-col border-r border-border">
-      {/* Feed header — title · count · pause/resume */}
+      {/* Feed header — title · count · actions menu · pause/resume */}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="flex items-center gap-2">
           <h2 className="text-h4 text-text-primary">
@@ -333,6 +531,44 @@ function FeedPane({
               {t("feed.newCount", { n: newCount })}
             </Button>
           )}
+          {/* Overflow menu — the trigger stays enabled even when every item is
+           * disabled, so keyboard users can still open it and hear why
+           * (AC-1). Export CSV above the separator, Clear all (destructive)
+           * last. */}
+          <Menu>
+            <MenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("feed.actions.menu.aria")}
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </MenuTrigger>
+            <MenuContent align="end">
+              <MenuItem
+                disabled={clearAllDisabled}
+                aria-label={t("feed.export.aria")}
+                onSelect={onExportSelect}
+              >
+                {t("feed.export")}
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem
+                destructive
+                disabled={clearAllDisabled}
+                aria-label={t("feed.clearAll.aria")}
+                onSelect={onClearAllSelect}
+              >
+                {t("feed.clearAll")}
+              </MenuItem>
+              {clearAllHint && (
+                <div className="px-2 py-1.5 text-caption text-text-tertiary">
+                  {clearAllHint}
+                </div>
+              )}
+            </MenuContent>
+          </Menu>
           <Button
             variant="ghost"
             size="sm"
@@ -349,6 +585,55 @@ function FeedPane({
           </Button>
         </div>
       </div>
+
+      {/* Export progress strip (design.md §3.3) — non-modal, between the
+       * header and the list; the feed keeps streaming underneath. */}
+      {exportPhase.kind !== "idle" && (
+        <div className="animate-fade-in space-y-1.5 border-b border-border bg-accent-subtle-bg px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="tnum text-body-sm text-text-secondary">
+              {exportLabel}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onExportCancel}
+              disabled={exportPhase.kind === "serialising"}
+              aria-label={t("feed.export.cancel.aria")}
+            >
+              {t("feed.export.cancel")}
+            </Button>
+          </div>
+          <Progress
+            value={exportPhase.kind === "serialising" ? exportTotal : exportValue}
+            max={exportTotal}
+            label={exportLabel}
+          />
+        </div>
+      )}
+
+      {/* AC-121: persistent (dismissible) note when the last completed
+       * export had at least one row without detail — a toast is too
+       * short-lived to explain the file's sentinels. */}
+      {exportDetailNote && (
+        <div className="border-b border-border px-3 py-2">
+          <InlineAlert
+            variant="info"
+            role="status"
+            action={
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onDismissExportDetailNote}
+              >
+                {t("common.dismiss")}
+              </Button>
+            }
+          >
+            {t("feed.export.detailNote")}
+          </InlineAlert>
+        </div>
+      )}
 
       {/* Body — loading skeleton · empty · streaming list */}
       <div className="min-h-0 flex-1 overflow-auto">

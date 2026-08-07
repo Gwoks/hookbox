@@ -15,6 +15,7 @@ import { Dashboard } from "@/screens/dashboard";
 import { RulesManager } from "@/screens/rules-manager";
 import { Settings } from "@/screens/settings";
 import { Cli } from "@/screens/cli";
+import { ShareView } from "@/screens/share-view";
 
 function NotFound() {
   return (
@@ -38,6 +39,10 @@ export const router = createBrowserRouter([
   { path: "/d/:token/rules", element: <RulesManager /> },
   { path: "/d/:token/settings", element: <Settings /> },
   { path: "/cli", element: <Cli /> },
+  // Public, unauthenticated read-only share viewer (operator-toolkit F4).
+  // Must never redirect to / for a missing secret (AC-41) — registered
+  // before the `*` fallback so /s/<code> resolves here.
+  { path: "/s/:code", element: <ShareView /> },
   // Dev-only route: `import.meta.env.DEV` is a build-time constant, so Vite
   // dead-code-eliminates this branch (and the PrimitivesGallery import with
   // it) from the production bundle — nginx's SPA fallback never has a page

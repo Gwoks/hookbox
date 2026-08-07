@@ -26,16 +26,19 @@ import {
   type EndpointDetail,
   type EndpointSummary,
   type MockRule,
+  type MockRuleCreate,
 } from "@/api";
 import { z } from "zod";
 import { t } from "@/lib/copy";
 import { AppShell } from "@/components/hookbox/app-shell";
+import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { MethodBadge } from "@/components/hookbox/method-badge";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SkeletonLines } from "@/components/ui/skeleton";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogBody,
@@ -56,6 +59,56 @@ type ListState =
   | { kind: "error" }
   | { kind: "ready"; rules: RuleRow[] };
 
+/** The frozen §5.5.7 payload (as amended by copy.md/AC-125) — the exact
+ * `MockRuleCreate` body for F6's "Add default rule". `name` and
+ * `response.body_template` come from copy.ts so a copy edit never drifts
+ * from the request the client actually sends (AC-58/AC-59). */
+export const DEFAULT_CATCH_ALL_RULE: MockRuleCreate = {
+  name: t("rules.default.ruleName"),
+  priority: 1000,
+  enabled: true,
+  match: {
+    method: "ANY",
+    path: "/*",
+    headers: {},
+    query: {},
+    body_conditions: [],
+    state_requirements: [],
+  },
+  response: {
+    status_code: 200,
+    headers: {},
+    content_type: "application/json",
+    body_template: t("rules.default.bodyTemplate"),
+  },
+  state_writes: [],
+  latency_ms: null,
+  rate_limit_per_min: null,
+  chaos_mode: null,
+  webhook_action: null,
+};
+
+/** AC-61: a catch-all is `method === "ANY" && path === "/*"` — no `enabled`
+ * filter, so a DISABLED catch-all also blocks a second one. */
+function hasCatchAllRule(rules: readonly RuleRow[]): boolean {
+  return rules.some((r) => r.match.method === "ANY" && r.match.path === "/*");
+}
+
+/** AC-122: the four fallbacks a catch-all silently shadows, per the engine's
+ * matched-rule short-circuit (backend/src/interceptor/engine.rs:141-145 vs
+ * :228-245's resolve_unmatched). Each renders as one bullet, and only when
+ * actually active — never a paragraph listing switched-off fallbacks. */
+function activeShadowedFallbacks(endpoint: EndpointDetail | null): string[] {
+  if (!endpoint) return [];
+  const bullets: string[] = [];
+  if (endpoint.auto_crud) bullets.push(t("rules.default.shadow.crud"));
+  if (endpoint.tunnel_active) bullets.push(t("rules.default.shadow.tunnel"));
+  if (endpoint.target_url) bullets.push(t("rules.default.shadow.proxy"));
+  if (endpoint.default_mode === "echo")
+    bullets.push(t("rules.default.shadow.echo"));
+  return bullets;
+}
+
 export function RulesManager() {
   const { token = "" } = useParams();
   const navigate = useNavigate();
@@ -71,6 +124,10 @@ export function RulesManager() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editing, setEditing] = useState<RuleRow | null>(null);
   const [deleting, setDeleting] = useState<RuleRow | null>(null);
+
+  // F6 "Add default rule" state.
+  const [addingDefault, setAddingDefault] = useState(false);
+  const [shadowConfirmOpen, setShadowConfirmOpen] = useState(false);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -171,6 +228,64 @@ export function RulesManager() {
     }
   }
 
+  // F6 — the actual POST, shared by the direct (zero-fallback) path and the
+  // shadow confirm's "Add rule anyway". Re-checks the list immediately before
+  // creating (AC-123c): another tab may have added a catch-all since our last
+  // load, and there is no server-side uniqueness guard.
+  async function createDefaultRule() {
+    const fresh = z.array(mockRuleSchema).parse(await api.listRules(token));
+    setState({ kind: "ready", rules: fresh });
+    if (hasCatchAllRule(fresh)) {
+      toast(t("rules.default.error.duplicate"), "danger");
+      return;
+    }
+    await api.createRule(token, DEFAULT_CATCH_ALL_RULE);
+    toast(t("rules.default.toast"));
+    void load();
+  }
+
+  async function handleAddDefaultDirect() {
+    setAddingDefault(true);
+    try {
+      await createDefaultRule();
+    } catch {
+      toast(t("rules.default.error"), "danger");
+    } finally {
+      setAddingDefault(false);
+    }
+  }
+
+  // Used as the shadow confirm's onConfirm — FE-0's ConfirmDialog renders any
+  // rejection inline, so this deliberately does NOT catch.
+  async function handleAddDefaultConfirmed() {
+    setAddingDefault(true);
+    try {
+      await createDefaultRule();
+    } finally {
+      setAddingDefault(false);
+    }
+  }
+
+  const existingCatchAll = state.kind === "ready" ? state.rules.find(
+    (r) => r.match.method === "ANY" && r.match.path === "/*",
+  ) : undefined;
+  const addDefaultDisabled =
+    !!existingCatchAll || !endpoint || addingDefault || state.kind !== "ready";
+  const addDefaultReason = existingCatchAll
+    ? existingCatchAll.enabled
+      ? t("rules.default.exists")
+      : t("rules.default.existsDisabled")
+    : null;
+  const shadowBullets = activeShadowedFallbacks(endpoint);
+
+  function handleAddDefaultClick() {
+    if (shadowBullets.length > 0) {
+      setShadowConfirmOpen(true);
+    } else {
+      void handleAddDefaultDirect();
+    }
+  }
+
   return (
     <AppShell token={token} endpoint={endpoint} endpoints={endpoints}>
       <div className="mx-auto h-full max-w-3xl overflow-auto p-6">
@@ -188,10 +303,18 @@ export function RulesManager() {
             </Button>
             <h1 className="text-h2 text-text-primary">{t("rules.title")}</h1>
           </div>
-          <Button variant="primary" size="sm" onClick={openNew}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {t("rules.newRule")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <AddDefaultRuleButton
+              disabled={addDefaultDisabled}
+              reason={addDefaultReason}
+              loading={addingDefault}
+              onClick={handleAddDefaultClick}
+            />
+            <Button variant="primary" size="sm" onClick={openNew}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {t("rules.newRule")}
+            </Button>
+          </div>
         </div>
 
         {state.kind === "loading" && (
@@ -223,13 +346,23 @@ export function RulesManager() {
             <p className="mx-auto mt-2 max-w-md text-body-sm text-text-tertiary">
               {t("rules.empty.body")}
             </p>
+            <AddDefaultRuleButton
+              className="mt-4"
+              disabled={addDefaultDisabled}
+              reason={addDefaultReason}
+              loading={addingDefault}
+              onClick={handleAddDefaultClick}
+            />
+            <p className="mx-auto mt-2 max-w-md text-caption text-text-tertiary">
+              {t("rules.default.helper")}
+            </p>
           </div>
         )}
 
         {state.kind === "ready" && state.rules.length > 0 && (
           <div className="overflow-hidden rounded-md border border-border bg-surface">
             {/* Column header — aligns with each row's grid (AC-D18). */}
-            <div className="grid grid-cols-[4rem_1fr_auto_3rem_2rem] items-center gap-2 border-b border-border bg-subtle px-3 py-2 text-overline uppercase tracking-wide text-text-tertiary">
+            <div className="grid grid-cols-[4rem_1fr_auto_3rem_2rem] items-center gap-2 border-b border-border bg-surface-subtle px-3 py-2 text-overline uppercase tracking-wide text-text-tertiary">
               <span>{t("rules.col.priority")}</span>
               <span>{t("rules.col.name")}</span>
               <span>{t("rules.col.match")}</span>
@@ -288,10 +421,7 @@ export function RulesManager() {
                     <MenuItem onSelect={() => void duplicate(rule)}>
                       {t("rules.row.duplicate")}
                     </MenuItem>
-                    <MenuItem
-                      className="text-danger-fg"
-                      onSelect={() => setDeleting(rule)}
-                    >
+                    <MenuItem destructive onSelect={() => setDeleting(rule)}>
                       {t("rules.row.delete")}
                     </MenuItem>
                   </MenuContent>
@@ -334,6 +464,74 @@ export function RulesManager() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* F6 shadow confirm — only opened when >=1 fallback is actually active
+       * (AC-122). variant="primary": recoverable, not "danger" — this may be
+       * exactly what the operator wants. */}
+      <ConfirmDialog
+        open={shadowConfirmOpen}
+        onClose={() => setShadowConfirmOpen(false)}
+        title={t("rules.default.shadow.title")}
+        body={
+          <>
+            <p>{t("rules.default.shadow.body")}</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {shadowBullets.map((bullet) => (
+                <li key={bullet}>{bullet}</li>
+              ))}
+            </ul>
+            <p className="mt-2 text-caption text-text-tertiary">
+              {t("rules.default.shadow.recover")}
+            </p>
+          </>
+        }
+        confirmLabel={t("rules.default.shadow.confirm")}
+        confirmVariant="primary"
+        errorFallback={t("rules.default.error")}
+        onConfirm={handleAddDefaultConfirmed}
+      />
     </AppShell>
+  );
+}
+
+/** F6 "Add default rule" (design.md §3.8, AC-124). `variant="secondary"` —
+ * `variant="primary"` is the single accent button per surface and "New rule"
+ * already owns it. Disabled-with-a-reason needs BOTH a mouse and a keyboard
+ * path: a `disabled` `<button>` fires no pointer events and is out of tab
+ * order, so the Tooltip wraps a focusable `<span>` around it instead of the
+ * button itself, with `title` as a no-JS fallback. */
+function AddDefaultRuleButton({
+  disabled,
+  reason,
+  loading,
+  onClick,
+  className,
+}: {
+  disabled: boolean;
+  reason: string | null;
+  loading: boolean;
+  onClick: () => void;
+  className?: string;
+}) {
+  const button = (
+    <Button
+      variant="secondary"
+      size="sm"
+      className={className}
+      disabled={disabled}
+      loading={loading}
+      onClick={onClick}
+      aria-label={t("rules.default.aria")}
+    >
+      {loading ? t("rules.default.adding") : t("rules.default.add")}
+    </Button>
+  );
+  if (!reason) return button;
+  return (
+    <Tooltip content={reason}>
+      <span tabIndex={0} title={reason} className="inline-flex rounded-sm">
+        {button}
+      </span>
+    </Tooltip>
   );
 }

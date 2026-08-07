@@ -28,14 +28,20 @@ export const MenuContent = forwardRef<
 
 export const MenuItem = forwardRef<
   React.ElementRef<typeof MenuPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof MenuPrimitive.Item>
->(function MenuItem({ className, ...props }, ref) {
+  React.ComponentPropsWithoutRef<typeof MenuPrimitive.Item> & { destructive?: boolean }
+>(function MenuItem({ className, destructive, ...props }, ref) {
   return (
     <MenuPrimitive.Item
       ref={ref}
       className={cn(
         'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-body-sm text-text-secondary outline-none',
         'focus:bg-surface-hover focus:text-text-primary data-[disabled]:cursor-not-allowed data-[disabled]:text-text-tertiary',
+        // The two focus: overrides are a FIX, not decoration (design.md §3.1):
+        // MenuItem's base focus:text-text-primary (specificity 0,2,0) beats a
+        // plain text-danger-fg (0,1,0), so a destructive item loses its red
+        // the instant focus lands on it without this restatement.
+        destructive &&
+          'text-danger-fg focus:bg-danger-bg focus:text-danger-fg data-[disabled]:text-text-tertiary',
         className,
       )}
       {...props}

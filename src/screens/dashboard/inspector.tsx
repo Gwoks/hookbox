@@ -263,7 +263,7 @@ function Ready({ detail }: { detail: RequestDetail }) {
                   {detail.trace.map((step, i) => (
                     <li
                       key={i}
-                      className="flex gap-2 rounded-sm bg-subtle px-2 py-1.5 font-mono text-mono-sm"
+                      className="flex gap-2 rounded-sm bg-surface-subtle px-2 py-1.5 font-mono text-mono-sm"
                     >
                       <span className="shrink-0 font-medium text-text-secondary">
                         {step.step}

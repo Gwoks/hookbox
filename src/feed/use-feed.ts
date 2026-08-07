@@ -63,6 +63,10 @@ export interface UseFeedResult {
   flushBuffered: () => void
   /** Force a fresh reconcile + reconnect (e.g. manual Retry). */
   reconnect: () => void
+  /** Empty the visible list AND the paused-arrival buffer (operator-toolkit
+   * F1 "Clear all" — AC-5). Client-side only; the caller is responsible for
+   * the DELETE that makes it authoritative. */
+  clearRows: () => void
 }
 
 export function useFeed(opts: UseFeedOptions): UseFeedResult {
@@ -368,5 +372,11 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
     connectRef.current()
   }, [])
 
-  return { rows, connState, attempt, newCount, flushBuffered, reconnect }
+  const clearRows = useCallback(() => {
+    setRows([])
+    buffer.current = []
+    setNewCount(0)
+  }, [])
+
+  return { rows, connState, attempt, newCount, flushBuffered, reconnect, clearRows }
 }

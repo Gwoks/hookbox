@@ -18,7 +18,9 @@ const buttonVariants = cva(
         primary: 'bg-accent-fill text-text-on-accent hover:opacity-90',
         secondary: 'border border-border-strong bg-surface text-text-primary hover:bg-surface-hover',
         ghost: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
-        danger: 'bg-danger-fg text-white hover:opacity-90',
+        // text-text-on-accent, not text-white: white on --red-400-dark is
+        // ~1.7:1 in dark theme, an AA failure (design.md §8 finding 1, AC-129).
+        danger: 'bg-danger-fg text-text-on-accent hover:opacity-90',
         link: 'h-auto p-0 text-accent underline-offset-4 hover:underline',
       },
       size: {

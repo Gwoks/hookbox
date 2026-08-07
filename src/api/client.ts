@@ -21,15 +21,20 @@ import {
   errorEnvelopeSchema,
   messageSchema,
   mockRuleSchema,
+  publicRequestDetailSchema,
+  publicShareFeedSchema,
   requestDetailSchema,
   requestSummarySchema,
   sessionResponseSchema,
+  shareLinkCreatedSchema,
+  shareLinkSchema,
   stateResponseSchema,
   type EndpointConfigPatch,
   type EndpointCreate,
   type MockRuleCreate,
   type MockRulePatch,
   type SessionCreate,
+  type ShareLinkCreate,
 } from './schemas'
 
 export class ApiError extends Error {
@@ -60,6 +65,9 @@ interface RequestOpts<T> {
   query?: Record<string, string | number | undefined>
   /** zod schema for the success body; its inferred type becomes the return type. */
   schema?: z.ZodType<T>
+  /** Lets a caller abort an in-flight request (operator-toolkit AC-105f — the
+   * public share viewer aborts its poll/detail fetches on unmount). */
+  signal?: AbortSignal
 }
 
 function buildUrl(path: string, query?: Record<string, string | number | undefined>): string {
@@ -89,8 +97,13 @@ async function request<T = void>(path: string, opts: RequestOpts<T> = {}): Promi
       credentials: 'omit',
       headers,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     })
-  } catch {
+  } catch (err) {
+    // An aborted fetch is not a network failure — let the caller's own
+    // `signal.aborted` check (checked before this throws propagate) decide
+    // what to do; re-throwing keeps the abort observable either way.
+    if (err instanceof DOMException && err.name === 'AbortError') throw err
     throw new ApiError('network', 'Network error. Check your connection and try again.', 0)
   }
 
@@ -248,6 +261,52 @@ export const api = {
     return request(`/api/endpoints/${encodeURIComponent(token)}/collections/${encodeURIComponent(name)}`, {
       method: 'DELETE',
       schema: messageSchema,
+    })
+  },
+
+  // ── F4 share links (operator-toolkit §5.1) — owner-authenticated ──
+  // #19 — 201 ShareLinkCreated. `code`/`url` appear ONLY in this response.
+  createShare(token: string, payload: ShareLinkCreate) {
+    return request(`/api/endpoints/${encodeURIComponent(token)}/shares`, {
+      method: 'POST',
+      body: payload,
+      schema: shareLinkCreatedSchema,
+    })
+  },
+  // #20 — ShareLink[], no code, no url, ever.
+  listShares(token: string) {
+    return request(`/api/endpoints/${encodeURIComponent(token)}/shares`, {
+      schema: z.array(shareLinkSchema),
+    })
+  },
+  // #21 — by the non-secret integer `id`, NEVER the code (architecture D10).
+  revokeShare(token: string, id: number) {
+    return request<void>(`/api/endpoints/${encodeURIComponent(token)}/shares/${id}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // ── F4 public routes (operator-toolkit §5.2) — NO credential, ever ──
+  // #22 — noAuth: true. A public 401 can never fire (there's no Bearer to
+  // reject), but this also guarantees the request never carries the owner's
+  // Authorization header (AC-42/AC-S13).
+  getSharedRequests(
+    code: string,
+    params?: { limit?: number; offset?: number; signal?: AbortSignal },
+  ) {
+    return request(`/api/share/${encodeURIComponent(code)}/requests`, {
+      noAuth: true,
+      query: { limit: params?.limit, offset: params?.offset },
+      schema: publicShareFeedSchema,
+      signal: params?.signal,
+    })
+  },
+  // #23
+  getSharedRequest(code: string, id: number, opts?: { signal?: AbortSignal }) {
+    return request(`/api/share/${encodeURIComponent(code)}/requests/${id}`, {
+      signal: opts?.signal,
+      noAuth: true,
+      schema: publicRequestDetailSchema,
     })
   },
 }

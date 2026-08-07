@@ -99,3 +99,55 @@ test("AC-D19: mock-URL chips are copy-only (no anchor / no navigation)", async (
   await expect(code).toBeVisible();
   await expect(code.locator("xpath=ancestor::a")).toHaveCount(0);
 });
+
+test("AC-7: the dashboard sub-header renders exactly one URL label ('Mock URL', no 'Local path')", async ({
+  page,
+}) => {
+  await installMockBackend(page, { authed: true });
+  await page.goto(`/d/${TOKEN}`);
+  // Let the feed reconcile settle first — the sub-header label is stable
+  // regardless, but FeedEmpty (which carries its own "Mock URL" label,
+  // AC-D19) can transiently render between WS "live" and the reconcile GET
+  // resolving, which would otherwise make this a race.
+  await expect(page.getByRole("option").first()).toBeVisible();
+  await expect(page.getByText("Mock URL", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("Local path", { exact: true })).toHaveCount(0);
+});
+
+test("AC-127: the sub-header wraps without horizontal scroll at the 360px floor", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await installMockBackend(page, { authed: true });
+  await page.goto(`/d/${TOKEN}`);
+  // See the AC-7 test above re: waiting out the transient FeedEmpty window.
+  await expect(page.getByRole("option").first()).toBeVisible();
+  await expect(page.getByText("Mock URL", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Rules" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "New rule" })).toBeVisible();
+  const hasHorizontalScroll = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth >
+      document.documentElement.clientWidth,
+  );
+  expect(hasHorizontalScroll).toBe(false);
+});
+
+test("AC-127 (F1): the feed header's title/count/actions-menu/pause stay usable at the 360px floor", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await installMockBackend(page, { authed: true });
+  await page.goto(`/d/${TOKEN}`);
+  await expect(page.getByText("Live feed")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Feed actions" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Pause the live feed" }),
+  ).toBeVisible();
+  const hasHorizontalScroll = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth >
+      document.documentElement.clientWidth,
+  );
+  expect(hasHorizontalScroll).toBe(false);
+});

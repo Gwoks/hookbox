@@ -23,7 +23,35 @@ export interface MockOptions {
   rules?: MockRule[];
   /** Force GET /api/endpoints/{token} to fail with this status (404/410/500). */
   endpointStatus?: number;
+  /** Force DELETE /api/endpoints/{token}/requests to fail with this status
+   * (ConfirmDialog failure-path coverage, AC-83). */
+  clearRequestsStatus?: number;
+  /** Seed the owner's share-link list (F4). */
+  shares?: ShareLinkStub[];
+  /** The plaintext code that resolves to this endpoint via the PUBLIC
+   * /api/share/:code/* routes. Defaults to a fixed test code — the mock does
+   * not enforce the real shape gate (that's server-only). */
+  shareCode?: string;
+  /** Force the public share LIST route to 404 — unknown/revoked/tombstoned
+   * are byte-identical per §5.2, so one flag covers all three. */
+  shareUnavailable?: boolean;
+  /** Force the public share routes to 429 with this Retry-After (seconds). */
+  shareRateLimitRetryAfter?: number;
+  /** Force the public share LIST route to a 503. */
+  shareServerError?: boolean;
+  /** Force the public share DETAIL route to this status (404 = "gone", not
+   * terminal; anything >=500 = a real error). */
+  shareDetailStatus?: number;
 }
+
+export interface ShareLinkStub {
+  id: number;
+  label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export const DEFAULT_SHARE_CODE = "test-share-code-0123456789abcdef";
 
 interface EndpointDetail {
   token: string;
@@ -132,7 +160,13 @@ export function makeRequest(
 function detail(r: RequestSummary) {
   return {
     ...r,
-    request_headers: { "user-agent": "curl/8.0", "x-trace": "abc" },
+    // "authorization" mirrors the server's redact() (backend/src/helpers.rs),
+    // which writes the literal "<redacted>" sentinel (AC-133).
+    request_headers: {
+      "user-agent": "curl/8.0",
+      "x-trace": "abc",
+      authorization: "<redacted>",
+    },
     query_params: { q: "1" },
     request_body: r.method === "POST" ? '{"hello":"world"}' : null,
     response_headers: { "content-type": "application/json" },
@@ -148,6 +182,7 @@ function detail(r: RequestSummary) {
 export async function installMockBackend(page: Page, opts: MockOptions = {}) {
   const store = {
     endpoint: makeEndpoint(opts.endpoint),
+    deleted: false,
     requests: opts.requests ?? [
       makeRequest({
         id: 3,
@@ -175,6 +210,9 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
     ],
     rules: opts.rules ?? [],
     nextRuleId: 100,
+    shares: opts.shares ?? ([] as ShareLinkStub[]),
+    nextShareId: 500,
+    shareCode: opts.shareCode ?? DEFAULT_SHARE_CODE,
   };
 
   // Seed an authed session + light theme BEFORE the app boots.
@@ -191,15 +229,20 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
   }
 
   // Stub WebSocket + EventSource to inert objects: the SPA reconciles via the
-  // mocked GET routes (the §5.4 at-most-once contract), so no live frames needed.
+  // mocked GET routes (the §5.4 at-most-once contract), so no live frames needed
+  // for the reconcile path. A test hook (__hookboxPushFrame) lets a spec push a
+  // synthetic new_request onto the currently-open fake socket, for scenarios
+  // (like the paused-buffer AC-76 case) that need a real arrival.
   await page.addInitScript(() => {
     class FakeWS {
       onopen: (() => void) | null = null;
       onclose: (() => void) | null = null;
       onerror: (() => void) | null = null;
-      onmessage: (() => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
       readyState = 1;
       constructor() {
+        // @ts-expect-error test hook
+        window.__hookboxFakeWs = this;
         setTimeout(() => this.onopen && this.onopen(), 0);
       }
       send() {}
@@ -209,6 +252,13 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
     }
     // @ts-expect-error override for tests
     window.WebSocket = FakeWS;
+    // @ts-expect-error test hook: dispatch a raw {type,data} WS frame JSON
+    // string onto the currently-open fake socket, as if the server sent it.
+    window.__hookboxPushFrame = (raw: string) => {
+      // @ts-expect-error test hook
+      const ws = window.__hookboxFakeWs;
+      if (ws && ws.onmessage) ws.onmessage({ data: raw });
+    };
     class FakeES {
       onopen: (() => void) | null = null;
       onerror: (() => void) | null = null;
@@ -252,18 +302,21 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
       });
     }
 
-    // #2 GET /api/endpoints
+    // #2 GET /api/endpoints — a deleted endpoint is tombstoned, so it drops
+    // out of the list (mirrors the real backend; also what stops Landing's
+    // auto-resume from redirecting straight back to the endpoint the caller
+    // just deleted, journey.md J9).
     if (path === "/api/endpoints" && method === "GET") {
-      return json(route, 200, [summary(store.endpoint)]);
+      return json(route, 200, store.deleted ? [] : [summary(store.endpoint)]);
     }
 
     // #4/#5/#6 GET/PATCH/DELETE /api/endpoints/{token}
     if (path === `/api/endpoints/${TOKEN}`) {
       if (method === "GET") {
+        if (store.deleted || opts.endpointStatus === 410)
+          return err(route, 410, "endpoint_gone", "Endpoint deleted.");
         if (opts.endpointStatus === 404)
           return err(route, 404, "unknown_endpoint", "No such endpoint.");
-        if (opts.endpointStatus === 410)
-          return err(route, 410, "endpoint_gone", "Endpoint deleted.");
         if (opts.endpointStatus && opts.endpointStatus >= 500)
           return err(route, 500, "server_error", "Boom.");
         return json(route, 200, store.endpoint);
@@ -274,6 +327,7 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
         return json(route, 200, store.endpoint);
       }
       if (method === "DELETE") {
+        store.deleted = true;
         return json(route, 200, {
           message: "Endpoint deleted.",
           success: true,
@@ -325,6 +379,14 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
         return json(route, 200, sorted);
       }
       if (method === "DELETE") {
+        if (opts.clearRequestsStatus) {
+          return err(
+            route,
+            opts.clearRequestsStatus,
+            "server_error",
+            "Simulated failure for the confirm-dialog test.",
+          );
+        }
         store.requests = [];
         return json(route, 200, { message: "History cleared.", success: true });
       }
@@ -367,10 +429,146 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
         });
     }
 
+    // #19/#20 POST/GET /api/endpoints/{token}/shares (F4 owner)
+    if (path === `/api/endpoints/${TOKEN}/shares`) {
+      if (method === "POST") {
+        const body = req.postDataJSON() ?? {};
+        const id = store.nextShareId++;
+        const label = (body.label as string | null) ?? null;
+        const row: ShareLinkStub = {
+          id,
+          label,
+          created_at: NOW,
+          last_used_at: null,
+        };
+        store.shares = [row, ...store.shares];
+        return json(route, 201, {
+          id,
+          code: store.shareCode,
+          url: `/s/${store.shareCode}`,
+          label,
+          created_at: NOW,
+          last_used_at: null,
+        });
+      }
+      if (method === "GET") {
+        return json(route, 200, store.shares);
+      }
+    }
+
+    // #21 DELETE /api/endpoints/{token}/shares/{id} — by non-secret integer
+    // id, never the code.
+    const shareRevokeMatch = path.match(
+      new RegExp(`^/api/endpoints/${TOKEN}/shares/(\\d+)$`),
+    );
+    if (shareRevokeMatch && method === "DELETE") {
+      const id = Number(shareRevokeMatch[1]);
+      const idx = store.shares.findIndex((s) => s.id === id);
+      if (idx < 0) {
+        return err(route, 404, "not_found", "Share link not found.");
+      }
+      store.shares.splice(idx, 1);
+      return route.fulfill({ status: 204, body: "" });
+    }
+
+    // #22/#23 PUBLIC GET /api/share/{code}/requests[/{id}] — no credential.
+    const shareCodeMatch = path.match(
+      /^\/api\/share\/([^/]+)\/requests(?:\/(\d+))?$/,
+    );
+    if (shareCodeMatch && method === "GET") {
+      const code = decodeURIComponent(shareCodeMatch[1]);
+      const reqId = shareCodeMatch[2] ? Number(shareCodeMatch[2]) : null;
+
+      if (opts.shareRateLimitRetryAfter != null) {
+        return route.fulfill({
+          status: 429,
+          contentType: "application/json",
+          headers: { "Retry-After": String(opts.shareRateLimitRetryAfter) },
+          body: JSON.stringify({
+            error: "rate_limited",
+            detail: "Too many requests.",
+          }),
+        });
+      }
+      // The ONE 404 body — unknown / revoked / tombstoned / unknown request
+      // id / cross-endpoint id are all byte-identical (AC-36).
+      const shareNotFound = () =>
+        err(route, 404, "not_found", "This share link is not available.");
+
+      if (reqId != null) {
+        if (opts.shareDetailStatus === 404) return shareNotFound();
+        if (opts.shareDetailStatus && opts.shareDetailStatus >= 500) {
+          return err(route, opts.shareDetailStatus, "store_unavailable", "Boom.");
+        }
+        if (opts.shareUnavailable || code !== store.shareCode) return shareNotFound();
+        const found = store.requests.find((r) => r.id === reqId);
+        if (!found) return shareNotFound();
+        return json(route, 200, publicDetail(found));
+      }
+
+      if (opts.shareServerError) {
+        return err(route, 503, "store_unavailable", "Boom.");
+      }
+      if (opts.shareUnavailable || code !== store.shareCode) return shareNotFound();
+      const sorted = [...store.requests].sort((a, b) => b.id - a.id);
+      return json(route, 200, {
+        endpoint: {
+          name: store.endpoint.name,
+          created_at: store.endpoint.created_at,
+          request_count: store.endpoint.request_count,
+        },
+        requests: sorted.map(publicSummary),
+      });
+    }
+
     return err(route, 404, "not_found", "Unhandled mock route.");
   });
 
   return store;
+}
+
+/** Push a synthetic `new_request` WS frame onto the currently-open fake
+ * socket (see the `__hookboxPushFrame` test hook above) — for scenarios that
+ * need a real arrival rather than the initial reconcile GET, e.g. AC-76's
+ * "paused with a buffered arrival" case. */
+export async function pushNewRequest(
+  page: Page,
+  over: Partial<RequestSummary> = {},
+) {
+  const frame = JSON.stringify({
+    type: "new_request",
+    data: makeRequest(over),
+  });
+  await page.evaluate((raw) => {
+    // @ts-expect-error test hook
+    window.__hookboxPushFrame(raw);
+  }, frame);
+}
+
+// §5.5.4/5.5.5 public projections — omit token/matched_rule_id/overhead_ms/
+// trace/state_snapshot; the five detail fields are present-with-null keys.
+function publicSummary(r: RequestSummary) {
+  return {
+    id: r.id,
+    method: r.method,
+    path: r.path,
+    status_code: r.status_code,
+    served_by: r.served_by,
+    duration_ms: r.duration_ms,
+    timestamp: r.timestamp,
+  };
+}
+
+function publicDetail(r: RequestSummary) {
+  const d = detail(r);
+  return {
+    ...publicSummary(r),
+    request_headers: d.request_headers,
+    query_params: d.query_params,
+    request_body: d.request_body,
+    response_headers: d.response_headers,
+    response_body: d.response_body,
+  };
 }
 
 function summary(e: EndpointDetail) {
@@ -385,7 +583,7 @@ function summary(e: EndpointDetail) {
   };
 }
 
-function makeRule(id: number, body: Record<string, unknown>): MockRule {
+export function makeRule(id: number, body: Record<string, unknown>): MockRule {
   const match = (body.match as MockRule["match"]) ?? {};
   const response = (body.response as MockRule["response"]) ?? {};
   return {
