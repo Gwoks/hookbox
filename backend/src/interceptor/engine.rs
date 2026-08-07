@@ -795,32 +795,86 @@ fn vstr(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     // F7 AC-73(d3): the capture helper on a 5 MB body (the MITM_MAX_BODY_BYTES
-    // worst case) completes in < 1 ms, and the rebuilt response's bytes are
-    // byte-equal to the input — only achievable if no full copy happens.
+    // worst case) must be zero-copy, and the rebuilt response's bytes must be
+    // byte-equal to the input.
+    //
+    // Zero-copy is proven by timing, not by a fixed millisecond budget — a
+    // fixed `< 1ms` bound (hookbox-mun.32) has under 1x margin against warm
+    // ~0.3ms runs and flakes ~6% of the time on a cold/loaded/shared runner,
+    // because it is racing wall-clock scheduling noise, not the code path.
+    //
+    // Instead we compare `capture_response_body` against a same-process,
+    // same-buffer, same-run explicit `Vec::clone` (a real memcpy) of the
+    // identical 5 MB payload. That comparison is scale-free: a slow or
+    // loaded runner slows both timings down together, so the RATIO is stable
+    // even when the absolute numbers are not. A full-copy implementation of
+    // `capture_response_body` would cost about the same as the memcpy
+    // control, so requiring capture to be well under it (< 25%) still fails
+    // a regression that reintroduces a copy, while a min-of-N sample (a
+    // warm-up run discarded, then the fastest of several timed runs kept)
+    // removes first-invocation/cold-cache noise from BOTH sides.
     #[tokio::test]
-    async fn capture_response_body_5mb_is_fast_and_byte_equal() {
+    async fn capture_response_body_5mb_is_faster_than_a_full_copy_and_byte_equal() {
+        const ITERATIONS: usize = 20;
         let payload = vec![b'x'; 5_000_000];
-        let resp = Response::builder()
-            .status(200)
-            .body(Body::from(payload.clone()))
-            .unwrap();
 
-        let started = Instant::now();
-        let (rebuilt, bytes) = capture_response_body(resp).await;
-        let elapsed = started.elapsed();
+        // Warm-up: pay for allocator/CPU-frequency-scaling/page-fault costs
+        // once, outside any measured sample, on both code paths.
+        {
+            let resp = Response::builder()
+                .status(200)
+                .body(Body::from(payload.clone()))
+                .unwrap();
+            let _ = capture_response_body(resp).await;
+            let warm_control: Vec<u8> = payload.clone();
+            std::hint::black_box(&warm_control);
+        }
 
-        assert!(
-            elapsed.as_millis() < 1,
-            "capture_response_body on 5MB took {elapsed:?}, expected < 1ms"
-        );
-        assert_eq!(bytes.len(), payload.len());
-        assert_eq!(bytes.as_ref(), payload.as_slice());
+        let mut capture_min = Duration::MAX;
+        let mut captured_bytes = Bytes::new();
+        let mut rebuilt_bytes = Bytes::new();
+        for _ in 0..ITERATIONS {
+            let resp = Response::builder()
+                .status(200)
+                .body(Body::from(payload.clone()))
+                .unwrap();
+            let started = Instant::now();
+            let (rebuilt, bytes) = capture_response_body(resp).await;
+            let elapsed = started.elapsed();
+            if elapsed < capture_min {
+                capture_min = elapsed;
+                captured_bytes = bytes;
+                rebuilt_bytes = to_bytes(rebuilt.into_body(), usize::MAX).await.unwrap();
+            }
+        }
 
+        let mut copy_min = Duration::MAX;
+        for _ in 0..ITERATIONS {
+            let started = Instant::now();
+            let control: Vec<u8> = payload.clone();
+            let elapsed = started.elapsed();
+            std::hint::black_box(&control);
+            copy_min = copy_min.min(elapsed);
+        }
+
+        assert_eq!(captured_bytes.len(), payload.len());
+        assert_eq!(captured_bytes.as_ref(), payload.as_slice());
         // The rebuilt response's own body is byte-equal too.
-        let rebuilt_bytes = to_bytes(rebuilt.into_body(), usize::MAX).await.unwrap();
         assert_eq!(rebuilt_bytes.as_ref(), payload.as_slice());
+
+        // A full-copy implementation would cost roughly `copy_min`; the
+        // zero-copy path must be clearly (>= 4x) faster than that, on the
+        // same machine, same run, same buffer — so this cannot pass a
+        // full-copy regression and cannot flake from an absolute-time budget.
+        assert!(
+            capture_min.saturating_mul(4) < copy_min,
+            "capture_response_body best-of-{ITERATIONS} ({capture_min:?}) is not clearly \
+             faster than a best-of-{ITERATIONS} explicit 5MB Vec::clone ({copy_min:?}); \
+             expected < 25% of the copy control, which suggests a full copy crept back in"
+        );
     }
 
     #[tokio::test]
