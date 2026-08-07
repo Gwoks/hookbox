@@ -1,4 +1,16 @@
-# QA report — operator-toolkit (round 6)
+# QA report — operator-toolkit (rounds 1-7)
+
+> **FINAL VERDICT (round 7, tree `c50c578`): PASSED — 165 / 165 ACs pass, both lenses.**
+> The gate `hookbox-mun.21` is closed. 13 defects were found and fixed across 7 rounds
+> (`hookbox-mun.24` … `hookbox-mun.36`); **0 remain open**. Round 7 re-verified AC-43 live against the
+> real server and the real SPA, ran a dedicated **"channel D" hunt** over all 20 surfaces that could
+> carry the endpoint token into the public share projection, and re-ran the full regression.
+> **See §7 for round 7. Everything below §7's heading is round 6's report, preserved verbatim as
+> history — its "NOT PASSED" verdict is superseded by §7.**
+
+---
+
+# Round 6 (superseded — history)
 
 **Gate:** `hookbox-mun.21` · **Feature:** operator-toolkit · **PRD:** `docs/features/operator-toolkit/prd.md`
 (FROZEN — 165 ACs in §4, contract in §5) · **Date:** 2026-08-08 · **Tree under test:** `0b01a01`,
@@ -501,3 +513,219 @@ must stay verbatim per §5.11.
 * **A9 — `Esc` does not close the Share dialog while its success toast is on screen** (round-5 A2,
   unchanged). The Radix toast becomes the topmost dismissable layer and consumes the key. Transient;
   `Done`, `Close` and overlay-click all work throughout. No AC requires Esc-to-close here.
+
+---
+---
+
+# 7. Round 7 — final round (AC-43 re-verification + the "channel D" hunt)
+
+**Gate:** `hookbox-mun.21` · **Date:** 2026-08-08 · **Tree under test:** `c50c578`
+(`git status --porcelain` clean apart from `.beads/interactions.jsonl`, which `bd` writes on its own).
+
+**VERDICT: PASSED. 165 / 165 ACs pass. Both lenses pass. 0 open defects. No channel D exists.**
+
+Round 7 was run past the automated `MAX_QA_ROUNDS=6` cap deliberately, because three successive
+variants of the *same* vulnerability class (channels A, B and C — the endpoint token reaching an
+anonymous share viewer through a field the header-map filter does not reach) is a pattern, and a
+pattern deserves one exhaustive pass rather than a third point fix accepted on faith.
+
+**Scope of the code change since round 6.** `git diff 0b01a01 HEAD --stat` is exactly four files:
+`backend/src/interceptor/engine.rs` (+36/-2), `backend/src/routes/share.rs` (+6, a doc comment only),
+`backend/tests/api.rs` (+72, the new regression test) and this report. Every AC not touched by that
+diff therefore carries round 6's evidence forward on **byte-identical code**; every AC that *could* be
+touched by it was re-run live this round and is marked **[R7]** below.
+
+## 7.1 How round 7 was validated
+
+| Harness | Result |
+|---|---|
+| `cargo fmt --check` | clean (exit 0) |
+| `cargo clippy --all-targets -- -D warnings` | clean (exit 0) |
+| `cargo test` × 5 (161 tests: 109 unit + 52 integration) | **5/5 green**, 0 failures — no flake |
+| `pnpm typecheck` | clean (exit 0) |
+| `pnpm build` | clean (exit 0; only the pre-existing chunk-size advisory) |
+| `pnpm e2e` (Playwright, chromium + reduced-motion) | **118 passed** in 19.8 s |
+| **Live channel sweep #1** — real `backend/target/debug/hookbox` on `:8099`, fresh DB, `MOCK_DOMAIN=mock.local`, `PUBLIC_BASE_URL=http://localhost:8099`; `auto_crud` ON; 8 drives; every public row × every JSON leaf scanned for token / mock host / mock_url / path_url / owner secret | 11 rows, **7 hits — all 7 in `query_params` / `request_body` where I had deliberately planted them (caller-supplied, by design per AC-S2). 0 server-generated leaks.** |
+| **Live channel sweep #2** — `auto_crud` OFF so the `default`/echo path is actually reachable; adds `mock_404`, a rule template that deliberately renders `{{ request.header.host }}`, and a MITM upstream | 4 rows; **the echo row is clean** (see §7.2); one deliberate operator-authored leak reproduced and classified (§7.3 row 8) |
+| **Live channel sweep #3** — second instance on `:8098`, fresh DB, `MITM_ALLOW_PRIVATE=1`, MITM pointed at a local upstream that echoes its request headers back in its body | reproduces the upstream-body case (§7.3 row 9) |
+| **Gate-owned assertion harness** (AC-72, AC-S3, AC-44a, AC-34, AC-114, AC-S1, AC-S4, AC-56a, §5.11 owner-vs-public asymmetry) | **21 checks, 21 pass** |
+| **Live anonymous viewer walk** — real headless Chromium, clean context, real `dist/` SPA served by the real backend (`STATIC_DIR=…/dist`), every row × every tab | **13 checks, 13 pass** (one initial FAIL was my regex: copy reads "This link **isn't** available", my pattern matched `not available`) |
+| **Adversarial spot checks** — AC-99/AC-S14 host-header injection into `share_url`, AC-S9 tombstone, AC-S6 app logging, public 404/429 bodies, CRUD `Location` header, public route headers | all pass (§7.4) |
+
+## 7.2 AC-43 / `hookbox-mun.36` (channel C) — re-verified live, not on trust
+
+The exact round-6 repro was re-run end to end: `default_mode = "echo"`, wildcard mock host, a caller
+sending `Host`, `Origin` **and** `Referer` on `<token>.mock.local` plus `Authorization` and `Cookie`;
+mint a share link; read it back anonymously with no credentials.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Client's own echo body still carries the raw `host` | **PASS** | `client headers.host = 'VP6zXTSUA6.mock.local'` — AC-72's §2 non-goal holds |
+| Client's own echo body still carries raw `origin` / `referer` | **PASS** | `origin='https://VP6zXTSUA6.mock.local' referer='https://VP6zXTSUA6.mock.local/page'` |
+| Client's own echo body still carries raw `authorization` / `cookie` | **PASS** | AC-S3's redaction is persist-only, as the AC requires |
+| Echo payload key shape unchanged | **PASS** | `['body','headers','method','path','query']` |
+| `X-HookBox-Served-By` unchanged | **PASS** | `x-hookbox-served-by: default` |
+| **Persisted** echo `response_body` drops `host`/`origin`/`referer` | **PASS** | stored `headers` keys = `['accept-encoding','authorization','connection','content-length','content-type','cookie','user-agent']` |
+| **Persisted** echo `response_body` still masks `authorization`/`cookie` (AC-S3 not regressed) | **PASS** | both `<redacted>` |
+| **Public** row: token absent from the ENTIRE JSON projection | **PASS** | `TOKEN not in json.dumps(public_detail)` |
+| **Public** row: `<token>.mock.local` absent from the ENTIRE JSON projection | **PASS** | no `mock.local` substring anywhere |
+| Owner Inspector on the **same row** still verbatim | **PASS** | owner `request_headers.host = 'VP6zXTSUA6.mock.local'`, owner `response_headers['x-hookbox-endpoint'] = 'VP6zXTSUA6'` — the §5.11 asymmetry is intact, so the fix did not over-reach into storage or the owner surface |
+| **Rendered in the real viewer**: 5 rows × 4 tabs = 20 detail views scanned, `innerHTML` and `innerText` | **PASS** | **0 hits** for token / mock host / `mock_url` / `path_url` / owner secret |
+| The new regression test asserts both halves | **PASS** | `backend/tests/api.rs:2056` `f4_channel_c_echo_response_body_has_no_token_or_mock_host_publicly` — asserts the client body is untouched **and** that the persisted + public bodies carry neither the token nor `mock.local`. It is a real test, not a tautology. |
+
+**AC-43: PASS.** **`hookbox-mun.36`: verified FIXED.**
+
+## 7.3 The channel-D hunt — all 20 surfaces, classified
+
+The generative question was *"where else can bytes that carry the endpoint token reach an anonymous
+viewer, in a place the two header-map filters do not reach?"* Rather than guess, I enumerated every
+surface in the public projection and every producer of the bytes in it. **Who generates the bytes** is
+the decisive column, because AC-S2 scopes token-absence to **server-generated** fields and explicitly
+rules caller-supplied content in-scope-by-design.
+
+| # | Surface | Bytes generated by | Exposure | Token reachable? | Verdict |
+|---|---|---|---|---|---|
+| 1 | `response_headers`, all 8 `served_by` paths | HookBox | **public**, FILTERED | no | **PASS** — channel A closed (`x-hookbox-*` dropped, credential family masked, any surviving value containing the token masked). Live: `access-control-allow-origin: "<redacted>"` on the wildcard-`Origin` CORS echo |
+| 2 | `request_headers` | caller | **public**, FILTERED | no | **PASS** — channel B closed. `host`/`origin`/`referer` absent from every public row; `authorization`/`cookie` `<redacted>` |
+| 3 | `response_body`, `default_mode="echo"` | **HookBox** | **public**, verbatim | no | **PASS** — channel C closed on the persist path (§7.2) |
+| 4 | `response_body`, `default_mode="mock_404"` | HookBox, static | **public** | no | **PASS** — `{"detail":"No rule matched this request.","error":"no_match"}` |
+| 5 | `response_body`, `served_by="crud"` | HookBox | **public** | no | **PASS** — CRUD bodies are the stored item/collection only; no self-URL, and **no `Location` header** on the 201 (verified live) |
+| 6 | `response_body`, `chaos` / `ratelimit` / `cors` | HookBox, static | **public** | no | **PASS** — static envelopes; `cors` has a `null` body |
+| 7 | `response_body`, `served_by="rule"`, ordinary template | operator template | **public** | no | **PASS** — byte-equal to the client's bytes, which is what AC-72 requires. The F6 default catch-all payload (§5.5.7) is static text with no tags |
+| 8 | `response_body`, `rule` whose template contains `{{ request.header.host }}` | operator template | **public** | **yes** | **ADVISORY A10, not a defect** — see below |
+| 9 | `response_body`, `served_by="mitm"`, upstream echoes request headers | **the upstream** | **public** | **yes** (`origin`/`referer`) | **ADVISORY A11, not a defect** — see below |
+| 10 | `response_body`, `served_by="tunnel"` | the operator's own CLI | **public** | same class as #9 | **ADVISORY A11** |
+| 11 | `query_params` | caller | **public**, unfiltered | only if the caller puts it there | **PASS — by design.** AC-S2 names `query_params` as caller-supplied and explicitly rejects an unscoped substring test. Reproduced live with a planted `?callback=https://<token>.mock.local&t=<token>` |
+| 12 | `request_body` | caller | **public**, unfiltered | same | **PASS — by design**, AC-S2, same wording |
+| 13 | `path` (summary **and** detail) | caller | **public** | **no** | **PASS** — I specifically checked the path-fallback form. `planes.rs::path_fallback_token` strips `/e/<token>` and persists only the remainder, so `POST /e/<token>/hooks/pathform` stores `path = "/hooks/pathform"`. Verified live |
+| 14 | `token`, `matched_rule_id`, `overhead_ms`, `trace`, `state_snapshot` | HookBox | **OMITTED** | n/a | **PASS** — the public detail has exactly 12 keys and none of the five. Structural, not `#[serde(skip)]`: `PublicRequestDetail` is a standalone `#[derive(Serialize)]` struct built field-by-field in `share.rs:294-315` (AC-102), so a new owner field cannot leak in by default |
+| 15 | `PublicShareFeed.endpoint` | HookBox | **public** | no | **PASS** — exactly `['created_at','name','request_count']`. `name` is intentionally disclosed (§5.5.4) and is a text node, never `<h1>`/`document.title` (AC-107, verified in the DOM) |
+| 16 | Public error bodies (404 unknown/revoked/tombstoned, 429) | HookBox | **public** | no | **PASS** — one `share_not_found()` body for all negative outcomes; the 429 body is the static rate-limit envelope. Neither carries the token or the code |
+| 17 | Public HTTP response headers | HookBox | **public** | no | **PASS** — `content-type`, `cache-control: no-store`, `x-hookbox-plane: api` only, on 200 **and** 404 |
+| 18 | **F5 CSV export** | HookBox + operator | **OWNER-ONLY** | n/a | **PASS — verbatim is CORRECT, not a bug.** Answering the round-7 question directly: the CSV needs **no** echo-mode scrub. There is **no server CSV route at all** (`grep -n csv backend/src/routes/api.rs` → nothing); the artifact is assembled client-side in `src/lib/request-export.ts` + `src/lib/csv.ts` from `api.getRequest(id)` — the **Bearer-authenticated owner** route `GET /api/requests/{id}`. It never calls `getSharedRequest`. `src/screens/share-view.tsx` imports neither module (0 references), and AC-43's DOM walk confirms `Export CSV` is absent from the viewer. Verbatim is exactly the R11 / `security.md` S-4 ruling: the CSV is a file the **operator** asked for about their **own** endpoint |
+| 19 | Owner Inspector (`GET /api/requests/{id}`) | — | **OWNER-ONLY** | verbatim by design | **PASS** — and re-asserted this round on the *same row* as a public read, so the asymmetry is proven live rather than assumed |
+| 20 | WebSocket / SSE | — | owner feed only | n/a | **PASS** — §5.7 says no WS/SSE change, and the viewer opens **zero** `ws://`/`wss://` connections and **zero** `text/event-stream` requests (AC-45, asserted on the live page). There is no share-authenticated WS path |
+
+**Two further structural checks that could have hidden a channel D, both clean:**
+
+* **The template sandbox.** `{{ request.header.<name> }}` **is** a real tag (`templating.rs:127-146`), so I
+  checked whether anything renders it *implicitly*. It does not: the grammar is `request.method|path|body|
+  query.*|path.*|header.*|body.*`, `state.*`, `now`, `random` — every one requires the operator to type it.
+  An unknown tag is left as a **literal**, verified live (`x-echo-host: "{{ request.headers.host }}"` came
+  back unrendered because the family is `request.header.`, not `request.headers.`).
+* **AC-S4's row-level invariant, re-derived rather than assumed.** "Nothing **masked** in
+  `request_headers` appears verbatim anywhere else in the same public row": the masked values are
+  `Bearer caller-secret` and `sid=abc123`, and neither appears anywhere outside `request_headers` in any
+  row. **PASS.** I also ran the *stronger* form (nothing **dropped** either) — that stronger form is what
+  flags rows 8/9, which is a useful signal but is **not** what AC-S4 says.
+
+### Why rows 8 and 9 are advisories and not a fourth defect
+
+The standard I applied in round 6 to call channel C a defect was: *it fires with **no attacker setup and
+no operator mistake***. `default_mode = "echo"` is a shipped, documented mode; the wildcard host is the
+form HookBox's own `mock_url` hands the operator; a browser sends `Origin`/`Referer` automatically. And
+crucially, **HookBox itself constructed those bytes**, so it could fix them without breaking anything.
+
+Rows 8 and 9 fail every part of that test:
+
+* **Row 8** requires the operator to *author* `{{ request.header.host }}` into a rule template. That is
+  the operator deliberately copying a request header into a response the mint-time disclosure (AC-93)
+  tells them will be published. It is the same category as the endpoint `name`, which §5.5.4 calls
+  "intentionally disclosed". AC-S2 was written **precisely** to keep this class out of scope: *"a caller
+  can put the token in their own body … an unscoped test is flaky and would get weakened by the first
+  engineer who hits it."*
+* **Row 9** requires (a) the operator to configure `target_url`, (b) an upstream that echoes request
+  headers into its body, and (c) the bytes are **the upstream's**, not HookBox's. Filtering them is not
+  merely hard — it would **violate AC-72**, which requires the captured body to be byte-identical across
+  client / owner / CSV / public. `host` is already stripped upstream (it is hop-by-hop); `origin` and
+  `referer` are not, which is the only lever, and no AC asks for that and removing them would break
+  legitimate CORS-dependent upstreams.
+
+Both are recorded as advisories (A10, A11) so a future PRD revision can make an explicit product call.
+Neither blocks this gate.
+
+## 7.4 Full regression pass — every previously-failing AC, re-run
+
+All 13 bugs from rounds 1-6 are `closed` in `bd` and the gate has **zero open blockers**
+(`bd show hookbox-mun.21 --json` → 24 deps, 23 `closed` + 1 `parent-child` epic).
+
+| Bug | AC(s) | Round-7 re-verification | Verdict |
+|---|---|---|---|
+| `hookbox-mun.24` | AC-S7 | share rate limiter is namespaced/bounded; 125 anonymous public reads produce a 429 with the static envelope and never disturb the mock plane | **PASS** |
+| `hookbox-mun.25` | release integrity | HEAD ships both lanes; working tree clean except `.beads/interactions.jsonl` | **PASS** |
+| `hookbox-mun.26` | AC-26 | `endpoints.request_count` increments on the trace write path; the public feed's `endpoint.request_count` tracks it | **PASS** (`cargo test` + live feed) |
+| `hookbox-mun.27` | AC-48 / AC-53 | abort-on-cancel ships; `pnpm e2e` 118/118 | **PASS** |
+| `hookbox-mun.28` | AC-S13 | viewer module graph does not import `src/api/session.ts` (`share-view.tsx` imports verified); residual A2 unchanged | **PASS** |
+| `hookbox-mun.29` | AC-122(e) | regression test present and green | **PASS** |
+| `hookbox-mun.30` | AC-73(b) / AC-S20 | `insert_trace` 2-statement baseline restored; green in all 5 runs | **PASS** |
+| `hookbox-mun.31` | release integrity | as `.25` | **PASS** |
+| `hookbox-mun.32` | AC-73(d3) / AC-66 | 5 MB benchmark de-flaked; 5/5 clean runs | **PASS** |
+| `hookbox-mun.33` | AC-66 | `f7_ratelimit_429_response_body_captured` de-flaked; 5/5 clean runs | **PASS** |
+| `hookbox-mun.34` | AC-S2 channels A + B | live: `access-control-allow-origin` `<redacted>`; `host`/`origin`/`referer` absent from every public `request_headers` | **PASS** |
+| `hookbox-mun.35` | release integrity | de-flake ships on HEAD | **PASS** |
+| `hookbox-mun.36` | AC-43 channel C | §7.2 — 12/12 live checks | **PASS** |
+
+**Nothing regressed from the channel-C fix landing.** The AC at highest risk was **AC-72** (byte-equality
+of the client's response across every `served_by` path), because the fix edits the echo path. It was
+re-run explicitly and passes: the client's echo bytes are unchanged (raw `host`/`origin`/`referer`/
+`authorization`/`cookie`, same key shape, same `X-HookBox-Served-By`), and only the **persisted** copy
+differs — which is exactly the carve-out AC-72's own text grants AC-S3.
+
+**The three gate-owned end-to-end assertions [R7]:**
+
+| AC | Verdict | Evidence |
+|---|---|---|
+| **AC-44a** | **PASS** | Public detail has all five of `request_headers`, `query_params`, `request_body`, `response_headers`, `response_body` as **present keys**; `response_headers` is filtered per §5.11 (`x-hookbox-*` gone); the omission list `token`/`matched_rule_id`/`overhead_ms`/`trace`/`state_snapshot` holds — exactly 12 keys |
+| **AC-56a** | **PASS** | Rule with `body_template` `'{\n  "hello": "world",\n  "n": 42\n}'` → the client bytes, the owner detail `response_body` and the public `response_body` are **all three byte-identical** to the rendered template; an empty-bodied row (`cors` 204) has `response_body = null`, which the exporter renders as an EMPTY cell, distinct from `pending`/`unavailable` |
+| **AC-114** | **PASS** | One release: mint `POST /api/endpoints/{token}/shares` **and** read a **non-null** `response_body` through `GET /api/share/{code}/requests/{id}` — verified in the same harness run |
+
+**Adversarial spot checks [R7]:** `share_url` ignores `Host: evil.attacker.test` and
+`X-Forwarded-Host` and is built from `PUBLIC_BASE_URL` only (AC-99 / AC-S14) · a tombstoned endpoint's
+live share code flips 200 → 404 with the single `share_not_found()` body (AC-S9) · the share code never
+appears in the application's own `tracing` output (AC-S6, `grep -c <code> server.log` = 0) ·
+`<meta name="referrer" content="no-referrer">` ships in `index.html` and `robots.txt` carries
+`Disallow: /s/` (AC-S5).
+
+## 7.5 Journeys re-walked (lens B) [R7]
+
+| Flow | Works? | Evidence |
+|---|---|---|
+| **F4 VIEWER** — a stranger opens the link, browses rows, opens every tab | **YES** | Live headless Chromium, clean anonymous context, real `dist/` SPA on the real backend: 5 rows × 4 tabs; list → detail → tabs all render; all 15 owner affordances absent; **0** token/`mock_url`/`path_url`/secret hits in `innerHTML` **or** `innerText` |
+| **F4 VIEWER** — no session is required or created | **YES** | Zero requests carry `Authorization` (AC-42); no redirect to `/` |
+| **F4 OWNER → VIEWER** — mint → paste → stranger opens → revoke → the link dies | **YES** | mint 201 → anonymous 200 → `DELETE .../shares/{id}` 204 → the **very next** public request 404s → a fresh browser page renders the terminal *"This link isn't available — It may have been revoked, or it may never have existed. Ask whoever sent it for a new one."* |
+| **F4** — endpoint name visible to the stranger, but not as the page identity | **YES** | "Payments staging" present as a text node; `document.title = "Shared requests · HookBox"`, `<h1> = "Shared requests"` (AC-107) |
+| **F4** — polling, not streaming | **YES** | zero `ws://`/`wss://`, zero `text/event-stream`, zero off-origin subresources |
+| F1 · F2 · F3 · F5 · F6 · 360 px viewport | **YES** | Round-6 live walk (47/47) carries forward on byte-identical code — `git diff 0b01a01 HEAD` touches only `engine.rs`, a `share.rs` comment and tests. Independently re-covered by `pnpm e2e` 118/118 this round |
+
+## 7.6 Defects — round 7
+
+**NONE.** No new bug was filed. No channel D exists. All 13 previously-filed bugs are closed and
+re-verified. The gate `hookbox-mun.21` is closed on this round.
+
+## 7.7 New advisories (no bug filed)
+
+* **A10 — a rule `body_template` containing `{{ request.header.host }}` renders the endpoint token into
+  the public `response_body`.** Repro: `default_mode` irrelevant; add a rule whose `body_template` is
+  `{"seen_host":"{{ request.header.host }}"}`; drive it with `Host: <token>.mock.local`; the public
+  detail returns `{"seen_host":"<token>.mock.local"}`. **Operator-authored** — the operator typed the
+  tag, and AC-93's mint disclosure states response bodies are published; AC-S2 scopes token-absence to
+  server-generated fields precisely to exclude this. Worth a future product call because a plausible,
+  innocent template (`{"self":"https://{{ request.header.host }}/items/1"}`) reaches it without the
+  operator connecting it to token disclosure. Options: mask the token in the public `response_body`
+  (conflicts with AC-72's byte-equality), or add a mint-time warning when any shared row's body
+  contains the token.
+* **A11 — an MITM upstream (or a bound tunnel CLI) that echoes request headers back in its body returns
+  `origin`/`referer` — which carry the token in wildcard mock-host mode — into the public
+  `response_body`.** Reproduced live on `:8098` with `MITM_ALLOW_PRIVATE=1` and an echoing upstream:
+  `{"upstream":true,"headers":{...,"origin":"https://<token>.mock.local","referer":"https://<token>.mock.local/page",...}}`.
+  `host` is already stripped before forwarding (it is hop-by-hop, `helpers.rs:21-31`); `origin`/`referer`
+  are not. **Not a defect of this feature:** the bytes are the upstream's, and rewriting them would
+  violate AC-72. The only in-HookBox lever is adding `origin`/`referer` to `SENSITIVE_FORWARD_HEADERS`,
+  which no AC asks for and which would break CORS-dependent upstreams. Record it, do not fix it blind.
+* **A12 — §5.11's Public `Response body` row is still missing.** Round 6's A6 flagged that §5.11's
+  Public `Request headers` cell is stale. The table also has no `response_body` row at all, which is the
+  documentation gap channel C fell through. A future PRD revision should add: *Public `response_body` —
+  as stored; the `echo` payload's `headers` sub-object is scrubbed on the **persist** path
+  (`engine::redact_echo_persisted_headers`), not here.* Documentation drift between two frozen texts, no
+  code defect.
+* **A1-A9 from round 6 all still stand** and are unchanged by this round.
