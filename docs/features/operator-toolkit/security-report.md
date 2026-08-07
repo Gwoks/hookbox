@@ -1,6 +1,11 @@
 # Security report (code-level, post-QA): Operator Toolkit (slug: `operator-toolkit`)
 
-**Gate:** `hookbox-mun.22` · **Verdict: FAIL — 5 findings filed, gate left open and re-blocked.**
+**Gate:** `hookbox-mun.22` · **FINAL VERDICT: PASS — gate CLOSED.**
+> Two rounds. **Round 1 (below) = FAIL**, 5 findings filed and the gate re-blocked. **Round 2**
+> (appended at the end of this document) re-verified the fixes in commit `8af1ccc` independently and
+> **passed**: all 5 closed, no channel E, no regression. Read both.
+
+## Round 1 — initial code-level review: FAIL, 5 findings filed, gate re-blocked
 Reviewed at commit `c17a0d5` (QA round 7 PASS) against `prd.md` §4.9 (AC-S1..AC-S27) + §5.1–§5.11,
 `architecture.md` §3.2/§7 and this feature's DESIGN-mode `security.md` (S-1..S-19). Method: read the
 shipped diffs (`5e15f73`, `c50c578`, `ad43798`, `3cb3db5`, `afd8152`), then **ran the real backend**
@@ -161,3 +166,128 @@ in **both** host topologies with a proxy-header set (`x-forwarded-host`, `x-forw
 `forwarded`, `x-original-uri`, `x-forwarded-uri`, `x-envoy-original-path`) and in mixed **and** folded
 case; (b) `GET /s/<CODE>` header + access-log assertions against a **running** nginx *and* against the
 bare backend; (c) the malformed-query limiter counter.
+
+---
+
+# Round 2 — re-verification of the fixes (commit `8af1ccc`)
+
+**Verdict: PASS. All five findings closed. `hookbox-mun.22` closed. No channel E.**
+
+Re-verified **independently**, not on the fix summary: I re-read all six diffs, **force-rebuilt** the
+binary (the on-disk one predated the fix commit), stood the server up on a **fresh DB**, and re-ran
+every original exploit plus a new adversarial sweep. Then ran the test suite, `fmt` and `clippy` myself.
+
+## Round-2 results
+
+| id | bd | Verdict | Independent evidence |
+|----|----|---------|----------------------|
+| F-1 | `hookbox-mun.37` | **CLOSED** | `redact_echo_persisted_headers` now takes the token and applies a **value**-based mask after the name drop (`engine.rs:625-665`). Live, all six original probe rows: `response_body.headers` shows `x-forwarded-host`, `x-forwarded-server`, `forwarded`, `x-original-uri`, `x-forwarded-uri`, `x-envoy-original-path` **all `<redacted>`**. |
+| F-2 | `hookbox-mun.38` | **CLOSED** | New `helpers::contains_ci` (`helpers.rs:52-70`) is shared by `mask_token_in_value` **and** the persist path, so the two cannot drift again. Live: a lowercased `x-forwarded-host` **and** an upper-cased `x-original-host` are both masked in `request_headers` *and* the echo body. |
+| F-3 | `hookbox-mun.39` | **CLOSED** (mechanism verified; see caveat) | `deploy/nginx.conf:40` is now `try_files /index.html =404;`. |
+| F-4 | `hookbox-mun.40` | **CLOSED** | Live from the **bare backend**: `GET /s/<CODE>` → `referrer-policy: no-referrer`, `x-robots-tag: noindex, nofollow`, `x-content-type-options: nosniff`, `x-frame-options: DENY`. `GET /dashboard` → **none** of them (correctly scoped). `/s/:code` is the only viewer route (`src/router.tsx:45`), and `starts_with("/s/")` covers it exactly. |
+| F-5 | `hookbox-mun.41` | **CLOSED** | 12 hostile query strings — **zero** axum 400s; all reach the handler as 422/200. Non-numeric `{id}` now collapses into the **same 404** (an AC-36 improvement over the old 400). 130× `?limit=abc` → **107×422 + 23×429**: malformed requests are now metered. |
+
+### The exploit, re-attempted verbatim — it fails
+
+```
+token candidates recoverable from the share link: NONE
+successful anonymous writes: 0
+request_count now = 7   (unchanged)
+```
+
+### AC-72 still holds — the fix is persist-path-only
+
+```
+client sees x-forwarded-host = 'DtxzphqJZs.mock.local'      <- raw, untouched
+public  response_body.headers['x-forwarded-host'] = '<redacted>'
+```
+
+## The channel-E hunt
+
+The decisive question was whether F-1 was fixed **generically** or by a longer name list. I probed three
+header names **the fix authors never enumerated** — `x-weird-custom-header` (token embedded mid-value as
+`prefix-<TOKEN>-suffix`), `baggage`, `traceparent` — and all three were masked. The mask is genuinely
+value-based, so the next proxy header cannot reopen this.
+
+Then I swept **every `served_by` path** on the fixed build, scanning every JSON leaf of every public row
+for the token in **all three letter cases**, excluding only the caller-supplied fields AC-S2 puts in
+scope by design (`path`, `query_params`, `request_body`):
+
+| `served_by` | Result |
+|---|---|
+| `default` (echo), `default` (mock_404), `cors`, `crud`, `rule`, `chaos`, `ratelimit` | **0 leaks** |
+| `mitm` | upstream's own echoed body only — **A11, unchanged** (see below) |
+
+**`CHANNEL-E TOTAL server-generated leaks: 0`.** No channel E exists.
+
+## §5.11 asymmetry — not broken by the new masking
+
+The real regression risk was the fix over-reaching into storage or the owner surface. It did not:
+
+```
+OWNER  request_headers['x-forwarded-host']    = 'DtxzphqJZs.mock.local'   (verbatim)
+PUBLIC request_headers['x-forwarded-host']    = '<redacted>'
+OWNER  response_headers['x-hookbox-endpoint'] = 'DtxzphqJZs'              (verbatim)
+PUBLIC response_headers x-hookbox-*           = none (dropped)
+OWNER  keeps token/matched_rule_id/trace/overhead_ms/state_snapshot
+PUBLIC keeps none of them
+```
+
+Channels A, B and C all still closed; AC-S3 still masks `authorization`/`cookie` in the echo body;
+AC-36/AC-S14 404 identity byte-identical across status line, headers and body; AC-101's `?limit=999`
+oracle still 422/422; `HEAD` 200, `POST` 405; `grep -c <code> server.log` = **0**.
+
+**One accepted fidelity cost, recorded:** the stored echo body now shows `<redacted>` for token-bearing
+proxy headers, so the *owner's* Inspector and F5's CSV see that too. This sits inside §5.11's already-frozen
+"echo payload's `headers` sub-object" exception (AC-S3, widened by `hookbox-mun.36` and now `.37`), and no
+information is actually lost — the owner sees the real value in `request_headers` on the same row.
+
+## The nginx fix (F-3) — mechanism check, with an honest caveat
+
+I could not execute nginx (neither nginx nor Docker is available in this environment), so I verified the
+fix the same way I filed the bug: against nginx's documented semantics.
+
+`try_files /index.html =404;` is correct, and for the right reason. `try_files` "uses the first found
+file for request processing; **the processing is performed in the current context**" — an internal
+redirect happens *only* when every candidate is exhausted and the last parameter is a **URI**.
+`{{APP_DIR}}/dist/index.html` always exists, so it is served **inside `location /s/`**, where
+`access_log off` and the four `add_header`s apply. `=404` is a status code, not a URI, so it can never
+itself become a second internal redirect. The engineer's Docker A/B test is the executable evidence;
+my check is the mechanism, which is what the original finding rested on.
+
+**Standing recommendation:** keep the deploy smoke test that asserts the four headers and an absent
+access-log line on `GET /s/<CODE>` against a real nginx — this class of bug is invisible to config
+review, which is exactly how it survived QA the first time.
+
+## Advisories after round 2
+
+* **A11 (unchanged, still an advisory) — re-confirmed live on the fixed build.** With `target_url` set
+  and an upstream that echoes its request headers, `response_body` carries
+  `"x-forwarded-host": "<token>.mock.local"` — the **upstream's own bytes**. Preconditions are
+  operator-conditional (configure MITM **and** point it at a header-echoing upstream **and** mint a
+  share link), so it does not meet the "fires by itself" bar that made channel D a defect. Not a
+  regression and not newly introduced by this round.
+  **New, cheap hardening worth a future PRD decision:** `strip_forward_headers` (`helpers.rs`) strips
+  `host` before forwarding to the upstream but **not** `x-forwarded-host` / `forwarded` /
+  `x-original-uri`, so HookBox hands the endpoint token to a third-party upstream in the first place.
+  Masking token-bearing values there would shrink A11 at the source. Recorded, not filed.
+* **A10, A12, A13** — unchanged from round 1. A10 (operator-authored `{{request.header.*}}` templates)
+  is now the *only* remaining operator-reachable path of this class; if a future revision wants it
+  closed, `contains_ci` is already the primitive to reuse on the rule-render persist path.
+* **Non-security observation:** `contains_ci` allocates two lowercased `String`s per header per call,
+  including on the mock hot path. Bounded by HTTP header limits and well within the existing
+  benchmarks (suite green), but a non-allocating comparison would be cheaper if that path is ever
+  profiled.
+
+## Verification I ran myself
+
+`cargo test` → **114 lib + 55 integration, 0 failed**. `cargo fmt --check` clean.
+`cargo clippy --all-targets -- -D warnings` clean. Plus ~60 live HTTP probes against a
+force-rebuilt binary on a fresh database, across two endpoints, eight `served_by` paths and both host
+topologies.
+
+## Final verdict
+
+**PASS — no unresolved security finding.** `hookbox-mun.22` is closed. The five accepted residuals
+(A10, A11, A12, A13 and the deferred CSP, `prd.md` §8-R16) are recorded above and in §3 of round 1;
+none is blocking.
