@@ -105,6 +105,18 @@ pub struct Config {
 
     // --- Session anti-enumeration rate limit ---
     pub session_rate_limit_per_min: i64,
+
+    // --- F4 share links (§5.8) ---
+    /// CSPRNG bytes per share code -> 32-char base64url -> 192 bits (AC-31).
+    /// Clamped to >= 16 at load so a misconfigured SHARE_CODE_BYTES=1 cannot
+    /// mint a guessable code (128-bit floor, AC-103).
+    pub share_code_bytes: usize,
+    /// Max **active** share links per endpoint (AC-27).
+    pub share_max_per_endpoint: i64,
+    /// Per-IP limit on the public share resolver (AC-38, AC-113).
+    pub share_rate_limit_per_min: i64,
+    /// Instance-wide ceiling on the public share resolver (AC-S15, AC-113).
+    pub share_rate_limit_global_per_min: i64,
 }
 
 impl Config {
@@ -185,6 +197,11 @@ impl Config {
             tunnel_request_timeout_s: int_env("TUNNEL_REQUEST_TIMEOUT_S", 30) as u64,
 
             session_rate_limit_per_min: int_env("SESSION_RATE_LIMIT_PER_MIN", 30),
+
+            share_code_bytes: (int_env("SHARE_CODE_BYTES", 24).max(16)) as usize,
+            share_max_per_endpoint: int_env("SHARE_MAX_PER_ENDPOINT", 10),
+            share_rate_limit_per_min: int_env("SHARE_RATE_LIMIT_PER_MIN", 120),
+            share_rate_limit_global_per_min: int_env("SHARE_RATE_LIMIT_GLOBAL_PER_MIN", 1200),
         }
     }
 }
@@ -206,6 +223,10 @@ mod tests {
             "TRACE_CAP",
             "SESSION_RATE_LIMIT_PER_MIN",
             "MITM_ALLOW_PRIVATE",
+            "SHARE_CODE_BYTES",
+            "SHARE_MAX_PER_ENDPOINT",
+            "SHARE_RATE_LIMIT_PER_MIN",
+            "SHARE_RATE_LIMIT_GLOBAL_PER_MIN",
         ] {
             std::env::remove_var(k);
         }
@@ -220,6 +241,22 @@ mod tests {
         assert!(!cfg.path_fallback_only);
         assert!(cfg.app_hosts.contains("localhost"));
         assert!(cfg.app_hosts.contains("mock.local"));
+        // §5.8 F4 share-link defaults (AC-27, AC-31, AC-38, AC-113).
+        assert_eq!(cfg.share_code_bytes, 24);
+        assert_eq!(cfg.share_max_per_endpoint, 10);
+        assert_eq!(cfg.share_rate_limit_per_min, 120);
+        assert_eq!(cfg.share_rate_limit_global_per_min, 1200);
+    }
+
+    #[test]
+    fn share_code_bytes_clamped_to_16_floor() {
+        // AC-103: a misconfigured SHARE_CODE_BYTES=1 must not mint a
+        // guessable code — the loaded config clamps to the 128-bit floor.
+        let _guard = crate::testutil::env_lock();
+        std::env::set_var("SHARE_CODE_BYTES", "1");
+        let cfg = Config::from_env();
+        assert_eq!(cfg.share_code_bytes, 16);
+        std::env::remove_var("SHARE_CODE_BYTES");
     }
 
     #[test]

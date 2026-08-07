@@ -15,14 +15,14 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use axum::body::Body;
+use axum::body::{to_bytes, Body, Bytes, HttpBody};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Value};
 
 use crate::db::{self, TraceRecord};
 use crate::feed::FeedEvent;
-use crate::helpers::{redact, value_to_string};
+use crate::helpers::{self, redact, value_to_string};
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
 use crate::rule_cache::{CompiledEndpoint, Resolved};
 use crate::state::AppState;
@@ -82,6 +82,7 @@ pub async fn handle_mock(
             insert_header(resp.headers_mut(), &k, &v);
         }
         let resp = identified(resp, token, "cors", None, &ep, &headers_lower);
+        let (resp, rb) = capture_response_body(resp).await;
         spawn_trace(
             state,
             token,
@@ -96,6 +97,7 @@ pub async fn handle_mock(
             &query,
             &body_text,
             &resp,
+            &rb,
             &trace,
             &BTreeMap::new(),
         );
@@ -273,6 +275,7 @@ pub async fn handle_mock(
                 &rl.remaining.to_string(),
             );
             let r = identified(r, token, "ratelimit", matched_rule_id, &ep, &headers_lower);
+            let (r, rb) = capture_response_body(r).await;
             spawn_trace(
                 state,
                 token,
@@ -287,6 +290,7 @@ pub async fn handle_mock(
                 &query,
                 &body_text,
                 &r,
+                &rb,
                 &trace,
                 &endpoint_state,
             );
@@ -298,6 +302,12 @@ pub async fn handle_mock(
     match conditions::roll_chaos(chaos_pct, &eff_chaos_mode) {
         conditions::Chaos::Drop => {
             trace.push(step("chaos", "dropout (connection closed)"));
+            // D5 / R-DROPOUT: the client never gets a real response (a 499 +
+            // Connection: close is synthesized below), so there is nothing to
+            // capture — pass a literal `&[]`, with NO capture call. The trace
+            // row keeps `status_code = 0` / `response_headers = {}` as-is;
+            // this pre-existing low-fidelity row is deliberately not fixed by
+            // F7 (a follow-up issue is filed for it separately).
             spawn_trace(
                 state,
                 token,
@@ -312,6 +322,7 @@ pub async fn handle_mock(
                 &query,
                 &body_text,
                 &Response::new(Body::empty()),
+                &[],
                 &trace,
                 &endpoint_state,
             );
@@ -328,6 +339,7 @@ pub async fn handle_mock(
                 "application/json",
             );
             let r = identified(r, token, "chaos", matched_rule_id, &ep, &headers_lower);
+            let (r, rb) = capture_response_body(r).await;
             spawn_trace(
                 state,
                 token,
@@ -342,6 +354,7 @@ pub async fn handle_mock(
                 &query,
                 &body_text,
                 &r,
+                &rb,
                 &trace,
                 &endpoint_state,
             );
@@ -366,6 +379,35 @@ pub async fn handle_mock(
         &headers_lower,
     );
 
+    // 6a. F7: buffer the finished body AFTER `identified()` (safe — that only
+    // ever calls `insert_header`) so the trace can persist the exact bytes
+    // the client is about to receive.
+    let (resp, rb) = capture_response_body(resp).await;
+
+    // AC-S3: the `default_mode = "echo"` payload's persisted `response_body`
+    // must not carry the caller's raw headers, even though the client's echo
+    // body still does (that response is already built, above, in `resp`/
+    // `rb`). Rebuild ONLY the bytes handed to `spawn_trace` from
+    // `redact_echo_persisted_headers(&headers_lower, token)` (hookbox-mun.36:
+    // drops the structural `host`/`origin`/`referer` headers; hookbox-mun.37:
+    // additionally MASKS any other header whose VALUE contains the endpoint
+    // token, e.g. `x-forwarded-host`/`forwarded`/`x-original-uri`, mirroring
+    // `routes::share::mask_token_in_value`; hookbox-mun.38: that comparison
+    // is case-insensitive — see that function's doc comment).
+    let persisted_body: std::borrow::Cow<'_, [u8]> =
+        if served_by == "default" && ep.default_mode == "echo" {
+            let redacted = echo_payload(
+                &method,
+                mock_path,
+                &query,
+                &redact_echo_persisted_headers(&headers_lower, token),
+                &body_text,
+            );
+            std::borrow::Cow::Owned(serde_json::to_vec(&redacted).unwrap_or_default())
+        } else {
+            std::borrow::Cow::Borrowed(rb.as_ref())
+        };
+
     // 7. Fire-and-forget trace + publish (never awaited).
     spawn_trace(
         state,
@@ -381,6 +423,7 @@ pub async fn handle_mock(
         &query,
         &body_text,
         &resp,
+        &persisted_body,
         &trace,
         &endpoint_state,
     );
@@ -513,10 +556,7 @@ async fn resolve_unmatched(
     // 4d. Default mode.
     if ep.default_mode == "echo" {
         trace.push(step("default", "echo"));
-        let payload = json!({
-            "method": method, "path": mock_path, "query": query,
-            "headers": headers_lower, "body": body_text,
-        });
+        let payload = echo_payload(method, mock_path, query, headers_lower, body_text);
         return (
             json_response(200, &payload, "application/json"),
             "default".into(),
@@ -562,6 +602,78 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
     }
 }
 
+/// Structural request headers dropped ENTIRELY from the echo payload's
+/// persisted `headers` sub-object (hookbox-mun.36, channel C of AC-43/
+/// AC-S2). In wildcard mock-host mode `Host` IS `<token>.<MOCK_DOMAIN>` on
+/// every request, and a cross-origin browser echoes it back via `Origin`/
+/// `Referer` — exactly the set `routes::share::PUBLIC_REQUEST_HEADER_DROP`
+/// removes from the public projection's `request_headers` column.
+///
+/// This is a NAME-based drop list and, on its own, only closes the
+/// structural carriers. Do NOT extend this list to chase the next proxy
+/// header (hookbox-mun.37) — `redact_echo_persisted_headers` below also
+/// applies a VALUE-based mask to every surviving header, which is what
+/// actually generalizes the fix.
+const ECHO_PERSIST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
+
+/// The AC-S3 persist-path redaction (`redact()`, masking
+/// authorization/cookie/x-owner-id) PLUS TWO follow-ups that must be applied
+/// together (hookbox-mun.37 + hookbox-mun.38):
+///   1. hookbox-mun.36: drop `ECHO_PERSIST_HEADER_DROP` (`host`/`origin`/
+///      `referer`) entirely.
+///   2. hookbox-mun.37: mask any SURVIVING header whose VALUE contains
+///      `token` to `"<redacted>"`, mirroring
+///      `routes::share::mask_token_in_value` — a reverse proxy's
+///      `X-Forwarded-Host`, `X-Forwarded-Server`, `Forwarded`,
+///      `X-Original-URI`, `X-Forwarded-Uri` or `X-Envoy-Original-Path` (all
+///      added by default by Apache/Caddy/Traefik/ingress-nginx/Envoy) is not
+///      in the fixed 3-name drop list above, so without this the endpoint
+///      token re-enters an anonymous share viewer's response through the
+///      echo BODY instead of the header maps — the same class as channel
+///      A/B/C, closed generically instead of by enumerating one more name.
+///
+/// Both this function and `mask_token_in_value` share `helpers::contains_ci`,
+/// which is case-insensitive (hookbox-mun.38: nginx's `$host` variable is
+/// documented as lowercase, so a case-sensitive compare lets a case-folded
+/// token through) — so the two copies of this check cannot silently drift
+/// apart again.
+///
+/// Applied ONLY to the `headers` sub-object rebuilt for the persisted
+/// `response_body` of a `default_mode = "echo"` row (`handle_mock`, below)
+/// — the client's own echo body still carries the raw headers (AC-72, the
+/// §2 non-goal), and every other row shape / column (including the stored
+/// `request_headers` column, the owner Inspector and F5's CSV) is
+/// untouched.
+fn redact_echo_persisted_headers(
+    headers: &BTreeMap<String, String>,
+    token: &str,
+) -> BTreeMap<String, String> {
+    redact(headers)
+        .into_iter()
+        .filter(|(k, _)| !ECHO_PERSIST_HEADER_DROP.contains(&k.to_ascii_lowercase().as_str()))
+        .map(|(k, v)| {
+            if helpers::contains_ci(&v, token) {
+                (k, "<redacted>".to_string())
+            } else {
+                (k, v)
+            }
+        })
+        .collect()
+}
+
+/// The `default_mode = "echo"` payload shape, factored out so the client
+/// build (unredacted `headers`) and the AC-S3 persisted rebuild (redacted
+/// `headers`) can never drift apart.
+fn echo_payload(
+    method: &str,
+    path: &str,
+    query: &BTreeMap<String, String>,
+    headers: &BTreeMap<String, String>,
+    body: &str,
+) -> Value {
+    json!({ "method": method, "path": path, "query": query, "headers": headers, "body": body })
+}
+
 fn json_response(status: u16, body: &Value, content_type: &str) -> Response {
     let bytes = serde_json::to_vec(body).unwrap_or_default();
     let mut r = Response::builder()
@@ -570,6 +682,46 @@ fn json_response(status: u16, body: &Value, content_type: &str) -> Response {
         .unwrap();
     insert_header(r.headers_mut(), "content-type", content_type);
     r
+}
+
+/// F7 (architecture.md §2.10.1): buffer a finished mock response's body so the
+/// trace can persist the exact bytes the client will receive, returning an
+/// equivalent response plus those bytes.
+///
+/// Allocation-free for the payload: every mock-plane body is built from an
+/// owned buffer (a rendered template, `serde_json::to_vec`, the MITM reply,
+/// the tunnel's decoded reply, or `Body::empty()`), so it is a SINGLE-FRAME
+/// body — `to_bytes` hands back the same `Bytes` buffer and `Bytes::clone` is
+/// a refcount bump, not a copy. Nothing here can block: the frame is already
+/// resolved, so the `.await` never yields.
+///
+/// The `size_hint().exact()` guard is a forward-compatibility fuse: if a
+/// streaming mock body is ever introduced, this returns the response
+/// untouched and captures nothing rather than buffering an unbounded stream.
+async fn capture_response_body(resp: Response) -> (Response, Bytes) {
+    let (parts, body) = resp.into_parts();
+    let Some(len) = body.size_hint().exact() else {
+        tracing::warn!("mock response body has no exact size; response_body not captured");
+        return (Response::from_parts(parts, body), Bytes::new());
+    };
+    if len == 0 {
+        // 204 CORS preflight, empty 204 CRUD, chaos dropout — nothing to capture.
+        return (Response::from_parts(parts, body), Bytes::new());
+    }
+    match to_bytes(body, len as usize).await {
+        Ok(bytes) => (
+            Response::from_parts(parts, Body::from(bytes.clone())),
+            bytes,
+        ),
+        Err(e) => {
+            // Unreachable for an in-memory body (`len` is exact, so the limit
+            // cannot trip, and these bodies are infallible). If it ever fires
+            // the body is already lost, so the only honest option is an
+            // empty one.
+            tracing::error!("failed to buffer mock response body: {e}");
+            (Response::from_parts(parts, Body::empty()), Bytes::new())
+        }
+    }
 }
 
 /// Attach `X-HookBox-*` identifying headers + auto-CORS (P1).
@@ -626,31 +778,17 @@ fn spawn_trace(
     query: &BTreeMap<String, String>,
     req_body: &str,
     resp: &Response,
+    resp_body: &[u8], // F7 — captured bytes; empty ⇒ NULL (AC-69)
     trace: &[Step],
     state_snapshot: &BTreeMap<String, String>,
 ) {
     let duration_ms = t0.elapsed().as_millis() as i64;
     let overhead_ms = (duration_ms - applied_latency_ms).max(0);
 
-    // Capture response headers (the §5.4 trace records them) — redacted set.
-    let resp_headers: BTreeMap<String, String> = resp
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|vs| (k.as_str().to_string(), vs.to_string()))
-        })
-        .collect();
+    // Response headers as persisted (R11 seam; today an identity projection).
+    let resp_headers = helpers::response_headers_for_trace(resp.headers());
 
     let cap = state.cfg.max_body_bytes;
-    let truncate = |s: &str| -> String {
-        if s.len() > cap {
-            s[..cap].to_string()
-        } else {
-            s.to_string()
-        }
-    };
 
     let trace_arr: Vec<Value> = trace
         .iter()
@@ -674,13 +812,11 @@ fn spawn_trace(
         request_headers: serde_json::to_string(&redact(req_headers))
             .unwrap_or_else(|_| "{}".into()),
         query_params: serde_json::to_string(query).unwrap_or_else(|_| "{}".into()),
-        request_body: if req_body.is_empty() {
-            None
-        } else {
-            Some(truncate(req_body))
-        },
+        // F7: both body columns go through the identical projection helper
+        // (AC-70(d)) — NULL <=> zero-length, never an empty string (AC-69).
+        request_body: helpers::body_for_trace(req_body.as_bytes(), cap),
         response_headers: serde_json::to_string(&resp_headers).unwrap_or_else(|_| "{}".into()),
-        response_body: None, // body already consumed into the Response; not re-read (off-path)
+        response_body: helpers::body_for_trace(resp_body, cap),
         trace_json: serde_json::to_string(&trace_arr).unwrap_or_else(|_| "[]".into()),
         state_snapshot: serde_json::to_string(&state_obj).unwrap_or_else(|_| "{}".into()),
     };
@@ -718,4 +854,167 @@ fn jp(body: &str, path: &str) -> String {
 #[allow(dead_code)]
 fn vstr(v: &Value) -> String {
     value_to_string(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // F7 AC-73(d3): the capture helper on a 5 MB body (the MITM_MAX_BODY_BYTES
+    // worst case) must be zero-copy, and the rebuilt response's bytes must be
+    // byte-equal to the input.
+    //
+    // Zero-copy is proven by timing, not by a fixed millisecond budget — a
+    // fixed `< 1ms` bound (hookbox-mun.32) has under 1x margin against warm
+    // ~0.3ms runs and flakes ~6% of the time on a cold/loaded/shared runner,
+    // because it is racing wall-clock scheduling noise, not the code path.
+    //
+    // Instead we compare `capture_response_body` against a same-process,
+    // same-buffer, same-run explicit `Vec::clone` (a real memcpy) of the
+    // identical 5 MB payload. That comparison is scale-free: a slow or
+    // loaded runner slows both timings down together, so the RATIO is stable
+    // even when the absolute numbers are not. A full-copy implementation of
+    // `capture_response_body` would cost about the same as the memcpy
+    // control, so requiring capture to be well under it (< 25%) still fails
+    // a regression that reintroduces a copy, while a min-of-N sample (a
+    // warm-up run discarded, then the fastest of several timed runs kept)
+    // removes first-invocation/cold-cache noise from BOTH sides.
+    #[tokio::test]
+    async fn capture_response_body_5mb_is_faster_than_a_full_copy_and_byte_equal() {
+        const ITERATIONS: usize = 20;
+        let payload = vec![b'x'; 5_000_000];
+
+        // Warm-up: pay for allocator/CPU-frequency-scaling/page-fault costs
+        // once, outside any measured sample, on both code paths.
+        {
+            let resp = Response::builder()
+                .status(200)
+                .body(Body::from(payload.clone()))
+                .unwrap();
+            let _ = capture_response_body(resp).await;
+            let warm_control: Vec<u8> = payload.clone();
+            std::hint::black_box(&warm_control);
+        }
+
+        let mut capture_min = Duration::MAX;
+        let mut captured_bytes = Bytes::new();
+        let mut rebuilt_bytes = Bytes::new();
+        for _ in 0..ITERATIONS {
+            let resp = Response::builder()
+                .status(200)
+                .body(Body::from(payload.clone()))
+                .unwrap();
+            let started = Instant::now();
+            let (rebuilt, bytes) = capture_response_body(resp).await;
+            let elapsed = started.elapsed();
+            if elapsed < capture_min {
+                capture_min = elapsed;
+                captured_bytes = bytes;
+                rebuilt_bytes = to_bytes(rebuilt.into_body(), usize::MAX).await.unwrap();
+            }
+        }
+
+        let mut copy_min = Duration::MAX;
+        for _ in 0..ITERATIONS {
+            let started = Instant::now();
+            let control: Vec<u8> = payload.clone();
+            let elapsed = started.elapsed();
+            std::hint::black_box(&control);
+            copy_min = copy_min.min(elapsed);
+        }
+
+        assert_eq!(captured_bytes.len(), payload.len());
+        assert_eq!(captured_bytes.as_ref(), payload.as_slice());
+        // The rebuilt response's own body is byte-equal too.
+        assert_eq!(rebuilt_bytes.as_ref(), payload.as_slice());
+
+        // A full-copy implementation would cost roughly `copy_min`; the
+        // zero-copy path must be clearly (>= 4x) faster than that, on the
+        // same machine, same run, same buffer — so this cannot pass a
+        // full-copy regression and cannot flake from an absolute-time budget.
+        assert!(
+            capture_min.saturating_mul(4) < copy_min,
+            "capture_response_body best-of-{ITERATIONS} ({capture_min:?}) is not clearly \
+             faster than a best-of-{ITERATIONS} explicit 5MB Vec::clone ({copy_min:?}); \
+             expected < 25% of the copy control, which suggests a full copy crept back in"
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_response_body_empty_is_none_and_untouched() {
+        let resp = Response::builder().status(204).body(Body::empty()).unwrap();
+        let (rebuilt, bytes) = capture_response_body(resp).await;
+        assert!(bytes.is_empty());
+        assert_eq!(rebuilt.status(), StatusCode::NO_CONTENT);
+    }
+
+    // hookbox-mun.37 + hookbox-mun.38: a proxy header whose NAME is not in
+    // `ECHO_PERSIST_HEADER_DROP` but whose VALUE carries the endpoint token
+    // (in ANY letter case) must be masked, not just dropped-by-name headers.
+    #[test]
+    fn redact_echo_persisted_headers_masks_any_value_containing_the_token() {
+        let token = "oPp8tASu3i";
+        let mut headers = BTreeMap::new();
+        headers.insert("host".to_string(), format!("{token}.mock.local"));
+        headers.insert(
+            "x-forwarded-host".to_string(),
+            format!("{token}.mock.local"),
+        );
+        headers.insert(
+            "x-forwarded-server".to_string(),
+            format!("{token}.mock.local"),
+        );
+        headers.insert(
+            "forwarded".to_string(),
+            format!("for=203.0.113.9;host={token}.mock.local;proto=https"),
+        );
+        headers.insert(
+            "x-envoy-original-path".to_string(),
+            format!("/e/{token}/ingress"),
+        );
+        headers.insert("accept".to_string(), "application/json".to_string());
+        let out = redact_echo_persisted_headers(&headers, token);
+
+        // Structural name-drop headers are absent entirely.
+        assert!(!out.contains_key("host"));
+        // Every OTHER header whose value carries the token is masked, not
+        // just the 3-name list — this is the generic fix, not a longer
+        // enumeration.
+        assert_eq!(out["x-forwarded-host"], "<redacted>");
+        assert_eq!(out["x-forwarded-server"], "<redacted>");
+        assert_eq!(out["forwarded"], "<redacted>");
+        assert_eq!(out["x-envoy-original-path"], "<redacted>");
+        // A header carrying no token value is untouched.
+        assert_eq!(out["accept"], "application/json");
+    }
+
+    #[test]
+    fn redact_echo_persisted_headers_masks_a_case_folded_token() {
+        // hookbox-mun.38: nginx's `$host` variable is documented as
+        // lowercase, so the value arrives case-folded relative to the
+        // mixed-case token.
+        let token = "ixaU3viom4";
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "x-forwarded-host".to_string(),
+            "ixau3viom4.mock.local".to_string(),
+        );
+        let out = redact_echo_persisted_headers(&headers, token);
+        assert_eq!(out["x-forwarded-host"], "<redacted>");
+    }
+
+    #[test]
+    fn echo_payload_shape_is_stable() {
+        let mut query = BTreeMap::new();
+        query.insert("q".to_string(), "1".to_string());
+        let mut headers = BTreeMap::new();
+        headers.insert("authorization".to_string(), "Bearer secret".to_string());
+        let v = echo_payload("GET", "/p", &query, &headers, "body-text");
+        assert_eq!(v["method"], json!("GET"));
+        assert_eq!(v["path"], json!("/p"));
+        assert_eq!(v["query"]["q"], json!("1"));
+        assert_eq!(v["headers"]["authorization"], json!("Bearer secret"));
+        assert_eq!(v["body"], json!("body-text"));
+    }
 }

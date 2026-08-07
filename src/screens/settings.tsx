@@ -16,12 +16,14 @@
  * Save); destructive ops each sit behind their own confirm dialog. All strings
  * from copy.md set.* via t().
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, RotateCw, Trash2 } from "lucide-react";
+import { z } from "zod";
 import {
   api,
   ApiError,
+  mockRuleSchema,
   session,
   type EndpointConfigPatch,
   type EndpointDetail,
@@ -29,15 +31,29 @@ import {
 } from "@/api";
 import { t } from "@/lib/copy";
 import { absolutize } from "@/lib/url";
+import { cn } from "@/lib/cn";
+import { downloadBlob } from "@/lib/download";
+import {
+  buildBundle,
+  computeConfigDiff,
+  countRulesUsingRequestHeaderTag,
+  parseBundle,
+  toBundleEndpoint,
+  MAX_BUNDLE_BYTES,
+  type ConfigBundle,
+  type ConfigDiffRow,
+} from "@/lib/config-bundle";
 import { AppShell } from "@/components/hookbox/app-shell";
 import { CodeBlock } from "@/components/hookbox/code-block";
+import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
 import { JsonTree } from "@/components/hookbox/json-tree";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, Input, Label } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Segmented } from "@/components/ui/segmented";
+import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogBody,
@@ -62,6 +78,13 @@ export function Settings() {
 
   const [load, setLoad] = useState<LoadState>({ kind: "loading" });
   const [endpoints, setEndpoints] = useState<EndpointSummary[]>([]);
+  // AC-89: bumped only after a successful import, so SettingsForm's
+  // reset-effect can distinguish "server truth changed out from under the
+  // form" from an ordinary Save (which already matches what's on screen).
+  // NOT a remount key — a remount would also destroy ConfigurationSection's
+  // own in-flight progress/report state, which lives inside SettingsForm's
+  // tree so it can read the form's `dirty` flag.
+  const [importGen, setImportGen] = useState(0);
 
   const fetchAll = useCallback(async () => {
     setLoad({ kind: "loading" });
@@ -138,7 +161,15 @@ export function Settings() {
           <SettingsForm
             token={token}
             endpoint={load.endpoint}
+            importGen={importGen}
             onSaved={(e) => setLoad({ kind: "ready", endpoint: e })}
+            onImported={(e) => {
+              // AC-89: refresh server truth AND signal SettingsForm to reset
+              // its field state from the new `endpoint` prop it is about to
+              // receive — a re-fetch alone leaves the on-screen fields stale.
+              setLoad({ kind: "ready", endpoint: e });
+              setImportGen((g) => g + 1);
+            }}
           />
         )}
       </div>
@@ -149,11 +180,16 @@ export function Settings() {
 function SettingsForm({
   token,
   endpoint,
+  importGen,
   onSaved,
+  onImported,
 }: {
   token: string;
   endpoint: EndpointDetail;
+  /** Bumped only after a successful F3 import — see the reset effect below. */
+  importGen: number;
   onSaved: (e: EndpointDetail) => void;
+  onImported: (e: EndpointDetail) => void;
 }) {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -172,10 +208,45 @@ function SettingsForm({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [proxyError, setProxyError] = useState<string | null>(null);
 
+  // AC-89: `useState(endpoint…)` above only seeds the fields ONCE, at mount —
+  // a bare re-fetch after import leaves the on-screen fields stale, and the
+  // next Save would then revert the very import that just ran. `importGen`
+  // changing (never on an ordinary Save, which already matches what's on
+  // screen) means the import applied server-side; reset every field from the
+  // fresh `endpoint` prop that arrives alongside it.
+  const prevImportGen = useRef(importGen);
+  useEffect(() => {
+    if (importGen === prevImportGen.current) return;
+    prevImportGen.current = importGen;
+    setName(endpoint.name ?? "");
+    setTargetUrl(endpoint.target_url ?? "");
+    setDefaultMode(endpoint.default_mode);
+    setAutoCrud(endpoint.auto_crud);
+    setCorsEnabled(endpoint.cors_enabled);
+    setLatency(endpoint.latency_ms);
+    setRate(endpoint.rate_limit_per_min);
+    setChaosPct(endpoint.chaos_pct);
+    setChaosMode(endpoint.chaos_mode);
+  }, [importGen, endpoint]);
+
   // Destructive-op dialogs.
   const [confirm, setConfirm] = useState<null | "history" | "state" | "delete">(
     null,
   );
+
+  // F3's export-dirty note (AC-87) and import-confirm dirty warning
+  // (AC-S21) both need "does the on-screen form differ from the server?" —
+  // the same nine fields Save itself would PATCH.
+  const dirty =
+    (name.trim() || null) !== endpoint.name ||
+    (targetUrl.trim() || null) !== endpoint.target_url ||
+    defaultMode !== endpoint.default_mode ||
+    autoCrud !== endpoint.auto_crud ||
+    corsEnabled !== endpoint.cors_enabled ||
+    latency !== endpoint.latency_ms ||
+    rate !== endpoint.rate_limit_per_min ||
+    chaosPct !== endpoint.chaos_pct ||
+    chaosMode !== endpoint.chaos_mode;
 
   function validateProxy(): boolean {
     if (!targetUrl.trim()) {
@@ -392,6 +463,14 @@ function SettingsForm({
         </Button>
       </div>
 
+      {/* Configuration export / import (F3) */}
+      <ConfigurationSection
+        token={token}
+        endpoint={endpoint}
+        dirty={dirty}
+        onImported={onImported}
+      />
+
       {/* Retention & state */}
       <Section title={t("set.retention.title")}>
         <p className="text-body-sm text-text-tertiary">
@@ -446,7 +525,7 @@ function SettingsForm({
         open={confirm === "history"}
         onClose={() => setConfirm(null)}
         title={t("set.confirm.clearHistory.title")}
-        body={t("set.confirm.clearHistory.body", { n: endpoint.request_count })}
+        body={t("set.confirm.clearHistory.body")}
         confirmLabel={t("set.confirm.clearHistory.confirm")}
         onConfirm={async () => {
           await api.clearRequests(token);
@@ -477,6 +556,442 @@ function SettingsForm({
           navigate("/", { replace: true });
         }}
       />
+    </div>
+  );
+}
+
+// ── F3 Configuration export / import ──
+
+type ImportPhase =
+  | { kind: "idle" }
+  | {
+      kind: "confirming";
+      bundle: ConfigBundle;
+      diff: ConfigDiffRow[];
+      existingRuleCount: number;
+    }
+  | { kind: "applying"; label: string; value: number; max: number }
+  | {
+      kind: "report";
+      variant: "success" | "danger";
+      message: string;
+      addedRules: number;
+    };
+
+const CONFIG_IMPORT_INPUT_ID = "cfg-import";
+
+function ConfigurationSection({
+  token,
+  endpoint,
+  dirty,
+  onImported,
+}: {
+  token: string;
+  endpoint: EndpointDetail;
+  dirty: boolean;
+  onImported: (e: EndpointDetail) => void;
+}) {
+  const { toast } = useToast();
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<ImportPhase>({ kind: "idle" });
+  const busy = exporting || phase.kind === "applying";
+
+  // AC-87: always builds from freshly fetched server state, never the
+  // in-memory form (the `dirty` caption below is the only mention of that).
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    let fresh: EndpointDetail;
+    try {
+      fresh = await api.getEndpoint(token);
+    } catch (err) {
+      setExporting(false);
+      setExportError(
+        err instanceof ApiError && (err.status === 404 || err.status === 410)
+          ? t("common.error.endpointGone")
+          : t("set.config.export.error"),
+      );
+      return;
+    }
+    let rules;
+    try {
+      // Re-parse to the precise output type — the client's generic infers
+      // the looser input type for schemas carrying zod defaults (same
+      // workaround as rules-manager.tsx's `load`).
+      rules = z.array(mockRuleSchema).parse(await api.listRules(token));
+    } catch {
+      setExporting(false);
+      setExportError(t("set.config.export.error.rules"));
+      return;
+    }
+    try {
+      const bundle = buildBundle(fresh, rules);
+      downloadBlob(
+        `hookbox-config-${token}.json`,
+        "application/json",
+        JSON.stringify(bundle, null, 2),
+      );
+      toast(t("set.config.toast.exported"));
+    } catch {
+      setExportError(t("set.config.export.error"));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  // AC-16: the WHOLE file is parsed and validated before any network write.
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // AC-90: reset so re-selecting the SAME file after a rejection still fires.
+    e.target.value = "";
+    if (!file) return; // a cancelled file dialog is a silent no-op
+    setImportError(null);
+    setPhase({ kind: "idle" });
+    if (file.size === 0) {
+      setImportError(t("set.config.import.invalid.empty"));
+      return;
+    }
+    if (file.size > MAX_BUNDLE_BYTES) {
+      setImportError(t("set.config.import.tooLarge"));
+      return;
+    }
+    file
+      .text()
+      .then(async (text) => {
+        const result = parseBundle(text);
+        if (!result.success) {
+          setImportError(result.message);
+          return;
+        }
+        let existingRuleCount = 0;
+        try {
+          existingRuleCount = (await api.listRules(token)).length;
+        } catch {
+          // Best-effort: the confirm still shows a count rather than
+          // failing the whole flow over a read that isn't the one that matters.
+        }
+        const diff = computeConfigDiff(
+          toBundleEndpoint(endpoint),
+          result.bundle.endpoint,
+        );
+        setPhase({
+          kind: "confirming",
+          bundle: result.bundle,
+          diff,
+          existingRuleCount,
+        });
+      })
+      .catch(() => setImportError(t("set.config.import.invalid.json")));
+  }
+
+  // Frozen orchestration: one PATCH, then one POST per rule in array order,
+  // stop-at-first-failure, no rollback, add-never-replace (AC-17/18/19).
+  async function runImport(bundle: ConfigBundle) {
+    const total = bundle.rules.length;
+    setPhase({
+      kind: "applying",
+      label: t("set.config.import.progressConfig"),
+      value: 0,
+      max: total,
+    });
+    let updated: EndpointDetail;
+    try {
+      updated = await api.patchEndpoint(token, bundle.endpoint);
+    } catch (err) {
+      const detail =
+        err instanceof ApiError ? err.message : t("common.error.generic");
+      setPhase({
+        kind: "report",
+        variant: "danger",
+        message: t("set.config.import.failedConfig", { detail }),
+        addedRules: 0,
+      });
+      return;
+    }
+    for (let i = 0; i < total; i++) {
+      setPhase({
+        kind: "applying",
+        label: t("set.config.import.progressRules", { i: i + 1, n: total }),
+        value: i,
+        max: total,
+      });
+      try {
+        await api.createRule(token, bundle.rules[i]);
+      } catch (err) {
+        const detail =
+          err instanceof ApiError ? err.message : t("common.error.generic");
+        const ruleName = bundle.rules[i].name || t("rules.row.unnamed");
+        onImported(updated); // AC-19: the config step DID apply
+        setPhase({
+          kind: "report",
+          variant: "danger",
+          message: t("set.config.import.failedRule", {
+            done: i,
+            total,
+            index: i + 1,
+            name: ruleName,
+            detail,
+          }),
+          addedRules: i,
+        });
+        return;
+      }
+    }
+    onImported(updated);
+    toast(t("set.config.toast.imported"));
+    setPhase({
+      kind: "report",
+      variant: "success",
+      message:
+        total > 0
+          ? t("set.config.import.done", { n: total })
+          : t("set.config.import.done.noRules"),
+      addedRules: total,
+    });
+  }
+
+  return (
+    <Section title={t("set.config.title")}>
+      <p className="text-body-sm text-text-tertiary">
+        {t("set.config.helper")}
+      </p>
+
+      {exportError && (
+        <InlineAlert variant="danger" role="alert">
+          {exportError}
+        </InlineAlert>
+      )}
+      {importError && (
+        <InlineAlert variant="danger" role="alert">
+          <div className="space-y-2">
+            <p>{importError}</p>
+            <label
+              htmlFor={CONFIG_IMPORT_INPUT_ID}
+              className={cn(
+                buttonVariants({ variant: "secondary", size: "sm" }),
+                "cursor-pointer",
+              )}
+            >
+              {t("set.config.import.chooseAnother")}
+            </label>
+          </div>
+        </InlineAlert>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void handleExport()}
+          loading={exporting}
+          disabled={busy}
+        >
+          {exporting ? t("set.config.export.busy") : t("set.config.export")}
+        </Button>
+        {/* The sr-only input must precede its label in the DOM for the
+         * peer-focus-visible ring to work (design.md §3.4/AC-92). */}
+        <input
+          id={CONFIG_IMPORT_INPUT_ID}
+          type="file"
+          accept="application/json,.json"
+          className="peer sr-only"
+          disabled={busy}
+          onChange={handleFileChange}
+          aria-label={t("set.config.import.aria")}
+        />
+        <label
+          htmlFor={CONFIG_IMPORT_INPUT_ID}
+          className={cn(
+            buttonVariants({ variant: "secondary", size: "sm" }),
+            "cursor-pointer",
+            "peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus",
+            busy && "peer-disabled:cursor-not-allowed peer-disabled:bg-surface-subtle peer-disabled:text-text-tertiary",
+          )}
+        >
+          {t("set.config.import")}
+        </label>
+      </div>
+      {dirty && (
+        <p className="text-caption text-text-tertiary">
+          {t("set.config.export.dirty")}
+        </p>
+      )}
+      <p className="text-caption text-text-tertiary">
+        {t("set.config.import.helper")}
+      </p>
+      <p className="text-caption text-text-tertiary">
+        {t("set.config.import.fileHint")}
+      </p>
+
+      {phase.kind === "applying" && (
+        <div className="space-y-1.5">
+          <p className="text-body-sm text-text-secondary">{phase.label}</p>
+          <Progress value={phase.value} max={phase.max} label={phase.label} />
+          <p className="text-caption text-text-tertiary">
+            {t("set.config.import.dontClose")}
+          </p>
+        </div>
+      )}
+
+      {phase.kind === "report" && (
+        <InlineAlert
+          variant={phase.variant === "danger" ? "danger" : "info"}
+          role={phase.variant === "danger" ? "alert" : "status"}
+          action={
+            <div className="flex flex-wrap gap-2">
+              {phase.addedRules > 0 && (
+                <Button variant="secondary" size="sm" asChild>
+                  <Link to={`/d/${token}/rules`}>
+                    {t("set.config.import.viewRules")}
+                  </Link>
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPhase({ kind: "idle" })}
+              >
+                {t("common.dismiss")}
+              </Button>
+            </div>
+          }
+        >
+          {phase.message}
+        </InlineAlert>
+      )}
+
+      <ConfirmDialog
+        open={phase.kind === "confirming"}
+        onClose={() => setPhase({ kind: "idle" })}
+        title={t("set.config.confirm.title")}
+        body={
+          phase.kind === "confirming" ? (
+            <ImportConfirmBody
+              bundle={phase.bundle}
+              diff={phase.diff}
+              existingRuleCount={phase.existingRuleCount}
+              dirty={dirty}
+            />
+          ) : null
+        }
+        confirmLabel={t("set.config.confirm.confirm")}
+        confirmVariant="primary"
+        onConfirm={async () => {
+          if (phase.kind !== "confirming") return;
+          void runImport(phase.bundle);
+        }}
+      />
+    </Section>
+  );
+}
+
+// AC-S21's pre-apply diff: provenance -> changing fields only -> the
+// target_url consequence when present -> how many rules get added -> the
+// dirty-form warning when applicable.
+function ImportConfirmBody({
+  bundle,
+  diff,
+  existingRuleCount,
+  dirty,
+}: {
+  bundle: ConfigBundle;
+  diff: ConfigDiffRow[];
+  existingRuleCount: number;
+  dirty: boolean;
+}) {
+  const when = new Date(bundle.exported_at).toLocaleString();
+  const headerTagCount = countRulesUsingRequestHeaderTag(bundle.rules);
+  const targetUrlChanged = diff.some((row) => row.field === "target_url");
+
+  return (
+    <div className="space-y-3">
+      <p className="text-body-sm text-text-secondary">
+        {bundle.endpoint.name
+          ? t("set.config.confirm.exported", { when, name: bundle.endpoint.name })
+          : t("set.config.confirm.exported.unnamed", { when })}
+      </p>
+
+      {diff.length === 0 ? (
+        <p className="text-body-sm text-text-tertiary">
+          {t("set.config.diff.none")}
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          <p className="text-body-sm font-medium text-text-primary">
+            {t("set.config.diff.title", { n: diff.length })}
+          </p>
+          <div className="divide-y divide-border overflow-hidden rounded-sm border border-border">
+            {diff.map((row) => (
+              <div
+                key={row.field}
+                className={cn(
+                  "grid grid-cols-[8rem_minmax(0,1fr)] gap-2 px-2.5 py-1.5",
+                  row.field === "target_url" && "bg-warning-bg",
+                )}
+              >
+                <span className="font-mono text-mono-sm text-text-secondary">
+                  {row.field}
+                </span>
+                <span
+                  className="min-w-0 break-all font-mono text-mono-sm"
+                  aria-label={t("set.config.diff.change.aria", {
+                    field: row.field,
+                    from: row.from ?? t("set.config.diff.empty"),
+                    to: row.to ?? t("set.config.diff.empty"),
+                  })}
+                >
+                  <span
+                    className={cn(
+                      "line-through",
+                      row.from === null && "not-italic",
+                      "text-text-tertiary",
+                    )}
+                  >
+                    {row.from ?? t("set.config.diff.empty")}
+                  </span>
+                  <span className="px-1 text-text-tertiary" aria-hidden="true">
+                    →
+                  </span>
+                  <span className="text-text-primary">
+                    {row.to ?? t("set.config.diff.empty")}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+          {targetUrlChanged && (
+            <p className="text-caption text-warning-fg">
+              {t("set.config.diff.targetUrl.warning")}
+            </p>
+          )}
+          <p className="text-caption text-text-tertiary">
+            {t("set.config.diff.unchangedNote")}
+          </p>
+        </div>
+      )}
+
+      <p className="text-body-sm text-text-secondary">
+        {bundle.rules.length > 0
+          ? t("set.config.confirm.rules", {
+              n: bundle.rules.length,
+              existing: existingRuleCount,
+            })
+          : t("set.config.confirm.rules.none")}
+      </p>
+
+      {headerTagCount > 0 && (
+        <p className="text-caption text-warning-fg">
+          {t("set.config.confirm.headerTagWarning", { n: headerTagCount })}
+        </p>
+      )}
+
+      {dirty && (
+        <p className="text-body-sm text-warning-fg">
+          {t("set.config.confirm.dirty")}
+        </p>
+      )}
     </div>
   );
 }
@@ -648,55 +1163,6 @@ function DeleteDialog({
             onClick={() => void confirmDelete()}
           >
             {t("set.confirm.delete.confirm")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Generic confirm (history / state) ──
-function ConfirmDialog({
-  open,
-  onClose,
-  title,
-  body,
-  confirmLabel,
-  onConfirm,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  body: string;
-  confirmLabel: string;
-  onConfirm: () => Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader>{title}</DialogHeader>
-        <DialogBody>
-          <p className="text-body-sm text-text-secondary">{body}</p>
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            {t("set.confirm.cancel")}
-          </Button>
-          <Button
-            variant="danger"
-            loading={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await onConfirm();
-                onClose();
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

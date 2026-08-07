@@ -55,9 +55,21 @@ pub struct TraceRecord {
     pub state_snapshot: String, // JSON
 }
 
-/// Insert a trace and prune to the newest `trace_cap` rows for that token
-/// (write-time prune so the per-endpoint cap never drifts — AC-48). Returns the
-/// new row id. Runs off the response path (spawned by the engine, never awaited).
+/// Insert a trace, prune to the newest `trace_cap` rows for that token
+/// (write-time prune so the per-endpoint cap never drifts — AC-48). Returns
+/// the new row id. Runs off the response path (spawned by the engine, never
+/// awaited) — every write here is fire-and-forget per AC-73(a).
+///
+/// The endpoint's lifetime counters (`request_count`/`last_hit`) are bumped
+/// by the `trg_request_logs_bump_counters` AFTER INSERT trigger (migration
+/// 0003), not by a separate `UPDATE` statement here: every traced request is
+/// a real hit on a live endpoint (unknown-token 404s and tombstoned 410s
+/// never reach `spawn_trace` — see `unknown_404_and_gone_410_not_traced`), so
+/// the bump rides along with the INSERT below rather than costing this
+/// function a third statement — the frozen AC-73(b)/AC-S20 baseline is TWO
+/// (insert + prune). `request_count` is monotonic — it is never reset or
+/// decremented — matching AC-77's premise, which F4 now publishes to the
+/// public viewer (§5.5.4).
 pub async fn insert_trace(
     pool: &SqlitePool,
     rec: &TraceRecord,

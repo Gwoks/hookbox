@@ -4,9 +4,12 @@
  * not raw text (AC-61 surfacing). Used by inspector Headers/Query/State. Values
  * are plain text nodes (XSS-inert) — never dangerouslySetInnerHTML. */
 import { cn } from '@/lib/cn'
+import { t } from '@/lib/copy'
 import { CopyButton } from '@/components/ui/copy-button'
 
-const REDACTED = '__redacted__'
+// Backend writes '<redacted>' (backend/src/helpers.rs::redact) — this used to
+// compare against '__redacted__' and the pill never rendered (AC-133).
+const REDACTED = '<redacted>'
 
 export function KeyValueRows({
   data,
@@ -19,7 +22,11 @@ export function KeyValueRows({
 }) {
   const entries = Object.entries(data ?? {})
   if (entries.length === 0) {
-    return <p className="px-1 py-3 text-body-sm text-text-tertiary">{emptyLabel ?? 'None'}</p>
+    return (
+      <p className="px-1 py-3 text-body-sm text-text-tertiary">
+        {emptyLabel ?? t('insp.headers.none')}
+      </p>
+    )
   }
   return (
     <dl className={cn('divide-y divide-border', className)}>
@@ -31,7 +38,7 @@ export function KeyValueRows({
             <dd className="break-all font-mono text-mono-sm text-text-primary">
               {redacted ? (
                 <span className="inline-flex rounded-xs bg-neutral-chip-bg px-1.5 py-0.5 text-caption font-medium text-neutral-chip-fg">
-                  redacted
+                  {t('insp.headers.redacted')}
                 </span>
               ) : (
                 v

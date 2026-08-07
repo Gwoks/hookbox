@@ -1,24 +1,28 @@
 /**
  * AppShell — the dashboard chrome (design.md §3 / §7, copy.md §5.1/§5.2). A
  * top app bar (brand · endpoint switcher · account menu · theme toggle) plus a
- * sub-header carrying the endpoint subject: mock URL + local path (copy-only
- * MockUrlChips, AC-D19), the Auto-CRUD glance, the live tunnel-active badge
+ * sub-header carrying the endpoint subject: the Mock URL chip (copy-only
+ * MockUrlChip, AC-D19 — the "Local path" chip was removed, operator-toolkit
+ * F2/AC-7; it stays reachable via Settings → Identity and the Mock URL chip's
+ * tooltip), the Auto-CRUD glance, the live tunnel-active badge
  * (dash.tunnel.active, reflected from endpoint_updated), and the Rules / New
  * rule / Settings actions. The body fills the rest of the viewport.
  *
  * Strings come from copy.md §5.1/§5.2 via t(); no copy lives here. The switcher
  * + account menu use the Radix-backed Menu primitive.
  */
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Database,
   Plus,
   RadioTower,
   Settings as SettingsIcon,
+  Share2,
 } from "lucide-react";
 import { BrandMark } from "./brand-mark";
 import { MockUrlChip } from "./code-block";
+import { ShareDialog } from "./share-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Menu,
@@ -30,6 +34,7 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/theme/theme";
 import {
+  api,
   session,
   useSession,
   type EndpointDetail,
@@ -63,6 +68,23 @@ export function AppShell({
   const navigate = useNavigate();
   const snap = useSession();
   const tunnelOn = tunnelActive ?? endpoint?.tunnel_active ?? false;
+  const [shareOpen, setShareOpen] = useState(false);
+  // AC-98: one GET per owner-screen mount for the count badge; any failure
+  // just renders the plain "Share" label, no error surfaced for a glance-only
+  // count.
+  const [shareCount, setShareCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listShares(token)
+      .then((links) => {
+        if (!cancelled) setShareCount(links.length);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   function signOut() {
     session.clear();
@@ -97,11 +119,14 @@ export function AppShell({
       {/* Sub-header — the endpoint subject + actions */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border bg-surface px-4 py-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
-          <UrlChip label={t("dash.mockUrl.label")} url={endpoint?.mock_url} />
-          <UrlChip label={t("dash.pathUrl.label")} url={endpoint?.path_url} />
+          <UrlChip
+            label={t("dash.mockUrl.label")}
+            url={endpoint?.mock_url}
+            tooltip={t("dash.mockUrl.tooltip")}
+          />
           {endpoint?.auto_crud && (
             <Tooltip content={t("dash.autoCrud.tooltip")}>
-              <span className="inline-flex items-center gap-1 rounded-xs bg-subtle px-1.5 py-0.5 text-caption font-medium text-text-secondary">
+              <span className="inline-flex items-center gap-1 rounded-xs bg-surface-subtle px-1.5 py-0.5 text-caption font-medium text-text-secondary">
                 <Database className="h-3 w-3" aria-hidden="true" />
                 {t("dash.autoCrud.label")}
               </span>
@@ -117,6 +142,26 @@ export function AppShell({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* AC-23: Share is FIRST in the right action cluster, before Rules —
+           * never disabled, including on a zero-traffic endpoint. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShareOpen(true)}
+            aria-label={
+              shareCount && shareCount > 0
+                ? t("share.action.count.aria", { n: shareCount })
+                : t("share.action.aria")
+            }
+          >
+            <Share2 className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only sm:not-sr-only">{t("share.action")}</span>
+            {!!shareCount && shareCount > 0 && (
+              <span className="tnum ml-0.5 inline-flex min-w-5 justify-center rounded-pill bg-neutral-chip-bg px-1.5 text-caption font-medium text-neutral-chip-fg">
+                {shareCount}
+              </span>
+            )}
+          </Button>
           {headerExtra}
           <Button variant="ghost" size="sm" asChild>
             <Link to={`/d/${token}/rules`}>{t("dash.action.rules")}</Link>
@@ -146,12 +191,30 @@ export function AppShell({
       <main id="main" className="min-h-0 flex-1 overflow-hidden">
         {children}
       </main>
+
+      <ShareDialog
+        token={token}
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        onCountChange={setShareCount}
+      />
     </div>
   );
 }
 
-function UrlChip({ label, url }: { label: string; url?: string }) {
-  return (
+function UrlChip({
+  label,
+  url,
+  tooltip,
+}: {
+  label: string;
+  url?: string;
+  /** Optional discoverability hint (e.g. pointing at Settings for the local
+   * path, operator-toolkit AC-86). Wraps the whole chip so Radix's Tooltip
+   * asChild can attach its ref to a plain DOM node. */
+  tooltip?: string;
+}) {
+  const chip = (
     <span className="flex min-w-0 items-center gap-1.5">
       <span className="text-caption font-medium uppercase tracking-wide text-text-tertiary">
         {label}
@@ -160,12 +223,13 @@ function UrlChip({ label, url }: { label: string; url?: string }) {
         <MockUrlChip url={absolutize(url)} />
       ) : (
         <span
-          className="h-5 w-40 animate-pulse rounded-xs bg-subtle"
+          className="h-5 w-40 animate-pulse rounded-xs bg-surface-subtle"
           aria-hidden="true"
         />
       )}
     </span>
   );
+  return tooltip ? <Tooltip content={tooltip}>{chip}</Tooltip> : chip;
 }
 
 function EndpointSwitcher({

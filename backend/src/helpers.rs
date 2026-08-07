@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use axum::http::HeaderMap;
 use serde_json::Value;
 
 /// Sensitive inbound headers that must never be forwarded upstream (AC-S9) on top
@@ -46,6 +47,27 @@ pub fn redact(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
             }
         })
         .collect()
+}
+
+/// Case-insensitive substring test — does `haystack` contain `needle`
+/// anywhere, ignoring ASCII letter case? `needle` (the endpoint token) is
+/// never empty-matched: an empty `needle` always returns `false`, so a
+/// blank/unresolved token can never "match" every value.
+///
+/// Shared by the two independent token-disclosure masks that must never
+/// drift apart again (`routes::share::mask_token_in_value` and
+/// `interceptor::engine::redact_echo_persisted_headers`, hookbox-mun.37 /
+/// hookbox-mun.38): a case-SENSITIVE `str::contains` lets a case-folded
+/// token survive both filters, because nginx's `$host` variable is
+/// documented as returning its value in lowercase, so the near-universal
+/// `proxy_set_header X-Forwarded-Host $host;` snippet delivers a lowercased
+/// endpoint token to the backend even though the token alphabet itself is
+/// mixed-case (`ids::gen_token`).
+pub fn contains_ci(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty()
+        && haystack
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
 }
 
 /// Headers safe to forward to an MITM upstream: hop-by-hop + sensitive removed
@@ -124,6 +146,59 @@ pub fn is_safe_key(key: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Cut `s` to at most `cap` bytes, floored to a UTF-8 character boundary.
+/// Replaces a panicking bare `s[..cap]` slice (R12): `is_char_boundary` is
+/// O(1) and the loop backs off at most 3 bytes (F7, AC-70(b)/(d)).
+pub fn truncate_utf8(s: &str, cap: usize) -> &str {
+    if s.len() <= cap {
+        return s;
+    }
+    let mut end = cap;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// The persisted projection shared by BOTH `request_body` and `response_body`
+/// (F7, AC-70(d)). Empty (before OR after truncation) ⇒ `None`, never an
+/// empty string (AC-69). Wire bytes are lossy-UTF-8 decoded — the same
+/// conversion the request path already uses — then cut per `truncate_utf8`,
+/// with no marker and no flag (AC-70).
+pub fn body_for_trace(bytes: &[u8], cap: usize) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let decoded = String::from_utf8_lossy(bytes); // Cow::Borrowed for valid UTF-8: no copy
+    let cut = truncate_utf8(&decoded, cap);
+    if cut.is_empty() {
+        None
+    } else {
+        Some(cut.to_string())
+    }
+}
+
+/// Response headers as persisted on a trace (F7, R11 seam). Today an identity
+/// projection — mirrors the previous inline collect in `engine.rs` exactly.
+///
+/// THIS IS THE SLOT-IN POINT for the F4 security lane's public-projection
+/// filter (§5.11): that filter lives in `routes/share.rs` and is applied ONLY
+/// to the public projection, never here — storage, the owner Inspector and
+/// F5's CSV all stay verbatim (AC-S1's S-4 ruling). Note MITM already strips
+/// upstream `Set-Cookie` before the response is built
+/// (`interceptor/proxy.rs`), so the exposure surface here is tunnel replies
+/// and rule-authored response headers.
+pub fn response_headers_for_trace(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(k, v)| {
+            v.to_str()
+                .ok()
+                .map(|vs| (k.as_str().to_string(), vs.to_string()))
+        })
+        .collect()
+}
+
 /// Validate a MITM `target_url`: http(s) scheme with a host, else error
 /// (AC-S6). `""`/`None` clears the target (returns `Ok(None)`). PORT of
 /// `models.py::_validate_target_url`.
@@ -178,6 +253,19 @@ mod tests {
     }
 
     #[test]
+    fn contains_ci_matches_regardless_of_letter_case() {
+        // The exact repro shape from hookbox-mun.38: nginx's lowercase
+        // `$host` case-folds a mixed-case token.
+        assert!(contains_ci("ixau3viom4.mock.local", "ixaU3viom4"));
+        assert!(contains_ci("IXAU3VIOM4.MOCK.LOCAL", "ixaU3viom4"));
+        assert!(contains_ci("https://Q3L3jRQ7oY.mock.local", "q3l3jrq7oy"));
+        assert!(!contains_ci("no token here", "ixaU3viom4"));
+        // An empty needle never matches, so a blank/unresolved token can
+        // never redact every value.
+        assert!(!contains_ci("anything at all", ""));
+    }
+
+    #[test]
     fn redact_masks_sensitive_headers() {
         let mut h = std::collections::BTreeMap::new();
         h.insert("authorization".to_string(), "Bearer secret".to_string());
@@ -222,5 +310,47 @@ mod tests {
         assert!(validate_target_url(Some("ftp://h/x")).is_err());
         assert!(validate_target_url(Some("file:///etc/passwd")).is_err());
         assert!(validate_target_url(Some("not a url")).is_err());
+    }
+
+    // F7: truncate_utf8 (AC-70(b)) and body_for_trace (AC-69).
+
+    #[test]
+    fn truncate_utf8_floors_to_char_boundary_no_panic() {
+        // Under the cap: untouched.
+        assert_eq!(truncate_utf8("hello", 10), "hello");
+        // cap = 0: always empty, never panics.
+        assert_eq!(truncate_utf8("hello", 0), "");
+        // Exactly at the cap: untouched.
+        assert_eq!(truncate_utf8("hello", 5), "hello");
+        // Multi-byte char straddling the cap: backs off to the last whole
+        // char, never slices mid-codepoint (which would panic).
+        let s = "a€b"; // 'a' (1 byte) + '€' (3 bytes) + 'b' (1 byte) = 5 bytes
+        assert_eq!(truncate_utf8(s, 2), "a"); // cap lands inside '€' -> back off
+        assert_eq!(truncate_utf8(s, 4), "a€"); // cap lands exactly on the boundary
+        assert_eq!(truncate_utf8(s, 5), "a€b");
+    }
+
+    #[test]
+    fn body_for_trace_empty_before_or_after_truncation_is_none_never_some_empty() {
+        assert_eq!(body_for_trace(&[], 100), None);
+        // A cap of 0 truncates any non-empty body down to "" -> still None,
+        // never Some("") (AC-69's "never an empty string" rule, even under a
+        // pathological MAX_BODY_BYTES=0).
+        assert_eq!(body_for_trace(b"hello", 0), None);
+        assert_eq!(body_for_trace(b"hello", 100), Some("hello".to_string()));
+        // Lossy UTF-8 decode of invalid bytes never panics.
+        let lossy = body_for_trace(&[0x80, 0xFF, 0xFE], 100).unwrap();
+        assert!(lossy.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn response_headers_for_trace_is_an_identity_projection() {
+        let mut h = HeaderMap::new();
+        h.insert("content-type", "application/json".parse().unwrap());
+        h.insert("x-hookbox-endpoint", "tok1234567".parse().unwrap());
+        let out = response_headers_for_trace(&h);
+        assert_eq!(out["content-type"], "application/json");
+        assert_eq!(out["x-hookbox-endpoint"], "tok1234567");
+        assert_eq!(out.len(), 2);
     }
 }

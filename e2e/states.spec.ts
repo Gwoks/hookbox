@@ -92,6 +92,19 @@ test.describe("inspector states (AC-J3/J4)", () => {
     await page.getByRole("tab", { name: "Response Served" }).click();
     await expect(page.getByText("Response headers")).toBeVisible();
   });
+
+  test("ready → a redacted header renders the neutral 'redacted' pill, not the raw sentinel (AC-133)", async ({
+    page,
+  }) => {
+    await installMockBackend(page, { authed: true });
+    await page.goto(`/d/${TOKEN}`);
+    await page.getByRole("option").first().click();
+    // Headers is the default tab; the mock's authorization header is the
+    // literal server sentinel "<redacted>" (backend/src/helpers.rs::redact).
+    await expect(page.getByText("authorization")).toBeVisible();
+    await expect(page.getByText("redacted", { exact: true })).toBeVisible();
+    await expect(page.getByText("<redacted>")).toHaveCount(0);
+  });
 });
 
 test.describe("rules manager states (AC-J10)", () => {

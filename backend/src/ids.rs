@@ -59,6 +59,16 @@ pub fn hash_secret(secret: &str) -> String {
     hex::encode(digest)
 }
 
+/// Public share-link code: `n_bytes` of CSPRNG, base64url no-pad. Default 24
+/// bytes ⇒ 32 chars ⇒ 192 bits. Deliberately independent of the endpoint token,
+/// owner id, owner secret, endpoint name and the clock (AC-32) — it is pure
+/// randomness with no derivation. Stored only as `hash_secret(code)` (F4).
+pub fn gen_share_code(n_bytes: usize) -> String {
+    let mut buf = vec![0u8; n_bytes.max(16)]; // 128-bit floor
+    rand::thread_rng().fill_bytes(&mut buf);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +121,52 @@ mod tests {
             hash_secret("abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    // AC-32 / AC-103: gen_share_code entropy, charset, uniqueness, clamp, and
+    // non-derivation from gen_token.
+    #[test]
+    fn share_code_default_length_and_charset() {
+        let c = gen_share_code(24);
+        // base64url no-pad of 24 bytes -> 32 chars (192 bits, AC-31).
+        assert_eq!(c.len(), 32);
+        assert!(c
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+    }
+
+    #[test]
+    fn share_code_10000_are_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..10_000 {
+            assert!(seen.insert(gen_share_code(24)), "duplicate share code");
+        }
+    }
+
+    #[test]
+    fn share_code_clamped_to_16_byte_floor() {
+        // SHARE_CODE_BYTES=1 must not mint a guessable code — the generator
+        // itself floors to 16 bytes (>= 22 base64url chars) regardless of the
+        // caller's request (AC-103's clamp is belt-and-braces at Config load,
+        // this is the floor inside the generator itself).
+        let c = gen_share_code(1);
+        assert!(c.len() >= 22);
+    }
+
+    #[test]
+    fn share_code_shares_no_long_substring_with_a_token() {
+        // Independent of the endpoint token generator (AC-32): no shared
+        // substring of length >= 4 with a `gen_token(10)` value.
+        let token = gen_token(10);
+        let code = gen_share_code(24);
+        let token_lower = token.to_ascii_lowercase();
+        let code_lower = code.to_ascii_lowercase();
+        for window in code_lower.as_bytes().windows(4) {
+            let w = std::str::from_utf8(window).unwrap();
+            assert!(
+                !token_lower.contains(w),
+                "share code and token share substring {w:?}"
+            );
+        }
     }
 }

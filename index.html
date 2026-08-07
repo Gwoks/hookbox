@@ -3,6 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      AC-S5: covers every deployment, including `cargo run` and the nginx-less
+      compose topology, where nginx's per-location `add_header` (deploy/nginx.conf)
+      can't apply. Static assets loaded after a share-link viewer page
+      (/s/<CODE>) would otherwise carry `Referer: https://host/s/<CODE>` to
+      same-origin requests — the same leak class `?cap=` had before 47a267c.
+    -->
+    <meta name="referrer" content="no-referrer" />
     <title>HookBox</title>
     <!--
       First-paint theme (design.md §9, AC-D23/D24): LIGHT is the default for a new

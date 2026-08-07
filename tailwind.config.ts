@@ -109,6 +109,10 @@ const config: Config = {
         landing: '560px',
         'landing-hero': '1040px',
         settings: '640px',
+        // The public /s/:code viewer's content column (design.md §2.4,
+        // operator-toolkit F4) — shared by the banner, main and footer so
+        // all three align.
+        viewer: '920px',
       },
       minWidth: {
         feed: '360px',
