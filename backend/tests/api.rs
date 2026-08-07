@@ -1754,6 +1754,20 @@ async fn app_with_larger_template_cap() -> (axum::Router, String) {
 }
 
 async fn latest_request_detail(app: &axum::Router, secret: &str, token: &str) -> Value {
+    request_detail_matching(app, secret, token, None).await
+}
+
+// Like `latest_request_detail`, but when `expect_served_by` is `Some(..)` it selects the row
+// whose `served_by` matches instead of assuming the highest-id row is the one under test. This
+// makes assertions order-independent when a test fires two mock requests back-to-back: their
+// fire-and-forget trace-insert `tokio::spawn`s (engine.rs) race each other, so the row with the
+// highest id is not deterministically the most-recently-fired request. See hookbox-mun.33.
+async fn request_detail_matching(
+    app: &axum::Router,
+    secret: &str,
+    token: &str,
+    expect_served_by: Option<&str>,
+) -> Value {
     let (_s, list, _) = call(
         app,
         "GET",
@@ -1763,7 +1777,18 @@ async fn latest_request_detail(app: &axum::Router, secret: &str, token: &str) ->
         None,
     )
     .await;
-    let request_id = list.as_array().unwrap()[0]["id"].as_i64().unwrap();
+    let items = list.as_array().unwrap();
+    let request_id = match expect_served_by {
+        Some(served_by) => items
+            .iter()
+            .find(|item| item["served_by"] == json!(served_by))
+            .unwrap_or_else(|| {
+                panic!("no request with served_by={served_by:?} found in {items:?}")
+            })["id"]
+            .as_i64()
+            .unwrap(),
+        None => items[0]["id"].as_i64().unwrap(),
+    };
     let (_s, detail, _) = call(
         app,
         "GET",
@@ -1839,7 +1864,10 @@ async fn f7_ratelimit_429_response_body_captured() {
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
 
-    let detail = latest_request_detail(&app, &secret, &token).await;
+    // The two mock requests above are fired back-to-back with no settle in between, so their
+    // fire-and-forget trace inserts (engine.rs) can land in either order. Select the row by
+    // served_by rather than by recency so the assertion is order-independent (hookbox-mun.33).
+    let detail = request_detail_matching(&app, &secret, &token, Some("ratelimit")).await;
     assert_eq!(detail["served_by"], json!("ratelimit"));
     let stored = detail["response_body"].as_str().unwrap();
     assert!(stored.contains("rate_limited"));
