@@ -1337,7 +1337,25 @@ async fn share_public_detail_key_allowlist_and_no_token_substring() {
     )
     .await;
     let host = format!("{token}.mock.local");
-    call(&app, "GET", &host, "/p", None, None).await;
+    // hookbox-mun.34 channel A: send an `Origin` header equal to the
+    // caller's own wildcard mock host, so the Auto-CORS echo populates
+    // `access-control-allow-origin` with a value containing the token —
+    // exactly what a scanning viewer would do to recover it from
+    // `response_headers` (AC-S2).
+    let req = Request::builder()
+        .method("GET")
+        .uri("/p")
+        .header("host", &host)
+        .header("origin", format!("https://{host}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        format!("https://{host}").as_str(),
+        "sanity: the mock response really does echo the token-bearing Origin"
+    );
     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
 
     let (_s, list, _) = call(
@@ -1380,18 +1398,31 @@ async fn share_public_detail_key_allowlist_and_no_token_substring() {
     .collect();
     assert_eq!(keys, expected, "AC-102 public detail key set must be exact");
 
-    // AC-S2: token absence is asserted AFTER the filter, scoped to
-    // server-generated fields only (`response_headers` + the
-    // summary/identity fields) — never across `request_headers`/`path`/
-    // `query_params`/`request_body`, which are caller-supplied and, by
-    // design, land in the projection verbatim (e.g. the mock host's `Host`
-    // request header legitimately embeds the token). An unscoped
-    // "token is not a substring anywhere" assertion is a flaky test the PRD
-    // explicitly calls out and rejects for exactly this reason.
+    // AC-S2/AC-43 (hookbox-mun.34): token absence is asserted AFTER the
+    // filter, across every field that can structurally or incidentally carry
+    // it — `response_headers` (the CORS echo, channel A) AND
+    // `request_headers` (the wildcard `Host`/`Origin`/`Referer`, channel B).
+    // `path`/`query_params`/`request_body` stay out of scope on purpose: a
+    // caller choosing to paste the token into their OWN body is not a
+    // HookBox-side disclosure, and an unscoped "not a substring anywhere"
+    // assertion over caller-supplied fields is the flaky test the PRD
+    // explicitly rejects.
     let response_headers_raw = serde_json::to_string(&detail["response_headers"]).unwrap();
     assert!(
         !response_headers_raw.contains(&token),
-        "the filtered response_headers must never contain the endpoint token"
+        "the filtered response_headers must never contain the endpoint token, got: {response_headers_raw}"
+    );
+    let request_headers = detail["request_headers"].as_object().unwrap();
+    assert!(
+        !request_headers.contains_key("host"),
+        "the wildcard Host header structurally carries the token and must be dropped"
+    );
+    assert!(!request_headers.contains_key("origin"));
+    assert!(!request_headers.contains_key("referer"));
+    let request_headers_raw = serde_json::to_string(&detail["request_headers"]).unwrap();
+    assert!(
+        !request_headers_raw.contains(&token),
+        "the filtered request_headers must never contain the endpoint token, got: {request_headers_raw}"
     );
     let identity_raw = serde_json::json!({
         "id": detail["id"], "method": detail["method"], "path": detail["path"],
