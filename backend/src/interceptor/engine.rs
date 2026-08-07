@@ -15,14 +15,14 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use axum::body::Body;
+use axum::body::{to_bytes, Body, Bytes, HttpBody};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Value};
 
 use crate::db::{self, TraceRecord};
 use crate::feed::FeedEvent;
-use crate::helpers::{redact, value_to_string};
+use crate::helpers::{self, redact, value_to_string};
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
 use crate::rule_cache::{CompiledEndpoint, Resolved};
 use crate::state::AppState;
@@ -82,6 +82,7 @@ pub async fn handle_mock(
             insert_header(resp.headers_mut(), &k, &v);
         }
         let resp = identified(resp, token, "cors", None, &ep, &headers_lower);
+        let (resp, rb) = capture_response_body(resp).await;
         spawn_trace(
             state,
             token,
@@ -96,6 +97,7 @@ pub async fn handle_mock(
             &query,
             &body_text,
             &resp,
+            &rb,
             &trace,
             &BTreeMap::new(),
         );
@@ -273,6 +275,7 @@ pub async fn handle_mock(
                 &rl.remaining.to_string(),
             );
             let r = identified(r, token, "ratelimit", matched_rule_id, &ep, &headers_lower);
+            let (r, rb) = capture_response_body(r).await;
             spawn_trace(
                 state,
                 token,
@@ -287,6 +290,7 @@ pub async fn handle_mock(
                 &query,
                 &body_text,
                 &r,
+                &rb,
                 &trace,
                 &endpoint_state,
             );
@@ -298,6 +302,12 @@ pub async fn handle_mock(
     match conditions::roll_chaos(chaos_pct, &eff_chaos_mode) {
         conditions::Chaos::Drop => {
             trace.push(step("chaos", "dropout (connection closed)"));
+            // D5 / R-DROPOUT: the client never gets a real response (a 499 +
+            // Connection: close is synthesized below), so there is nothing to
+            // capture — pass a literal `&[]`, with NO capture call. The trace
+            // row keeps `status_code = 0` / `response_headers = {}` as-is;
+            // this pre-existing low-fidelity row is deliberately not fixed by
+            // F7 (a follow-up issue is filed for it separately).
             spawn_trace(
                 state,
                 token,
@@ -312,6 +322,7 @@ pub async fn handle_mock(
                 &query,
                 &body_text,
                 &Response::new(Body::empty()),
+                &[],
                 &trace,
                 &endpoint_state,
             );
@@ -328,6 +339,7 @@ pub async fn handle_mock(
                 "application/json",
             );
             let r = identified(r, token, "chaos", matched_rule_id, &ep, &headers_lower);
+            let (r, rb) = capture_response_body(r).await;
             spawn_trace(
                 state,
                 token,
@@ -342,6 +354,7 @@ pub async fn handle_mock(
                 &query,
                 &body_text,
                 &r,
+                &rb,
                 &trace,
                 &endpoint_state,
             );
@@ -366,6 +379,30 @@ pub async fn handle_mock(
         &headers_lower,
     );
 
+    // 6a. F7: buffer the finished body AFTER `identified()` (safe — that only
+    // ever calls `insert_header`) so the trace can persist the exact bytes
+    // the client is about to receive.
+    let (resp, rb) = capture_response_body(resp).await;
+
+    // AC-S3: the `default_mode = "echo"` payload's persisted `response_body`
+    // must not carry the caller's raw headers, even though the client's echo
+    // body still does (that response is already built, above, in `resp`/
+    // `rb`). Rebuild ONLY the bytes handed to `spawn_trace` from
+    // `redact(&headers_lower)`.
+    let persisted_body: std::borrow::Cow<'_, [u8]> =
+        if served_by == "default" && ep.default_mode == "echo" {
+            let redacted = echo_payload(
+                &method,
+                mock_path,
+                &query,
+                &redact(&headers_lower),
+                &body_text,
+            );
+            std::borrow::Cow::Owned(serde_json::to_vec(&redacted).unwrap_or_default())
+        } else {
+            std::borrow::Cow::Borrowed(rb.as_ref())
+        };
+
     // 7. Fire-and-forget trace + publish (never awaited).
     spawn_trace(
         state,
@@ -381,6 +418,7 @@ pub async fn handle_mock(
         &query,
         &body_text,
         &resp,
+        &persisted_body,
         &trace,
         &endpoint_state,
     );
@@ -513,10 +551,7 @@ async fn resolve_unmatched(
     // 4d. Default mode.
     if ep.default_mode == "echo" {
         trace.push(step("default", "echo"));
-        let payload = json!({
-            "method": method, "path": mock_path, "query": query,
-            "headers": headers_lower, "body": body_text,
-        });
+        let payload = echo_payload(method, mock_path, query, headers_lower, body_text);
         return (
             json_response(200, &payload, "application/json"),
             "default".into(),
@@ -562,6 +597,19 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
     }
 }
 
+/// The `default_mode = "echo"` payload shape, factored out so the client
+/// build (unredacted `headers`) and the AC-S3 persisted rebuild (redacted
+/// `headers`) can never drift apart.
+fn echo_payload(
+    method: &str,
+    path: &str,
+    query: &BTreeMap<String, String>,
+    headers: &BTreeMap<String, String>,
+    body: &str,
+) -> Value {
+    json!({ "method": method, "path": path, "query": query, "headers": headers, "body": body })
+}
+
 fn json_response(status: u16, body: &Value, content_type: &str) -> Response {
     let bytes = serde_json::to_vec(body).unwrap_or_default();
     let mut r = Response::builder()
@@ -570,6 +618,46 @@ fn json_response(status: u16, body: &Value, content_type: &str) -> Response {
         .unwrap();
     insert_header(r.headers_mut(), "content-type", content_type);
     r
+}
+
+/// F7 (architecture.md §2.10.1): buffer a finished mock response's body so the
+/// trace can persist the exact bytes the client will receive, returning an
+/// equivalent response plus those bytes.
+///
+/// Allocation-free for the payload: every mock-plane body is built from an
+/// owned buffer (a rendered template, `serde_json::to_vec`, the MITM reply,
+/// the tunnel's decoded reply, or `Body::empty()`), so it is a SINGLE-FRAME
+/// body — `to_bytes` hands back the same `Bytes` buffer and `Bytes::clone` is
+/// a refcount bump, not a copy. Nothing here can block: the frame is already
+/// resolved, so the `.await` never yields.
+///
+/// The `size_hint().exact()` guard is a forward-compatibility fuse: if a
+/// streaming mock body is ever introduced, this returns the response
+/// untouched and captures nothing rather than buffering an unbounded stream.
+async fn capture_response_body(resp: Response) -> (Response, Bytes) {
+    let (parts, body) = resp.into_parts();
+    let Some(len) = body.size_hint().exact() else {
+        tracing::warn!("mock response body has no exact size; response_body not captured");
+        return (Response::from_parts(parts, body), Bytes::new());
+    };
+    if len == 0 {
+        // 204 CORS preflight, empty 204 CRUD, chaos dropout — nothing to capture.
+        return (Response::from_parts(parts, body), Bytes::new());
+    }
+    match to_bytes(body, len as usize).await {
+        Ok(bytes) => (
+            Response::from_parts(parts, Body::from(bytes.clone())),
+            bytes,
+        ),
+        Err(e) => {
+            // Unreachable for an in-memory body (`len` is exact, so the limit
+            // cannot trip, and these bodies are infallible). If it ever fires
+            // the body is already lost, so the only honest option is an
+            // empty one.
+            tracing::error!("failed to buffer mock response body: {e}");
+            (Response::from_parts(parts, Body::empty()), Bytes::new())
+        }
+    }
 }
 
 /// Attach `X-HookBox-*` identifying headers + auto-CORS (P1).
@@ -626,31 +714,17 @@ fn spawn_trace(
     query: &BTreeMap<String, String>,
     req_body: &str,
     resp: &Response,
+    resp_body: &[u8], // F7 — captured bytes; empty ⇒ NULL (AC-69)
     trace: &[Step],
     state_snapshot: &BTreeMap<String, String>,
 ) {
     let duration_ms = t0.elapsed().as_millis() as i64;
     let overhead_ms = (duration_ms - applied_latency_ms).max(0);
 
-    // Capture response headers (the §5.4 trace records them) — redacted set.
-    let resp_headers: BTreeMap<String, String> = resp
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|vs| (k.as_str().to_string(), vs.to_string()))
-        })
-        .collect();
+    // Response headers as persisted (R11 seam; today an identity projection).
+    let resp_headers = helpers::response_headers_for_trace(resp.headers());
 
     let cap = state.cfg.max_body_bytes;
-    let truncate = |s: &str| -> String {
-        if s.len() > cap {
-            s[..cap].to_string()
-        } else {
-            s.to_string()
-        }
-    };
 
     let trace_arr: Vec<Value> = trace
         .iter()
@@ -674,13 +748,11 @@ fn spawn_trace(
         request_headers: serde_json::to_string(&redact(req_headers))
             .unwrap_or_else(|_| "{}".into()),
         query_params: serde_json::to_string(query).unwrap_or_else(|_| "{}".into()),
-        request_body: if req_body.is_empty() {
-            None
-        } else {
-            Some(truncate(req_body))
-        },
+        // F7: both body columns go through the identical projection helper
+        // (AC-70(d)) — NULL <=> zero-length, never an empty string (AC-69).
+        request_body: helpers::body_for_trace(req_body.as_bytes(), cap),
         response_headers: serde_json::to_string(&resp_headers).unwrap_or_else(|_| "{}".into()),
-        response_body: None, // body already consumed into the Response; not re-read (off-path)
+        response_body: helpers::body_for_trace(resp_body, cap),
         trace_json: serde_json::to_string(&trace_arr).unwrap_or_else(|_| "[]".into()),
         state_snapshot: serde_json::to_string(&state_obj).unwrap_or_else(|_| "{}".into()),
     };
@@ -718,4 +790,58 @@ fn jp(body: &str, path: &str) -> String {
 #[allow(dead_code)]
 fn vstr(v: &Value) -> String {
     value_to_string(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // F7 AC-73(d3): the capture helper on a 5 MB body (the MITM_MAX_BODY_BYTES
+    // worst case) completes in < 1 ms, and the rebuilt response's bytes are
+    // byte-equal to the input — only achievable if no full copy happens.
+    #[tokio::test]
+    async fn capture_response_body_5mb_is_fast_and_byte_equal() {
+        let payload = vec![b'x'; 5_000_000];
+        let resp = Response::builder()
+            .status(200)
+            .body(Body::from(payload.clone()))
+            .unwrap();
+
+        let started = Instant::now();
+        let (rebuilt, bytes) = capture_response_body(resp).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 1,
+            "capture_response_body on 5MB took {elapsed:?}, expected < 1ms"
+        );
+        assert_eq!(bytes.len(), payload.len());
+        assert_eq!(bytes.as_ref(), payload.as_slice());
+
+        // The rebuilt response's own body is byte-equal too.
+        let rebuilt_bytes = to_bytes(rebuilt.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(rebuilt_bytes.as_ref(), payload.as_slice());
+    }
+
+    #[tokio::test]
+    async fn capture_response_body_empty_is_none_and_untouched() {
+        let resp = Response::builder().status(204).body(Body::empty()).unwrap();
+        let (rebuilt, bytes) = capture_response_body(resp).await;
+        assert!(bytes.is_empty());
+        assert_eq!(rebuilt.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[test]
+    fn echo_payload_shape_is_stable() {
+        let mut query = BTreeMap::new();
+        query.insert("q".to_string(), "1".to_string());
+        let mut headers = BTreeMap::new();
+        headers.insert("authorization".to_string(), "Bearer secret".to_string());
+        let v = echo_payload("GET", "/p", &query, &headers, "body-text");
+        assert_eq!(v["method"], json!("GET"));
+        assert_eq!(v["path"], json!("/p"));
+        assert_eq!(v["query"]["q"], json!("1"));
+        assert_eq!(v["headers"]["authorization"], json!("Bearer secret"));
+        assert_eq!(v["body"], json!("body-text"));
+    }
 }

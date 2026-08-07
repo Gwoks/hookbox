@@ -24,10 +24,11 @@ use axum::{
     Router,
 };
 use http_body_util::BodyExt;
+use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::interceptor::engine;
 use crate::planes::{resolve_plane, Plane, PlaneResult};
-use crate::routes::{api_router, feed, healthz, tunnel_ws};
+use crate::routes::{api_router, feed, healthz, share_router, tunnel_ws};
 use crate::state::AppState;
 
 fn plane_str(p: &Plane) -> &'static str {
@@ -175,9 +176,20 @@ pub async fn plane_dispatch(
 /// Build the top-level app: the plane-dispatch middleware wrapping the inner
 /// router (the real `/api` management routes + `/healthz` + UI fallback). The
 /// middleware short-circuits P1 so the mock catch-all can never shadow these.
+///
+/// `CatchPanicLayer` is added **outermost** (AC-S18): F7's truncation path now
+/// routes attacker/upstream-controlled bytes, and this turns any future panic
+/// into a 500 instead of a dropped connection, without changing the bytes of
+/// any non-panicking response (AC-72). No `TraceLayer` is added here — AC-S6
+/// requires the app's own logging to never see a share code or the full path.
 pub fn build_app(state: AppState) -> Router {
     let inner = Router::new()
         .merge(api_router())
+        // F4 share links: three owner routes + two PUBLIC unauthenticated
+        // routes (§5.1/§5.2). Merged here, not layered separately, so no
+        // TraceLayer or other logging middleware can end up wrapping only
+        // this router and start logging a share code (AC-S6).
+        .merge(share_router())
         .route("/healthz", get(healthz))
         // P3 live feed (owner-gated via ?cap=).
         .route("/ws/:token", get(feed::ws_handler))
@@ -186,10 +198,33 @@ pub fn build_app(state: AppState) -> Router {
         .route("/ws/tunnel/:slug", get(tunnel_ws::tunnel_ws_handler))
         // P3 SPA: serve dist/ with index.html fallback (R6 — never shadows P1/P2).
         .fallback(crate::routes::spa::serve_spa);
+    let inner = add_test_only_routes(inner);
 
     inner
         .layer(from_fn_with_state(state.clone(), plane_dispatch))
         .with_state(state)
+        .layer(CatchPanicLayer::new())
+}
+
+/// No-op in every real build.
+#[cfg(not(test))]
+fn add_test_only_routes(router: Router<AppState>) -> Router<AppState> {
+    router
+}
+
+/// A route that unconditionally panics, mounted through the exact same router
+/// (and therefore the exact same layer stack — `plane_dispatch` then
+/// `CatchPanicLayer`) as production — so the AC-S18 regression test proves
+/// the real stack survives a panic, not a hand-built stand-in. Compiled out
+/// of every non-test build.
+#[cfg(test)]
+fn add_test_only_routes(router: Router<AppState>) -> Router<AppState> {
+    router.route("/__test_panic", get(test_panic_handler))
+}
+
+#[cfg(test)]
+async fn test_panic_handler() -> Response {
+    panic!("AC-S18 test-only panic")
 }
 
 #[cfg(test)]
@@ -614,5 +649,33 @@ mod tests {
         assert!(body["owner_secret"].as_str().unwrap().len() >= 40);
         assert_eq!(body["endpoints"].as_array().unwrap().len(), 1);
         assert!(body["primary"]["token"].is_string());
+    }
+
+    // AC-S18: a handler that panics, mounted through the real layer stack
+    // (`plane_dispatch` then the outermost `CatchPanicLayer`), returns 500 —
+    // not a dropped connection — and the server keeps serving requests
+    // afterward. Also confirms a non-panicking response's bytes are
+    // untouched by the new layer (AC-72): the same assertions
+    // `mock_host_served_by_rule_and_default_404` makes on `x-hookbox-*`
+    // headers and status codes still hold with `CatchPanicLayer` in place.
+    #[tokio::test]
+    async fn panic_becomes_500_and_next_request_still_served() {
+        let (app, _pool, _oid, _secret) = app_with_owner().await;
+
+        let panic_request = Request::builder()
+            .method("GET")
+            .uri("/__test_panic")
+            .header("host", "app.local")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(panic_request).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // The connection/server survives: the very next request is served
+        // normally, with the plane header still attached.
+        let (s, body, plane) = req(&app, "GET", "app.local", "/api/endpoints", None, None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(plane.as_deref(), Some("api"));
+        assert_eq!(body["error"], json!("unauthorized"));
     }
 }

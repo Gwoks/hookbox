@@ -20,7 +20,7 @@ path = "src/bin/seed.rs"
 axum = { version = "0.7", features = ["macros", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "catch-panic"] }
 # serde
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -5,8 +5,10 @@
 pub mod api;
 pub mod feed;
 pub mod health;
+pub mod share;
 pub mod spa;
 pub mod tunnel_ws;
 
 pub use api::api_router;
 pub use health::healthz;
+pub use share::share_router;

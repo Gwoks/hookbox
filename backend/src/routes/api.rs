@@ -270,7 +270,7 @@ async fn create_session(
 /// `X-Forwarded-For` hop) so the anti-enumeration limit (AC-S5) is actually
 /// per-source; a non-loopback peer can't be nginx, so its headers are never
 /// trusted and the real socket peer wins.
-fn effective_client_ip(
+pub(crate) fn effective_client_ip(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: &HeaderMap,
 ) -> String {
@@ -520,6 +520,13 @@ async fn delete_endpoint(
         .execute(&state.pool)
         .await?;
     sqlx::query("DELETE FROM crud_collections WHERE token = ?")
+        .bind(&token)
+        .execute(&state.pool)
+        .await?;
+    // F4/AC-S9: tombstone-revokes-all-shares, BEFORE gone_at is set, so the
+    // public resolver's belt-and-braces `gone_at IS NULL` check and this
+    // revoke agree even if one of the two statements were to fail.
+    sqlx::query("UPDATE share_links SET revoked_at = datetime('now') WHERE token = ? AND revoked_at IS NULL")
         .bind(&token)
         .execute(&state.pool)
         .await?;
