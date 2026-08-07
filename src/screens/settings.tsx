@@ -28,6 +28,7 @@ import {
   type EndpointSummary,
 } from "@/api";
 import { t } from "@/lib/copy";
+import { absolutize } from "@/lib/url";
 import { AppShell } from "@/components/hookbox/app-shell";
 import { CodeBlock } from "@/components/hookbox/code-block";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
@@ -247,14 +248,14 @@ function SettingsForm({
         <div className="space-y-1.5">
           <Label>{t("set.identity.mockUrl.label")}</Label>
           <CodeBlock
-            value={endpoint.mock_url}
+            value={absolutize(endpoint.mock_url)}
             ariaLabel={t("set.identity.mockUrl.label")}
           />
         </div>
         <div className="space-y-1.5">
           <Label>{t("set.identity.pathUrl.label")}</Label>
           <CodeBlock
-            value={endpoint.path_url}
+            value={absolutize(endpoint.path_url)}
             ariaLabel={t("set.identity.pathUrl.label")}
           />
         </div>

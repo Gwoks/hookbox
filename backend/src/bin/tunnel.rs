@@ -13,6 +13,7 @@ use std::time::Duration;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -89,11 +90,14 @@ enum Outcome {
 }
 
 async fn run_once(args: &Args) -> Outcome {
+    // Auth rides an Authorization header, not a `?cap=` query param — the
+    // secret is the full owner capability, and a query string ends up in
+    // any reverse proxy's access log (nginx logs the request line by
+    // default).
     let url = format!(
-        "{}/ws/tunnel/{}?cap={}",
+        "{}/ws/tunnel/{}",
         args.host.trim_end_matches('/'),
-        args.endpoint,
-        args.secret
+        args.endpoint
     );
     let host_display = args.host.replace("ws://", "").replace("wss://", "");
     println!(
@@ -101,7 +105,17 @@ async fn run_once(args: &Args) -> Outcome {
         args.endpoint
     );
 
-    let ws = match tokio_tungstenite::connect_async(&url).await {
+    let mut request = match url.into_client_request() {
+        Ok(r) => r,
+        Err(_) => return Outcome::Disconnected,
+    };
+    let auth_value = match format!("Bearer {}", args.secret).parse() {
+        Ok(v) => v,
+        Err(_) => return Outcome::Disconnected,
+    };
+    request.headers_mut().insert("Authorization", auth_value);
+
+    let ws = match tokio_tungstenite::connect_async(request).await {
         Ok((ws, _)) => ws,
         Err(tokio_tungstenite::tungstenite::Error::Http(resp))
             if resp.status() == 401 || resp.status() == 403 =>

@@ -51,6 +51,11 @@ pub struct Config {
     pub app_hosts: HashSet<String>,
     /// Derived: when MOCK_DOMAIN is blank/misconfigured serve path-fallback-only.
     pub path_fallback_only: bool,
+    /// Absolute origin the app is publicly reachable at (e.g.
+    /// `https://hookbox.example.com`). Prefixes `/e/<token>` URLs so the UI and
+    /// API hand out copy-pasteable absolute mock URLs in path-fallback mode.
+    /// Blank (the default) keeps the URLs relative.
+    pub public_base_url: String,
 
     // --- Durable store ---
     pub sqlite_path: String,
@@ -123,9 +128,16 @@ impl Config {
         // Derived: path-fallback-only when MOCK_DOMAIN is blank or has no dot.
         let path_fallback_only = mock_domain.is_empty() || !mock_domain.contains('.');
 
+        // Normalized without a trailing slash so `{base}/e/<token>` joins cleanly.
+        let public_base_url = str_env("PUBLIC_BASE_URL", "")
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+
         Config {
             mock_domain,
             app_host,
+            public_base_url,
             bind_host: str_env("APP_BIND_HOST", "0.0.0.0"),
             // OQ-4: default 8080 (supersedes Python 8000). APP_PORT then PUBLIC_PORT.
             public_port: {
@@ -217,5 +229,18 @@ mod tests {
         let cfg = Config::from_env();
         assert!(cfg.path_fallback_only);
         std::env::remove_var("MOCK_DOMAIN");
+    }
+
+    #[test]
+    fn public_base_url_defaults_blank_and_strips_trailing_slash() {
+        let _guard = crate::testutil::env_lock();
+        std::env::remove_var("PUBLIC_BASE_URL");
+        assert_eq!(Config::from_env().public_base_url, "");
+        std::env::set_var("PUBLIC_BASE_URL", "https://hookbox.example.com/ ");
+        assert_eq!(
+            Config::from_env().public_base_url,
+            "https://hookbox.example.com"
+        );
+        std::env::remove_var("PUBLIC_BASE_URL");
     }
 }

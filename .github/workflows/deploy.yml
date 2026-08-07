@@ -49,6 +49,7 @@ jobs:
             DOMAIN="hookbox.lgtm.my.id"
             APP_PORT="8080"
             MOCK_DOMAIN="localhost"
+            PUBLIC_BASE_URL="https://$DOMAIN"
 
             # Pull latest code
             cd "$APP_DIR"
@@ -69,7 +70,7 @@ jobs:
             # Render and install systemd service
             mkdir -p "$APP_DIR/data"
             chown -R ubuntu:ubuntu "$APP_DIR/data"
-            sed "s|{{APP_DIR}}|$APP_DIR|g; s|{{APP_PORT}}|$APP_PORT|g; s|{{MOCK_DOMAIN}}|$MOCK_DOMAIN|g" \
+            sed "s|{{APP_DIR}}|$APP_DIR|g; s|{{APP_PORT}}|$APP_PORT|g; s|{{MOCK_DOMAIN}}|$MOCK_DOMAIN|g; s|{{PUBLIC_BASE_URL}}|$PUBLIC_BASE_URL|g; s|{{DOMAIN}}|$DOMAIN|g" \
               "$APP_DIR/deploy/hookbox.service" | sudo tee /etc/systemd/system/$SERVICE_NAME.service
 
             # Render and install nginx config
@@ -84,5 +85,14 @@ jobs:
               --noninteractive --agree-tos --register-unsafely-without-email --redirect || true
 
             sudo nginx -t
+            # certbot reloads nginx on success, but not on the `|| true` failure
+            # path above — reload explicitly so a rendered config (this step's
+            # nginx.conf, not just certbot's TLS block) always takes effect.
+            sudo systemctl reload nginx
             sudo systemctl daemon-reload
             sudo systemctl enable --now "$SERVICE_NAME"
+
+            # Fail the deploy loudly if the restarted backend isn't actually
+            # serving traffic through nginx.
+            sleep 2
+            curl -fsS "https://$DOMAIN/healthz" > /dev/null

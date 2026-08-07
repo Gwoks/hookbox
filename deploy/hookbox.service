@@ -9,10 +9,12 @@ WorkingDirectory={{APP_DIR}}/backend
 ExecStart={{APP_DIR}}/backend/target/release/hookbox
 Environment="DATABASE_PATH={{APP_DIR}}/data/app.db"
 Environment="STATIC_DIR={{APP_DIR}}/dist"
-Environment="APP_HOST=0.0.0.0"
+Environment="APP_HOST={{DOMAIN}}"
+Environment="APP_BIND_HOST=127.0.0.1"
 Environment="APP_PORT={{APP_PORT}}"
-Environment="MOCK_DOMAIN=localhost"
-Restart=unless-stopped
+Environment="MOCK_DOMAIN={{MOCK_DOMAIN}}"
+Environment="PUBLIC_BASE_URL={{PUBLIC_BASE_URL}}"
+Restart=always
 RestartSec=5
 
 [Install]

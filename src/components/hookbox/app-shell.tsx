@@ -37,6 +37,7 @@ import {
 } from "@/api";
 import { t } from "@/lib/copy";
 import { cn } from "@/lib/cn";
+import { absolutize } from "@/lib/url";
 
 export interface AppShellProps {
   token: string;
@@ -156,7 +157,7 @@ function UrlChip({ label, url }: { label: string; url?: string }) {
         {label}
       </span>
       {url ? (
-        <MockUrlChip url={url} />
+        <MockUrlChip url={absolutize(url)} />
       ) : (
         <span
           className="h-5 w-40 animate-pulse rounded-xs bg-subtle"

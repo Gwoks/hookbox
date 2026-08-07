@@ -138,6 +138,7 @@ knobs:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MOCK_DOMAIN` | `mock.local` | Wildcard mock surface base (`*.<MOCK_DOMAIN>`). Blank/dotless → path-fallback-only. |
+| `PUBLIC_BASE_URL` | *(blank)* | Public origin (e.g. `https://hookbox.example.com`) prefixed onto `/e/<token>` mock URLs so the UI/API hand out absolute, copy-pasteable URLs in path-fallback mode. Blank keeps them relative. |
 | `APP_HOST` | `localhost` | Canonical UI/API host (apex + this host never hit the interceptor). |
 | `APP_PORT` / `APP_BIND_HOST` | `8080` / `0.0.0.0` | Published HTTP port / bind address. |
 | `DATABASE_PATH` | `data/app.db` | SQLite file (WAL). |
@@ -264,10 +265,12 @@ WorkingDirectory=/home/ubuntu/hookbox/backend
 ExecStart=/home/ubuntu/hookbox/backend/target/release/hookbox
 Environment="DATABASE_PATH=/home/ubuntu/hookbox/data/app.db"
 Environment="STATIC_DIR=/home/ubuntu/hookbox/dist"
-Environment="APP_HOST=0.0.0.0"
+Environment="APP_HOST=hookbox.yourdomain.com"
+Environment="APP_BIND_HOST=127.0.0.1"
 Environment="APP_PORT=8080"
 Environment="MOCK_DOMAIN=localhost"
-Restart=unless-stopped
+Environment="PUBLIC_BASE_URL=https://hookbox.yourdomain.com"
+Restart=always
 RestartSec=5
 
 [Install]
@@ -291,6 +294,11 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8080/healthz;
+        proxy_set_header Host $host;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:8080/api/;
         proxy_http_version 1.1;
@@ -308,6 +316,30 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Long-lived socket: outlive nginx's 60s default between frames.
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        # The feed/tunnel handshake carries the owner secret in `?cap=`
+        # (browsers can't set a custom Authorization header on a WS/SSE
+        # handshake); don't let the request line — query string included —
+        # land in the access log.
+        access_log off;
+    }
+
+    # SSE fallback feed (used when WebSocket connections fail)
+    location /sse/ {
+        proxy_pass http://127.0.0.1:8080/sse/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        # Same ?cap= exposure as /ws/ above.
+        access_log off;
     }
 
     # Mock endpoint proxy — path format: /e/<token>
@@ -318,6 +350,9 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # Above the default MAX_INGEST_BODY_BYTES (1,000,000) so the app's own
+        # 413 (not nginx's bare-HTML one) governs the mock ingest cap.
+        client_max_body_size 2m;
     }
 }
 EOF
