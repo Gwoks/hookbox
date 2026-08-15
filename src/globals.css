@@ -1,9 +1,18 @@
 /**
- * HookBox design-system foundation (design.md §2 + §9). Semantic, theme-aware
- * tokens: primitive palette → semantic CSS vars in :root (light) and .dark
- * (dark), surfaced as Tailwind colors in tailwind.config.ts. Components
- * reference semantic tokens only — never a raw hex (AC-D11). Light is the
- * first-paint default; .dark on <html> re-themes the whole SPA (AC-D12/D24).
+ * HookBox design-system foundation. Semantic, theme-aware tokens: primitive
+ * palette → semantic CSS vars in :root (light) and .dark (dark), surfaced as
+ * Tailwind colors in tailwind.config.ts. Components reference semantic
+ * tokens only — never a raw hex (AC-D11). Light is the first-paint default;
+ * .dark on <html> re-themes the whole SPA (AC-D12/D24).
+ *
+ * Neutral canvas/surface/text + accent + typography + radius + shadow follow
+ * /DESIGN.md (the "Notion — warm paper notebook" style reference). Dark mode
+ * has no reference in DESIGN.md (its theme is light-only) — the dark values
+ * below are an original complement: same warm undertone and single-blue-accent
+ * ethos, inverted onto a warm-charcoal canvas. Functional status hues
+ * (success/info/warning/danger) and the method/served-by color-coding are
+ * intentionally left as-is — DESIGN.md doesn't address them and they carry
+ * verified AA contrast (AC-129) that a repaint would need to re-verify.
  *
  * This file is the ONLY place raw hex appears; primitives live here, semantics
  * derive from them, components consume semantics.
@@ -13,35 +22,41 @@
 @tailwind utilities;
 
 :root {
-  /* ── Primitive palette — neutral warm slate (design.md §2.1) ── */
-  --slate-0: #ffffff;
-  --slate-25: #fbfcfc;
-  --slate-50: #f7f9f9;
-  --slate-100: #eef1f2;
-  --slate-200: #e0e5e7;
-  --slate-300: #cbd2d6;
-  --slate-400: #97a2a8;
-  --slate-500: #697077;
-  --slate-600: #4b5258;
-  --slate-700: #343a40;
-  --slate-800: #23282d;
-  --slate-850: #1a1e22;
-  --slate-900: #13171a;
-  --slate-950: #0d1012;
+  /* ── Primitive palette — DESIGN.md "Notion" style reference ── */
+  --paper: #f6f5f4; /* Paper Warmth — page canvas */
+  --white: #ffffff; /* Pure White — card/surface */
+  --ink: #000000; /* Ink Black — primary text, nav links, headings */
+  --charcoal: #111111; /* Dark text variant */
+  --stone: #757575; /* Secondary/muted text — ~60% alpha of ink */
+  --graphite: #615d59; /* Body text, warm cast */
+  --sky-tint: #e6f3fe; /* Ghost CTA background */
+  --blue: #0075de; /* Notion Blue — the single chromatic commitment */
+  --blue-hover: #0868bd;
+  --marigold: #ffb110;
+  --coral: #f64932;
+  --saffron: #e89d01;
+  --vermillion: #e32d14;
+  --mocha: #b18164;
+  --signal-blue: #097fe8;
+  --sky-wash: #62aef0; /* lightest blue in the cast — dark-mode accent */
+  --midnight: #02093a;
 
-  /* Accent — teal */
-  --teal-50: #e7f8f5;
-  --teal-100: #c6efe8;
-  --teal-200: #8fe0d3;
-  --teal-300: #4fc9b6;
-  --teal-400: #1fae99;
-  --teal-500: #0d9488;
-  --teal-600: #0b7d73;
-  --teal-700: #0a655e;
-  --teal-300-dark: #3fd6bf;
-  --teal-400-dark: #22c3ab;
+  /* Warm-neutral scale — hover/active steps + dark-mode complement (not in
+     DESIGN.md; derived to keep the same warm undertone off the light canvas). */
+  --warm-100: #efeeec;
+  --warm-200: #e5e2de;
+  --warm-950: #0e0d0c;
+  --warm-900: #171615;
+  --warm-850: #1f1d1b;
+  --warm-800: #292725;
+  --warm-700: #3a3733;
+  --warm-600: #4f4b45;
+  --warm-300-dark: #d3cec7;
+  --warm-200-dark: #c7c2ba;
+  --warm-400-dark: #a39d94;
+  --warm-25-dark: #f8f6f4;
 
-  /* Status / semantic hues + method hues */
+  /* Status / semantic hues + method hues — unchanged from the prior identity */
   --green-50: #e8f7ee;
   --green-100: #cbecd7;
   --green-500: #16a34a;
@@ -73,25 +88,25 @@
   --orange-600: #c2410c;
   --orange-400-dark: #fb923c;
 
-  /* ── Semantic tokens — light (design.md §2.2) ── */
-  --bg-canvas: var(--slate-50);
-  --bg-surface: var(--slate-0);
-  --bg-surface-raised: var(--slate-0);
-  --bg-subtle: var(--slate-50);
-  --bg-hover: var(--slate-100);
-  --bg-active: var(--slate-200);
-  --border-default: var(--slate-200);
-  --border-strong: var(--slate-300);
-  --text-primary: var(--slate-900);
-  --text-secondary: var(--slate-600);
-  --text-tertiary: var(--slate-500);
-  --text-on-accent: var(--slate-0);
-  /* Light accent-fill uses teal-600 so white ink clears AA ≥4.5:1 (AC-D20, §11.4 fallback). */
-  --accent: var(--teal-500);
-  --accent-hover: var(--teal-600);
-  --accent-fill: var(--teal-600);
-  --accent-subtle-bg: var(--teal-50);
-  --focus-ring: var(--teal-500);
+  /* ── Semantic tokens — light (DESIGN.md) ── */
+  --bg-canvas: var(--paper);
+  --bg-surface: var(--white);
+  --bg-surface-raised: var(--white);
+  --bg-subtle: var(--paper);
+  --bg-hover: var(--warm-100);
+  --bg-active: var(--warm-200);
+  --border-default: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text-primary: var(--ink);
+  --text-secondary: var(--graphite);
+  --text-tertiary: var(--stone);
+  --text-on-accent: var(--white);
+  /* Single chromatic filled-button color (DESIGN.md "Do"); AA-checked white-on-blue. */
+  --accent: var(--blue);
+  --accent-hover: var(--blue-hover);
+  --accent-fill: var(--blue);
+  --accent-subtle-bg: var(--sky-tint);
+  --focus-ring: var(--blue);
   --success-fg: var(--green-600);
   --success-bg: var(--green-50);
   --info-fg: var(--sky-600);
@@ -100,9 +115,9 @@
   --warning-bg: var(--amber-50);
   --danger-fg: var(--red-600);
   --danger-bg: var(--red-50);
-  --neutral-chip-fg: var(--slate-600);
-  --neutral-chip-bg: var(--slate-100);
-  --overlay-scrim: rgba(13, 17, 20, 0.45);
+  --neutral-chip-fg: var(--stone);
+  --neutral-chip-bg: var(--warm-100);
+  --overlay-scrim: rgba(0, 0, 0, 0.45);
 
   /* Method colors — light (design.md §2.2) */
   --m-get-fg: var(--sky-600);
@@ -115,20 +130,20 @@
   --m-patch-bg: var(--violet-50);
   --m-delete-fg: var(--rose-600);
   --m-delete-bg: var(--red-50);
-  --m-head-fg: var(--slate-600);
-  --m-head-bg: var(--slate-100);
+  --m-head-fg: var(--stone);
+  --m-head-bg: var(--warm-100);
 
   /* Served-by chips — light (design.md §2.3) */
-  --sv-rule-fg: var(--teal-500);
-  --sv-rule-bg: var(--teal-50);
+  --sv-rule-fg: var(--accent);
+  --sv-rule-bg: var(--accent-subtle-bg);
   --sv-crud-fg: var(--sky-600);
   --sv-crud-bg: var(--sky-50);
   --sv-mitm-fg: var(--violet-600);
   --sv-mitm-bg: var(--violet-50);
   --sv-tunnel-fg: var(--green-600);
   --sv-tunnel-bg: var(--green-50);
-  --sv-default-fg: var(--slate-600);
-  --sv-default-bg: var(--slate-100);
+  --sv-default-fg: var(--stone);
+  --sv-default-bg: var(--warm-100);
   --sv-cors-fg: var(--sky-600);
   --sv-cors-bg: var(--sky-50);
   --sv-chaos-fg: var(--red-600);
@@ -136,16 +151,20 @@
   --sv-ratelimit-fg: var(--amber-600);
   --sv-ratelimit-bg: var(--amber-50);
 
-  /* Typography families (design.md §2.4) */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    sans-serif;
+  /* Typography families — DESIGN.md NotionInter, substituted with Inter
+     (self-hosted, see main.tsx) so the app stays offline-safe (no third-party
+     font CDN request). */
+  --font-sans: 'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
 
-  /* Shadows (design.md §2.7) */
-  --shadow-xs: 0 1px 2px rgba(13, 17, 20, 0.05);
-  --shadow-sm: 0 1px 3px rgba(13, 17, 20, 0.08), 0 1px 2px rgba(13, 17, 20, 0.04);
-  --shadow-md: 0 4px 14px rgba(13, 17, 20, 0.1), 0 2px 4px rgba(13, 17, 20, 0.06);
-  --shadow-lg: 0 16px 40px rgba(13, 17, 20, 0.18), 0 4px 10px rgba(13, 17, 20, 0.06);
+  /* Shadows — DESIGN.md uses hairline borders instead of shadows on content
+     cards; these remain for functional floating surfaces only (dropdown,
+     dialog, toast, tooltip) that still need to separate from busy content. */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.18), 0 4px 10px rgba(0, 0, 0, 0.06);
   --shadow-focus: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--focus-ring);
 
   /* Motion (design.md §2.8) */
@@ -158,24 +177,26 @@
 }
 
 .dark {
-  /* ── Semantic tokens — dark (design.md §2.2) ── */
-  --bg-canvas: var(--slate-950);
-  --bg-surface: var(--slate-900);
-  --bg-surface-raised: var(--slate-850);
-  --bg-subtle: var(--slate-850);
-  --bg-hover: var(--slate-800);
-  --bg-active: var(--slate-700);
-  --border-default: var(--slate-700);
-  --border-strong: var(--slate-600);
-  --text-primary: var(--slate-50);
-  --text-secondary: var(--slate-300);
-  --text-tertiary: var(--slate-400);
-  --text-on-accent: var(--slate-950);
-  --accent: var(--teal-300-dark);
-  --accent-hover: var(--teal-200);
-  --accent-fill: var(--teal-400-dark);
-  --accent-subtle-bg: rgba(63, 214, 191, 0.14);
-  --focus-ring: var(--teal-300-dark);
+  /* ── Semantic tokens — dark ── DESIGN.md has no dark theme; this is an
+     original complement (warm-charcoal canvas, same single-blue accent —
+     brightened to DESIGN.md's "Sky Wash" for AA contrast on dark). */
+  --bg-canvas: var(--warm-950);
+  --bg-surface: var(--warm-900);
+  --bg-surface-raised: var(--warm-850);
+  --bg-subtle: var(--warm-850);
+  --bg-hover: var(--warm-800);
+  --bg-active: var(--warm-700);
+  --border-default: var(--warm-700);
+  --border-strong: var(--warm-600);
+  --text-primary: var(--warm-25-dark);
+  --text-secondary: var(--warm-300-dark);
+  --text-tertiary: var(--warm-400-dark);
+  --text-on-accent: var(--warm-950);
+  --accent: var(--sky-wash);
+  --accent-hover: #8cc6f2;
+  --accent-fill: var(--sky-wash);
+  --accent-subtle-bg: rgba(98, 174, 240, 0.14);
+  --focus-ring: var(--sky-wash);
   --success-fg: var(--green-400-dark);
   --success-bg: rgba(74, 222, 128, 0.14);
   --info-fg: var(--sky-400-dark);
@@ -184,11 +205,11 @@
   --warning-bg: rgba(251, 191, 36, 0.14);
   --danger-fg: var(--red-400-dark);
   --danger-bg: rgba(248, 113, 113, 0.14);
-  --neutral-chip-fg: var(--slate-200);
-  --neutral-chip-bg: var(--slate-800);
+  --neutral-chip-fg: var(--warm-200-dark);
+  --neutral-chip-bg: var(--warm-800);
   --overlay-scrim: rgba(0, 0, 0, 0.62);
 
-  /* Method colors — dark */
+  /* Method colors — dark (unchanged hues) */
   --m-get-fg: var(--sky-400-dark);
   --m-get-bg: rgba(86, 194, 245, 0.14);
   --m-post-fg: var(--green-400-dark);
@@ -199,20 +220,20 @@
   --m-patch-bg: rgba(167, 139, 250, 0.14);
   --m-delete-fg: var(--rose-400-dark);
   --m-delete-bg: rgba(251, 113, 133, 0.14);
-  --m-head-fg: var(--slate-200);
-  --m-head-bg: var(--slate-800);
+  --m-head-fg: var(--warm-200-dark);
+  --m-head-bg: var(--warm-800);
 
   /* Served-by chips — dark */
-  --sv-rule-fg: var(--teal-300-dark);
-  --sv-rule-bg: rgba(63, 214, 191, 0.14);
+  --sv-rule-fg: var(--accent);
+  --sv-rule-bg: var(--accent-subtle-bg);
   --sv-crud-fg: var(--sky-400-dark);
   --sv-crud-bg: rgba(86, 194, 245, 0.14);
   --sv-mitm-fg: var(--violet-400-dark);
   --sv-mitm-bg: rgba(167, 139, 250, 0.14);
   --sv-tunnel-fg: var(--green-400-dark);
   --sv-tunnel-bg: rgba(74, 222, 128, 0.14);
-  --sv-default-fg: var(--slate-200);
-  --sv-default-bg: var(--slate-800);
+  --sv-default-fg: var(--warm-200-dark);
+  --sv-default-bg: var(--warm-800);
   --sv-cors-fg: var(--sky-400-dark);
   --sv-cors-bg: rgba(86, 194, 245, 0.14);
   --sv-chaos-fg: var(--red-400-dark);
@@ -239,6 +260,7 @@
     font-family: var(--font-sans);
     font-size: 15px;
     line-height: 1.5;
+    font-feature-settings: 'lnum' 1;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }

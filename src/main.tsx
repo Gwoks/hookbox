@@ -9,6 +9,7 @@ import { RouterProvider } from 'react-router-dom'
 import { Providers } from '@/components/providers'
 import { router } from '@/router'
 import { setUnauthorizedHandler } from '@/api'
+import '@fontsource-variable/inter/wght.css'
 import './globals.css'
 
 // A /api 401 (rotated/stale secret) bounces to the landing gate (§5.1, AC-J7).

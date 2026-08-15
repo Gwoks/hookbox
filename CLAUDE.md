@@ -67,4 +67,39 @@ _Add a brief overview of your project architecture_
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+### Design system
+
+`DESIGN.md` (repo root) is the canonical visual style reference for the
+frontend (`src/`) — a "Notion — warm paper notebook" identity: warm off-white
+canvas, near-monochrome ink-black text hierarchy, a single blue accent
+(`#0075de`) as the only filled-button color, hairline borders instead of
+shadows on content cards, 12px card / 8px button / 4px small / pill (9999px)
+border-radius, and Inter typography with tightened tracking on display/heading
+sizes. Consult it before any new UI work — colors, spacing, radii, and
+component treatments should match its Colors/Typography/Components/Do's-and-
+Don'ts sections rather than being improvised per-screen.
+
+The design is implemented as a **semantic-token system**, not per-component
+styling:
+
+- `src/globals.css` — the ONLY file where raw hex/rgba may appear. Defines
+  the DESIGN.md primitive palette, then maps it to theme-aware semantic CSS
+  custom properties (`--bg-canvas`, `--text-primary`, `--accent`, etc.) for
+  `:root` (light) and `.dark` (dark — DESIGN.md is light-only; dark is an
+  original complement using the same warm undertone and blue accent).
+- `tailwind.config.ts` — surfaces those CSS vars as Tailwind utilities
+  (`bg-canvas`, `text-text-primary`, `rounded-md`, …) plus the type scale,
+  radius scale, and motion tokens.
+- Components and screens consume semantic Tailwind classes ONLY — never a
+  raw hex, inline color, or one-off shadow/radius value. `e2e/no-hex.spec.ts`
+  enforces this for `src/components/**`.
+- Functional status/semantic hues (success/info/warning/danger) and the
+  method/served-by color-coding (GET/POST/…, rule/crud/mitm/…) are
+  intentionally unchanged from DESIGN.md — that doc doesn't address them, and
+  they carry previously-verified AA contrast that a repaint would need to
+  re-verify.
+
+When adding or restyling UI: change tokens in `src/globals.css` /
+`tailwind.config.ts`, not component-local styles; re-run `pnpm e2e` (covers
+`no-hex` and `reduced-motion`) and eyeball `/_gallery` (dev-only primitives
+page) in both themes before calling a visual change done.

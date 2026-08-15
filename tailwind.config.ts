@@ -78,24 +78,30 @@ const config: Config = {
         mono: 'var(--font-mono)',
       },
       fontSize: {
-        display: ['44px', { lineHeight: '1.05', fontWeight: '700', letterSpacing: '-0.02em' }],
-        h1: ['30px', { lineHeight: '1.2', fontWeight: '700' }],
-        h2: ['22px', { lineHeight: '1.25', fontWeight: '650' }],
+        // Negative tracking on display/h1/h2 follows DESIGN.md's type scale
+        // (heading-sm 22px: -0.011em; interpolated up through display); body
+        // sizes stay at normal tracking per DESIGN.md's "Do" (§ Do's and Don'ts).
+        display: ['44px', { lineHeight: '1.05', fontWeight: '700', letterSpacing: '-0.035em' }],
+        h1: ['30px', { lineHeight: '1.2', fontWeight: '700', letterSpacing: '-0.016em' }],
+        h2: ['22px', { lineHeight: '1.25', fontWeight: '650', letterSpacing: '-0.011em' }],
         h3: ['18px', { lineHeight: '1.3', fontWeight: '600' }],
         h4: ['15px', { lineHeight: '1.4', fontWeight: '600' }],
         body: ['15px', { lineHeight: '1.5' }],
         'body-sm': ['13px', { lineHeight: '1.45' }],
-        caption: ['12px', { lineHeight: '1.4', fontWeight: '500' }],
+        caption: ['12px', { lineHeight: '1.4', fontWeight: '500', letterSpacing: '0.01em' }],
         overline: ['11px', { lineHeight: '1.3', fontWeight: '600', letterSpacing: '0.06em' }],
         mono: ['13px', { lineHeight: '1.5', fontWeight: '450' }],
         'mono-sm': ['12px', { lineHeight: '1.45', fontWeight: '450' }],
         'mono-lg': ['16px', { lineHeight: '1.4', fontWeight: '500' }],
       },
+      // DESIGN.md radius scale: small 4px, buttons 8px, cards 12px, pills
+      // 9999px — and caps rectangular content at 12px (its "Don't"), so `lg`
+      // is kept equal to `md` rather than introducing a larger tier.
       borderRadius: {
         xs: '4px',
-        sm: '6px',
-        md: '10px',
-        lg: '14px',
+        sm: '8px',
+        md: '12px',
+        lg: '12px',
         pill: '9999px',
       },
       boxShadow: {
