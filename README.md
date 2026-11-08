@@ -169,7 +169,7 @@ ordinary error handling:
 
 ```bash
 # Backend (Rust)
-cd backend && cargo test            # 81 unit + 12 integration tests
+cd backend && cargo test            # unit tests + integration suites (tests/api, tests/wire_contract goldens)
 cargo fmt --all -- --check          # formatting gate
 cargo clippy --all-targets -- -D warnings
 
