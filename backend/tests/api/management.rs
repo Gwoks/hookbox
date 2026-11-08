@@ -194,6 +194,74 @@ async fn foreign_endpoint_is_404_not_403() {
     assert_eq!(body["error"], json!("not_found"));
 }
 
+/// B1: PATCH /api/endpoints/{token} types every field like create does — a
+/// non-string `name` or `target_url` is a 422 that changes nothing (it used
+/// to be stored stringified / silently clear the target).
+#[tokio::test]
+async fn endpoint_patch_rejects_mistyped_fields_without_writing() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    let target = json!({"name": "kept", "target_url": "https://up.example.com"});
+    let (s, _, _) = patch_endpoint(&app, &secret, &token, target).await;
+    assert_eq!(s, StatusCode::OK);
+    let cases = [
+        (json!({"name": 5}), "name must be a string or null."),
+        (json!({"name": {"a": 1}}), "name must be a string or null."),
+        (
+            json!({"target_url": 5}),
+            "target_url must be a string or null.",
+        ),
+    ];
+    for (body, detail) in cases {
+        let (s, err, _) = patch_endpoint(&app, &secret, &token, body).await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(err, json!({"error": "validation_error", "detail": detail}));
+    }
+    let path = format!("/api/endpoints/{token}");
+    let (_, ep, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(ep["name"], json!("kept"));
+    assert_eq!(ep["target_url"], json!("https://up.example.com"));
+}
+
+/// B1: PATCH on a rule enforces the create rules (name string-or-null and
+/// <= 120 chars, the body_template cap) and stores `webhook_action` typed.
+#[tokio::test]
+async fn rule_patch_validates_like_create_and_types_webhook_action() {
+    let TestApp { app, secret, state } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    let id = add_rule(&app, &secret, &token, json!({"name": "r"})).await;
+    let path = format!("/api/endpoints/{token}/rules/{id}");
+    let big = "x".repeat(state.cfg.template_max_size + 1);
+    let cases = [
+        (json!({"name": 7}), "name must be a string or null."),
+        (
+            json!({"name": "x".repeat(121)}),
+            "name must be at most 120 characters.",
+        ),
+        (
+            json!({"response": {"body_template": big}}),
+            "response.body_template is too large.",
+        ),
+        (
+            json!({"webhook_action": {"url": 5}}),
+            "webhook_action is malformed.",
+        ),
+    ];
+    for (body, detail) in cases {
+        let (s, err, _) = call(&app, "PATCH", APP_HOST, &path, Some(&secret), Some(body)).await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{detail}");
+        assert_eq!(err["detail"], json!(detail));
+    }
+    let hook = json!({"webhook_action": {"url": "https://hook.example.com"}, "ignored": 1});
+    let (s, rule, _) = call(&app, "PATCH", APP_HOST, &path, Some(&secret), Some(hook)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(rule["name"], json!("r"));
+    assert_eq!(
+        rule["webhook_action"],
+        json!({"url": "https://hook.example.com", "body_template": ""})
+    );
+}
+
 /// B7: a stored value that cannot decode into its column type (a BLOB in a
 /// TEXT column keeps its storage class; 'high' in an INTEGER column stays
 /// TEXT) is a stable 503 `store_unavailable` on every read path that loads

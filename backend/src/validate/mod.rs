@@ -1,6 +1,16 @@
-//! Field validators shared by the management routes and the mock-plane stores.
+//! Field validators shared by the management routes and the mock-plane
+//! stores, plus the `PatchObject` reader the PATCH routes parse through.
 
 use crate::error::ApiError;
+
+mod fields;
+mod patch;
+
+pub(crate) use fields::{
+    chaos_mode, clamp_to, default_mode, endpoint_name, priority, response_spec, rule_name,
+    CHAOS_MODE_MSG, DEFAULT_MODE_MSG, NAME_TYPE_MSG,
+};
+pub(crate) use patch::PatchObject;
 
 /// `limit` when the caller sends none.
 const DEFAULT_PAGE_LIMIT: i64 = 50;

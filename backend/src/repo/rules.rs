@@ -4,7 +4,8 @@
 use sqlx::types::Json;
 use sqlx::SqlitePool;
 
-use crate::models::MockRuleCreate;
+use super::UpdateBuilder;
+use crate::models::{MockRuleCreate, RulePatch};
 
 /// One `mock_rules` row. The `*_json` columns hold the serialized
 /// `MatchCriteria` / `ResponseSpec` / `StateWrite[]` / `WebhookAction` and
@@ -75,6 +76,30 @@ pub(crate) async fn insert(
     .bind(rule.webhook_action.as_ref().map(Json))
     .fetch_one(pool)
     .await
+}
+
+/// Apply a validated PATCH to rule `id` on `token`; the updated row, or
+/// `None` when the patch set nothing (no statement is run).
+pub(crate) async fn update(
+    pool: &SqlitePool,
+    token: &str,
+    id: i64,
+    patch: RulePatch,
+) -> Result<Option<RuleRow>, sqlx::Error> {
+    let mut b = UpdateBuilder::new("mock_rules");
+    b.set_some("name", patch.name)
+        .set_some("priority", patch.priority)
+        .set_some("enabled", patch.enabled)
+        .set_some("match_json", patch.r#match.map(Json))
+        .set_some("response_json", patch.response.map(Json))
+        .set_some("state_writes_json", patch.state_writes.map(Json))
+        .set_some("latency_ms", patch.latency_ms)
+        .set_some("rate_limit_per_min", patch.rate_limit_per_min)
+        .set_some("chaos_mode", patch.chaos_mode)
+        .set_some("webhook_json", patch.webhook_action.map(|w| w.map(Json)))
+        .where_eq("id", id)
+        .where_eq("token", token);
+    b.fetch_returning(pool).await
 }
 
 /// Delete rule `id` on `token`; `false` when there was no such rule.

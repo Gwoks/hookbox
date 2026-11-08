@@ -4,7 +4,9 @@
 
 use sqlx::SqlitePool;
 
+use super::UpdateBuilder;
 use crate::ids::gen_token;
+use crate::models::EndpointPatch;
 
 /// One `endpoints` row. Boolean columns decode from SQLite INTEGER; the
 /// enum-like `default_mode` / `chaos_mode` stay `String` (parsed where used).
@@ -126,6 +128,27 @@ pub(crate) async fn create_with_fresh_token(
         auto_crud: false,
     };
     insert(pool, &new).await
+}
+
+/// Apply a validated PATCH; the updated row, or `None` when the patch set
+/// nothing (no statement is run).
+pub(crate) async fn update(
+    pool: &SqlitePool,
+    token: &str,
+    patch: EndpointPatch,
+) -> Result<Option<EndpointRow>, sqlx::Error> {
+    let mut b = UpdateBuilder::new("endpoints");
+    b.set_some("name", patch.name)
+        .set_some("auto_crud", patch.auto_crud)
+        .set_some("target_url", patch.target_url)
+        .set_some("default_mode", patch.default_mode)
+        .set_some("latency_ms", patch.latency_ms)
+        .set_some("rate_limit_per_min", patch.rate_limit_per_min)
+        .set_some("chaos_pct", patch.chaos_pct)
+        .set_some("chaos_mode", patch.chaos_mode)
+        .set_some("cors_enabled", patch.cors_enabled)
+        .where_eq("token", token);
+    b.fetch_returning(pool).await
 }
 
 /// OQ-1: tombstone rather than hard-delete so the mock plane returns 410.

@@ -12,6 +12,7 @@
 
 mod common;
 mod endpoint;
+mod patch;
 mod rule;
 mod share;
 mod trace;
@@ -21,3 +22,5 @@ pub use endpoint::*;
 pub use rule::*;
 pub use share::*;
 pub use trace::*;
+
+pub(crate) use patch::{EndpointPatch, RulePatch};
