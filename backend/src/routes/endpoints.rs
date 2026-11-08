@@ -14,12 +14,12 @@ use sqlx::Row;
 
 use crate::auth::{assert_owns_endpoint, OwnerId};
 use crate::error::ApiError;
-use crate::helpers::validate_target_url;
 use crate::ids::gen_token;
 use crate::models::{EndpointCreate, EndpointDetail, EndpointSummary, Message};
 use crate::repo::bind_value;
 use crate::state::AppState;
 use crate::util::time::to_rfc3339;
+use crate::validate::validate_target_url;
 
 // --- presentation -------------------------------------------------------------
 

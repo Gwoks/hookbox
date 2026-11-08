@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::is_safe_key;
+use crate::validate::is_safe_key;
 
 /// Read the live (non-expired) state map for an endpoint.
 pub async fn read_state(

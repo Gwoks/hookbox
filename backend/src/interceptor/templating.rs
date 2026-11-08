@@ -17,7 +17,7 @@ use chrono::Utc;
 use rand::Rng;
 use uuid::Uuid;
 
-use crate::helpers::jsonpath_lite;
+use crate::util::json::jsonpath_lite;
 use crate::util::time::now_iso;
 
 const OPEN: &str = "{{";

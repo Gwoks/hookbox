@@ -19,29 +19,8 @@ use std::time::Duration;
 use url::Url;
 
 use crate::config::Config;
-use crate::helpers::strip_forward_headers;
 use crate::interceptor::ssrf::resolve_and_check;
-
-/// Response headers never copied back from upstream (hop-by-hop + Set-Cookie +
-/// upstream CORS + framing — we inject our own P1 CORS and re-send the body).
-const STRIP_RESPONSE_HEADERS: [&str; 16] = [
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "content-length",
-    "content-encoding",
-    "set-cookie",
-    "access-control-allow-origin",
-    "access-control-allow-credentials",
-    "access-control-expose-headers",
-    "access-control-max-age",
-    "vary",
-];
+use crate::net::headers::{header_pairs, is_mitm_response_stripped, strip_forward_headers};
 
 /// The captured upstream response (or an error mapped to 502/504 by the caller).
 pub struct ProxyResponse {
@@ -95,17 +74,13 @@ fn build_target_url(
     Ok(url)
 }
 
+/// Upstream response headers safe to copy back: `is_mitm_response_stripped`
+/// drops hop-by-hop + Set-Cookie + upstream CORS + framing (we inject our own
+/// P1 CORS and re-send the body).
 fn safe_response_headers(resp: &reqwest::Response) -> Vec<(String, String)> {
-    resp.headers()
-        .iter()
-        .filter(|(k, _)| {
-            !STRIP_RESPONSE_HEADERS.contains(&k.as_str().to_ascii_lowercase().as_str())
-        })
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|vs| (k.as_str().to_string(), vs.to_string()))
-        })
+    header_pairs(resp.headers())
+        .filter(|(k, _)| !is_mitm_response_stripped(k))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
 }
 

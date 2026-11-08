@@ -16,16 +16,20 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use axum::body::{to_bytes, Body, Bytes, HttpBody};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Value};
 
 use crate::feed::FeedEvent;
-use crate::helpers::{self, redact, value_to_string};
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
+use crate::net::headers::{
+    contains_ci, header_pairs, redact, response_headers_for_trace, try_header, REDACTED,
+    TOKEN_BEARING_REQUEST_HEADERS,
+};
 use crate::repo::requests::{insert_trace, TraceRecord};
 use crate::rule_cache::{CompiledEndpoint, Resolved};
 use crate::state::AppState;
+use crate::util::text::body_for_trace;
 use crate::util::time::now_iso;
 
 /// Trace step accumulated for the off-path persist.
@@ -584,47 +588,29 @@ fn step(s: &str, detail: &str) -> Step {
 }
 
 fn lower_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|vs| (k.as_str().to_ascii_lowercase(), vs.to_string()))
-        })
+    header_pairs(headers)
+        .map(|(k, v)| (k.to_ascii_lowercase(), v.to_string()))
         .collect()
 }
 
 fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) {
-    if let (Ok(n), Ok(v)) = (
-        HeaderName::from_bytes(name.as_bytes()),
-        HeaderValue::from_str(value),
-    ) {
+    if let Some((n, v)) = try_header(name, value) {
         headers.insert(n, v);
     }
 }
 
-/// Structural request headers dropped ENTIRELY from the echo payload's
-/// persisted `headers` sub-object (hookbox-mun.36, channel C of AC-43/
-/// AC-S2). In wildcard mock-host mode `Host` IS `<token>.<MOCK_DOMAIN>` on
-/// every request, and a cross-origin browser echoes it back via `Origin`/
-/// `Referer` — exactly the set `routes::share::PUBLIC_REQUEST_HEADER_DROP`
-/// removes from the public projection's `request_headers` column.
-///
-/// This is a NAME-based drop list and, on its own, only closes the
-/// structural carriers. Do NOT extend this list to chase the next proxy
-/// header (hookbox-mun.37) — `redact_echo_persisted_headers` below also
-/// applies a VALUE-based mask to every surviving header, which is what
-/// actually generalizes the fix.
-const ECHO_PERSIST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
-
 /// The AC-S3 persist-path redaction (`redact()`, masking
 /// authorization/cookie/x-owner-id) PLUS TWO follow-ups that must be applied
 /// together (hookbox-mun.37 + hookbox-mun.38):
-///   1. hookbox-mun.36: drop `ECHO_PERSIST_HEADER_DROP` (`host`/`origin`/
-///      `referer`) entirely.
+///   1. hookbox-mun.36: drop `TOKEN_BEARING_REQUEST_HEADERS` (`host`/
+///      `origin`/`referer`) entirely — the structural token carriers in
+///      wildcard mock-host mode, the same set the public share projection
+///      drops from `request_headers`. That NAME-based list on its own only
+///      closes the structural carriers; do NOT extend it to chase the next
+///      proxy header (hookbox-mun.37) — step 2 is what generalizes the fix.
 ///   2. hookbox-mun.37: mask any SURVIVING header whose VALUE contains
-///      `token` to `"<redacted>"`, mirroring
-///      `routes::share::mask_token_in_value` — a reverse proxy's
+///      `token` to `REDACTED`, mirroring
+///      `routes::share::projection::mask_token_in_value` — a reverse proxy's
 ///      `X-Forwarded-Host`, `X-Forwarded-Server`, `Forwarded`,
 ///      `X-Original-URI`, `X-Forwarded-Uri` or `X-Envoy-Original-Path` (all
 ///      added by default by Apache/Caddy/Traefik/ingress-nginx/Envoy) is not
@@ -633,7 +619,7 @@ const ECHO_PERSIST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
 ///      echo BODY instead of the header maps — the same class as channel
 ///      A/B/C, closed generically instead of by enumerating one more name.
 ///
-/// Both this function and `mask_token_in_value` share `helpers::contains_ci`,
+/// Both this function and `mask_token_in_value` share `net::headers::contains_ci`,
 /// which is case-insensitive (hookbox-mun.38: nginx's `$host` variable is
 /// documented as lowercase, so a case-sensitive compare lets a case-folded
 /// token through) — so the two copies of this check cannot silently drift
@@ -651,10 +637,10 @@ fn redact_echo_persisted_headers(
 ) -> BTreeMap<String, String> {
     redact(headers)
         .into_iter()
-        .filter(|(k, _)| !ECHO_PERSIST_HEADER_DROP.contains(&k.to_ascii_lowercase().as_str()))
+        .filter(|(k, _)| !TOKEN_BEARING_REQUEST_HEADERS.contains(&k.to_ascii_lowercase().as_str()))
         .map(|(k, v)| {
-            if helpers::contains_ci(&v, token) {
-                (k, "<redacted>".to_string())
+            if contains_ci(&v, token) {
+                (k, REDACTED.to_string())
             } else {
                 (k, v)
             }
@@ -787,7 +773,7 @@ fn spawn_trace(
     let overhead_ms = (duration_ms - applied_latency_ms).max(0);
 
     // Response headers as persisted (R11 seam; today an identity projection).
-    let resp_headers = helpers::response_headers_for_trace(resp.headers());
+    let resp_headers = response_headers_for_trace(resp.headers());
 
     let cap = state.cfg.max_body_bytes;
 
@@ -815,9 +801,9 @@ fn spawn_trace(
         query_params: serde_json::to_string(query).unwrap_or_else(|_| "{}".into()),
         // F7: both body columns go through the identical projection helper
         // (AC-70(d)) — NULL <=> zero-length, never an empty string (AC-69).
-        request_body: helpers::body_for_trace(req_body.as_bytes(), cap),
+        request_body: body_for_trace(req_body.as_bytes(), cap),
         response_headers: serde_json::to_string(&resp_headers).unwrap_or_else(|_| "{}".into()),
-        response_body: helpers::body_for_trace(resp_body, cap),
+        response_body: body_for_trace(resp_body, cap),
         trace_json: serde_json::to_string(&trace_arr).unwrap_or_else(|_| "[]".into()),
         state_snapshot: serde_json::to_string(&state_obj).unwrap_or_else(|_| "{}".into()),
     };
@@ -839,18 +825,6 @@ fn spawn_trace(
         summary["id"] = json!(row_id);
         hub.publish(&token_s, FeedEvent::new("new_request", summary));
     });
-}
-
-/// Read a value out of a JSON body via jsonpath-lite (used by tests/helpers).
-#[allow(dead_code)]
-fn jp(body: &str, path: &str) -> String {
-    crate::helpers::jsonpath_lite(body, path).unwrap_or_default()
-}
-
-/// Stringify a JSON value (re-export for symmetry with the Python helper).
-#[allow(dead_code)]
-fn vstr(v: &Value) -> String {
-    value_to_string(v)
 }
 
 #[cfg(test)]
@@ -947,7 +921,7 @@ mod tests {
     }
 
     // hookbox-mun.37 + hookbox-mun.38: a proxy header whose NAME is not in
-    // `ECHO_PERSIST_HEADER_DROP` but whose VALUE carries the endpoint token
+    // `TOKEN_BEARING_REQUEST_HEADERS` but whose VALUE carries the endpoint token
     // (in ANY letter case) must be masked, not just dropped-by-name headers.
     #[test]
     fn redact_echo_persisted_headers_masks_any_value_containing_the_token() {

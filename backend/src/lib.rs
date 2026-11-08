@@ -10,7 +10,6 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
-pub mod helpers;
 pub mod ids;
 pub mod interceptor;
 pub mod models;
@@ -29,6 +28,7 @@ pub mod feed;
 pub mod limiter;
 pub mod rule_cache;
 pub mod tunnels;
+pub(crate) mod validate;
 
 // Background retention sweep.
 pub mod seed;

@@ -6,8 +6,8 @@
 use serde_json::{json, Value};
 use sqlx::{sqlite::SqliteRow, Row};
 
-use crate::helpers::contains_ci;
 use crate::models::{PublicRequestDetail, PublicRequestSummary};
+use crate::net::headers::{contains_ci, REDACTED, TOKEN_BEARING_REQUEST_HEADERS};
 use crate::util::json::parse_json_or;
 use crate::util::time::to_rfc3339;
 
@@ -16,7 +16,7 @@ use crate::util::time::to_rfc3339;
 /// future x-hookbox-* header cannot leak by omission. (AC-S1)
 const PUBLIC_RESPONSE_HEADER_DROP_PREFIX: &str = "x-hookbox-";
 
-/// Value replaced with "<redacted>" in the PUBLIC projection: credential-bearing
+/// Value replaced with `REDACTED` in the PUBLIC projection: credential-bearing
 /// response headers. Key is KEPT so the viewer can see one was sent. (AC-S1)
 const PUBLIC_RESPONSE_HEADER_REDACT: [&str; 5] = [
     "set-cookie",
@@ -26,16 +26,7 @@ const PUBLIC_RESPONSE_HEADER_REDACT: [&str; 5] = [
     "www-authenticate",
 ];
 
-/// Dropped entirely from the PUBLIC projection's `request_headers` (AC-43,
-/// AC-S2, hookbox-mun.34): in wildcard mock-host mode the `Host` header IS
-/// `<token>.<MOCK_DOMAIN>` on EVERY row, and `Origin`/`Referer` echo it back
-/// on a cross-origin browser request. Unlike `REDACT_HEADERS`
-/// (`helpers.rs`) — a capability scrubber applied at persist time — this is
-/// a token-disclosure scrubber applied ONLY at the public projection;
-/// storage and the owner Inspector keep these headers verbatim (§5.11).
-const PUBLIC_REQUEST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
-
-/// Mask `value` to `"<redacted>"` iff it is a JSON string containing `token`
+/// Mask `value` to `REDACTED` iff it is a JSON string containing `token`
 /// case-insensitively — the second half of the AC-S2/AC-43 fix, applied to
 /// BOTH `request_headers` and `response_headers` in the PUBLIC projection so
 /// a server-generated echo of the token (e.g. a CORS
@@ -44,16 +35,16 @@ const PUBLIC_REQUEST_HEADER_DROP: [&str; 3] = ["host", "origin", "referer"];
 /// above. Never applied to `path`, `query_params`, or either body — those
 /// are caller-supplied and a caller choosing to paste the token into their
 /// own body is out of scope (AC-S2). The comparison is case-insensitive
-/// (`helpers::contains_ci`, hookbox-mun.38): nginx's `$host` variable is
+/// (`net::headers::contains_ci`, hookbox-mun.38): nginx's `$host` variable is
 /// documented as lowercase, so a case-sensitive `contains` let a
 /// case-folded token survive verbatim. The `response_body` column is NOT
 /// filtered here at all (§5.11) — that channel is closed on the persist path
 /// instead, in `interceptor::engine::redact_echo_persisted_headers`, which
-/// shares this exact case-insensitive comparison via `helpers::contains_ci`
+/// shares this exact case-insensitive comparison via `contains_ci`
 /// so the two can never drift apart again (hookbox-mun.37).
 fn mask_token_in_value(token: &str, value: Value) -> Value {
     match &value {
-        Value::String(s) if contains_ci(s, token) => json!("<redacted>"),
+        Value::String(s) if contains_ci(s, token) => json!(REDACTED),
         _ => value,
     }
 }
@@ -78,7 +69,7 @@ fn filter_public_response_headers(raw: Value, token: &str) -> Value {
             continue;
         }
         if PUBLIC_RESPONSE_HEADER_REDACT.contains(&kl.as_str()) {
-            out.insert(k, json!("<redacted>"));
+            out.insert(k, json!(REDACTED));
         } else {
             out.insert(k, mask_token_in_value(token, v));
         }
@@ -100,7 +91,11 @@ fn filter_public_request_headers(raw: Value, token: &str) -> Value {
     let mut out = serde_json::Map::new();
     for (k, v) in map {
         let kl = k.to_ascii_lowercase();
-        if PUBLIC_REQUEST_HEADER_DROP.contains(&kl.as_str()) {
+        // `TOKEN_BEARING_REQUEST_HEADERS` (host/origin/referer) is a
+        // token-disclosure scrubber applied ONLY here — unlike the persist-time
+        // capability redaction, storage and the owner Inspector keep these
+        // headers verbatim (§5.11).
+        if TOKEN_BEARING_REQUEST_HEADERS.contains(&kl.as_str()) {
             continue;
         }
         out.insert(k, mask_token_in_value(token, v));

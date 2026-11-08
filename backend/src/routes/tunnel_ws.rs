@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::Response;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::feed::FeedEvent;
+use crate::net::headers::{is_tunnel_response_stripped, try_header};
 use crate::state::AppState;
 
 pub const WS_CLOSE_UNAUTHORIZED: u16 = 4401;
@@ -76,21 +77,11 @@ pub async fn forward_to_tunnel(
         .unwrap();
     if let Some(h) = res.get("headers").and_then(Value::as_object) {
         for (k, v) in h {
-            let kl = k.to_ascii_lowercase();
-            if matches!(
-                kl.as_str(),
-                "connection"
-                    | "keep-alive"
-                    | "transfer-encoding"
-                    | "content-length"
-                    | "content-encoding"
-            ) {
+            if is_tunnel_response_stripped(k) {
                 continue;
             }
-            if let (Ok(name), Some(val)) = (HeaderName::from_bytes(k.as_bytes()), v.as_str()) {
-                if let Ok(hv) = HeaderValue::from_str(val) {
-                    resp.headers_mut().insert(name, hv);
-                }
+            if let Some((name, hv)) = v.as_str().and_then(|val| try_header(k, val)) {
+                resp.headers_mut().insert(name, hv);
             }
         }
     }

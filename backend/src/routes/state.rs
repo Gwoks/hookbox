@@ -10,10 +10,10 @@ use sqlx::Row;
 
 use crate::auth::{assert_owns_endpoint, OwnerId};
 use crate::error::ApiError;
-use crate::helpers::is_safe_key;
 use crate::models::Message;
 use crate::state::AppState;
 use crate::util::json::parse_json_or;
+use crate::validate::is_safe_key;
 
 // --- 15. GET /api/endpoints/{token}/state ------------------------------------
 

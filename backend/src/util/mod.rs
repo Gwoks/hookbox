@@ -2,4 +2,5 @@
 //! repo layers (one definition each — no per-module copies).
 
 pub(crate) mod json;
+pub(crate) mod text;
 pub(crate) mod time;

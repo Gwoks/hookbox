@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderValue, Request, StatusCode},
+    http::{Request, StatusCode},
     middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
     Router,
@@ -26,6 +26,7 @@ use http_body_util::BodyExt;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::interceptor::engine;
+use crate::net::headers::try_header;
 use crate::planes::{resolve_plane, Plane, PlaneResult};
 use crate::routes;
 use crate::state::AppState;
@@ -141,8 +142,8 @@ fn oversize_response(token: &str) -> Response {
         axum::Json(serde_json::json!({"error":"payload_too_large","detail":"Request body exceeds the configured limit."})),
     )
         .into_response();
-    if let Ok(hv) = HeaderValue::from_str(token) {
-        r.headers_mut().insert("x-hookbox-endpoint", hv);
+    if let Some((name, value)) = try_header("x-hookbox-endpoint", token) {
+        r.headers_mut().insert(name, value);
     }
     r
 }
@@ -166,8 +167,8 @@ pub async fn plane_dispatch(
         _ => next.run(req).await,
     };
 
-    if let Ok(hv) = HeaderValue::from_str(plane_value) {
-        resp.headers_mut().insert("x-hookbox-plane", hv);
+    if let Some((name, value)) = try_header("x-hookbox-plane", plane_value) {
+        resp.headers_mut().insert(name, value);
     }
     resp
 }

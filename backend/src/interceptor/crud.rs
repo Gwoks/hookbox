@@ -17,9 +17,9 @@
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::helpers::is_safe_key;
 use crate::repo::crud::{self as crud_repo, Mutation};
 use crate::state::AppState;
+use crate::validate::is_safe_key;
 
 /// A CRUD outcome the engine renders into an HTTP response (served_by="crud").
 pub struct CrudResponse {
