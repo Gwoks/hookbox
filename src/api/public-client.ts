@@ -11,7 +11,7 @@
  * no reason for it to depend on the session store at all.
  */
 import type { ZodType } from 'zod'
-import { buildUrl, doFetch, parseJsonResponse } from './http'
+import { apiPath, buildUrl, doFetch, parseJsonResponse } from './http'
 import {
   publicRequestDetailSchema,
   publicShareFeedSchema,
@@ -46,7 +46,7 @@ export const api = {
     code: string,
     params?: { limit?: number; offset?: number; signal?: AbortSignal },
   ): Promise<PublicShareFeed> {
-    return publicRequest(`/api/share/${encodeURIComponent(code)}/requests`, {
+    return publicRequest(apiPath('share', code, 'requests'), {
       query: { limit: params?.limit, offset: params?.offset },
       schema: publicShareFeedSchema,
       signal: params?.signal,
@@ -58,7 +58,7 @@ export const api = {
     id: number,
     opts?: { signal?: AbortSignal },
   ): Promise<PublicRequestDetail> {
-    return publicRequest(`/api/share/${encodeURIComponent(code)}/requests/${id}`, {
+    return publicRequest(apiPath('share', code, 'requests', id), {
       signal: opts?.signal,
       schema: publicRequestDetailSchema,
     })

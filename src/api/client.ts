@@ -14,7 +14,7 @@
  */
 import { z } from 'zod'
 import { ApiError } from './errors'
-import { buildUrl, doFetch, parseJsonResponse } from './http'
+import { apiPath, buildUrl, doFetch, parseJsonResponse, type CallOptions } from './http'
 import { session } from './session'
 import {
   collectionResponseSchema,
@@ -90,145 +90,153 @@ async function request<T = void>(path: string, opts: RequestOpts<T> = {}): Promi
   return parseJsonResponse(res, opts.schema)
 }
 
+type Opts = CallOptions
+
 export const api = {
   // #1 — no auth, no bounce on 401 (this route mints the cap).
-  createSession(payload: SessionCreate) {
-    return request('/api/session', {
+  createSession(payload: SessionCreate, opts?: Opts) {
+    return request(apiPath('session'), {
       method: 'POST',
       body: payload,
       noAuth: true,
       schema: sessionResponseSchema,
+      signal: opts?.signal,
     })
   },
   // #2
-  listEndpoints() {
-    return request('/api/endpoints', { schema: z.array(endpointSummarySchema) })
+  listEndpoints(opts?: Opts) {
+    return request(apiPath('endpoints'), { schema: z.array(endpointSummarySchema), signal: opts?.signal })
   },
   // #3
-  createEndpoint(payload: EndpointCreate) {
-    return request('/api/endpoints', { method: 'POST', body: payload, schema: endpointDetailSchema })
+  createEndpoint(payload: EndpointCreate, opts?: Opts) {
+    return request(apiPath('endpoints'), {
+      method: 'POST',
+      body: payload,
+      schema: endpointDetailSchema,
+      signal: opts?.signal,
+    })
   },
   // #4
-  getEndpoint(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}`, { schema: endpointDetailSchema })
+  getEndpoint(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token), { schema: endpointDetailSchema, signal: opts?.signal })
   },
   // #5
-  patchEndpoint(token: string, payload: EndpointConfigPatch) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}`, {
+  patchEndpoint(token: string, payload: EndpointConfigPatch, opts?: Opts) {
+    return request(apiPath('endpoints', token), {
       method: 'PATCH',
       body: payload,
       schema: endpointDetailSchema,
+      signal: opts?.signal,
     })
   },
   // #6 — tombstone (410 on P1 thereafter); response is 200 Message.
-  deleteEndpoint(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}`, {
-      method: 'DELETE',
-      schema: messageSchema,
-    })
+  deleteEndpoint(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token), { method: 'DELETE', schema: messageSchema, signal: opts?.signal })
   },
   // #7 — ORDER BY priority, id (server-guaranteed).
-  listRules(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/rules`, {
+  listRules(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'rules'), {
       schema: z.array(mockRuleSchema),
+      signal: opts?.signal,
     })
   },
   // #8
-  createRule(token: string, payload: MockRuleCreate) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/rules`, {
+  createRule(token: string, payload: MockRuleCreate, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'rules'), {
       method: 'POST',
       body: payload,
       schema: mockRuleSchema,
+      signal: opts?.signal,
     })
   },
   // #9
-  getRule(token: string, id: number) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/rules/${id}`, {
-      schema: mockRuleSchema,
-    })
+  getRule(token: string, id: number, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'rules', id), { schema: mockRuleSchema, signal: opts?.signal })
   },
   // #10
-  patchRule(token: string, id: number, payload: MockRulePatch) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/rules/${id}`, {
+  patchRule(token: string, id: number, payload: MockRulePatch, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'rules', id), {
       method: 'PATCH',
       body: payload,
       schema: mockRuleSchema,
+      signal: opts?.signal,
     })
   },
   // #11 — 204 no body.
-  deleteRule(token: string, id: number) {
-    return request<void>(`/api/endpoints/${encodeURIComponent(token)}/rules/${id}`, {
-      method: 'DELETE',
-    })
+  deleteRule(token: string, id: number, opts?: Opts) {
+    return request<void>(apiPath('endpoints', token, 'rules', id), { method: 'DELETE', signal: opts?.signal })
   },
   // #12 — limit 1..200 (default 50), offset >= 0.
-  listRequests(token: string, params?: { limit?: number; offset?: number }) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/requests`, {
+  listRequests(token: string, params?: { limit?: number; offset?: number }, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'requests'), {
       query: { limit: params?.limit, offset: params?.offset },
       schema: z.array(requestSummarySchema),
+      signal: opts?.signal,
     })
   },
   // #13 — owner resolved via the trace's endpoint. `signal` lets a caller
   // abort an in-flight fetch (AC-48/AC-53 — the CSV export's shared
   // AbortController must actually cancel every in-flight
   // GET /api/requests/{id}, not just stop scheduling new ones).
-  getRequest(id: number, opts?: { signal?: AbortSignal }) {
-    return request(`/api/requests/${id}`, { schema: requestDetailSchema, signal: opts?.signal })
+  getRequest(id: number, opts?: Opts) {
+    return request(apiPath('requests', id), { schema: requestDetailSchema, signal: opts?.signal })
   },
   // #14
-  clearRequests(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/requests`, {
+  clearRequests(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'requests'), {
       method: 'DELETE',
       schema: messageSchema,
+      signal: opts?.signal,
     })
   },
   // #15
-  getState(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/state`, {
-      schema: stateResponseSchema,
-    })
+  getState(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'state'), { schema: stateResponseSchema, signal: opts?.signal })
   },
   // #16
-  clearState(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/state`, {
+  clearState(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'state'), {
       method: 'DELETE',
       schema: messageSchema,
+      signal: opts?.signal,
     })
   },
   // #17 — name ^[A-Za-z0-9_-]{1,64}$ else 422 invalid_collection.
-  peekCollection(token: string, name: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/collections/${encodeURIComponent(name)}`, {
+  peekCollection(token: string, name: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'collections', name), {
       schema: collectionResponseSchema,
+      signal: opts?.signal,
     })
   },
   // #18
-  clearCollection(token: string, name: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/collections/${encodeURIComponent(name)}`, {
+  clearCollection(token: string, name: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'collections', name), {
       method: 'DELETE',
       schema: messageSchema,
+      signal: opts?.signal,
     })
   },
 
   // ── F4 share links (operator-toolkit §5.1) — owner-authenticated ──
   // #19 — 201 ShareLinkCreated. `code`/`url` appear ONLY in this response.
-  createShare(token: string, payload: ShareLinkCreate) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/shares`, {
+  createShare(token: string, payload: ShareLinkCreate, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'shares'), {
       method: 'POST',
       body: payload,
       schema: shareLinkCreatedSchema,
+      signal: opts?.signal,
     })
   },
   // #20 — ShareLink[], no code, no url, ever.
-  listShares(token: string) {
-    return request(`/api/endpoints/${encodeURIComponent(token)}/shares`, {
+  listShares(token: string, opts?: Opts) {
+    return request(apiPath('endpoints', token, 'shares'), {
       schema: z.array(shareLinkSchema),
+      signal: opts?.signal,
     })
   },
   // #21 — by the non-secret integer `id`, NEVER the code (architecture D10).
-  revokeShare(token: string, id: number) {
-    return request<void>(`/api/endpoints/${encodeURIComponent(token)}/shares/${id}`, {
-      method: 'DELETE',
-    })
+  revokeShare(token: string, id: number, opts?: Opts) {
+    return request<void>(apiPath('endpoints', token, 'shares', id), { method: 'DELETE', signal: opts?.signal })
   },
 
   // ── F4 public routes (operator-toolkit §5.2) — NO credential, ever ──

@@ -13,6 +13,18 @@ import { z } from 'zod'
 import { ApiError } from './errors'
 import { errorEnvelopeSchema } from './schemas'
 
+/** `/api/<seg>/<seg>…` with EVERY segment percent-encoded on its own, so a
+ * token, share code or collection name can never inject a `/`, `?` or `#`
+ * into the route. */
+export function apiPath(...segments: (string | number)[]): string {
+  return `/api/${segments.map((segment) => encodeURIComponent(String(segment))).join('/')}`
+}
+
+/** Per-call options every client method accepts. */
+export interface CallOptions {
+  signal?: AbortSignal
+}
+
 export function buildUrl(path: string, query?: Record<string, string | number | undefined>): string {
   if (!query) return path
   const sp = new URLSearchParams()
