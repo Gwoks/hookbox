@@ -15,7 +15,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-accent-fill text-text-on-accent hover:opacity-90',
+        primary: 'bg-accent-fill text-text-on-accent hover:bg-accent-hover',
         secondary: 'border border-border-strong bg-surface text-text-primary hover:bg-surface-hover',
         ghost: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
         // text-text-on-accent, not text-white: white on --red-400-dark is

@@ -156,7 +156,7 @@ export function Landing() {
         <div className="w-full max-w-landing-hero">
           <div className="mx-auto max-w-landing space-y-5 rounded-md border border-border bg-surface p-6 sm:p-8">
             <div className="space-y-2">
-              <h1 className="text-display text-text-primary">{t('landing.hero.headline')}</h1>
+              <h1 className="text-display-sm text-text-primary sm:text-display">{t('landing.hero.headline')}</h1>
               <p className="text-body text-text-secondary">{t('landing.hero.subhead')}</p>
             </div>
 

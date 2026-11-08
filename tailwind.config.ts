@@ -5,12 +5,23 @@
  * (AC-D11). Components reference `bg-surface`, `text-secondary`, `accent`,
  * `method.get.fg`, `served.rule`, `neutral-chip.bg`, etc. — not palette values.
  *
- * Mechanism mirrors ../shortener-link/tailwind.config.ts verbatim; only the
- * token NAMES specific to HookBox (method.*, served.*, accent.fill,
- * neutral-chip.*) and the new motion tokens (dur-instant, ease-emphasized,
- * feed-row-in / rail-flash keyframes) are added.
+ * Non-color scales (type, radius, shadow, widths, spacing, motion, z-index)
+ * are imported from src/design/tokens.ts so src/lib/cn.ts's tailwind-merge
+ * config can never drift from what Tailwind generates.
  */
 import type { Config } from 'tailwindcss'
+import {
+  borderRadius,
+  boxShadow,
+  fontSize,
+  maxWidth,
+  spacing,
+  transitionDuration,
+  transitionTimingFunction,
+  zIndex,
+} from './src/design/tokens'
+
+const CARD_TONES = ['marigold', 'coral', 'sky', 'tint', 'peach', 'midnight'] as const
 
 const config: Config = {
   darkMode: 'class',
@@ -40,13 +51,27 @@ const config: Config = {
           DEFAULT: 'var(--accent)',
           hover: 'var(--accent-hover)',
           fill: 'var(--accent-fill)',
+          strong: 'var(--accent-strong)',
           'subtle-bg': 'var(--accent-subtle-bg)',
+          'subtle-hover': 'var(--accent-subtle-hover)',
         },
         success: { fg: 'var(--success-fg)', bg: 'var(--success-bg)' },
         warning: { fg: 'var(--warning-fg)', bg: 'var(--warning-bg)' },
-        danger: { fg: 'var(--danger-fg)', bg: 'var(--danger-bg)' },
+        danger: { fg: 'var(--danger-fg)', bg: 'var(--danger-bg)', border: 'var(--danger-border)' },
         info: { fg: 'var(--info-fg)', bg: 'var(--info-bg)' },
         focus: 'var(--focus-ring)',
+        // Accent feature cards (DESIGN.md): `bg-card-sky text-card-sky-fg
+        // border-card-sky-border`. Light = full hue fill; dark = 16% wash.
+        card: Object.fromEntries(
+          CARD_TONES.map((tone) => [
+            tone,
+            {
+              DEFAULT: `var(--card-${tone})`,
+              fg: `var(--card-${tone}-fg)`,
+              border: `var(--card-${tone}-border)`,
+            },
+          ]),
+        ),
         // Neutral chip (default/echo served-by, redacted note, disabled rule).
         'neutral-chip': { fg: 'var(--neutral-chip-fg)', bg: 'var(--neutral-chip-bg)' },
         // Method colors (design.md §2.2) — MethodBadge never hardcodes hex.
@@ -77,75 +102,19 @@ const config: Config = {
         sans: 'var(--font-sans)',
         mono: 'var(--font-mono)',
       },
-      fontSize: {
-        // Negative tracking on display/h1/h2 follows DESIGN.md's type scale
-        // (heading-sm 22px: -0.011em; interpolated up through display); body
-        // sizes stay at normal tracking per DESIGN.md's "Do" (§ Do's and Don'ts).
-        display: ['44px', { lineHeight: '1.05', fontWeight: '700', letterSpacing: '-0.035em' }],
-        h1: ['30px', { lineHeight: '1.2', fontWeight: '700', letterSpacing: '-0.016em' }],
-        h2: ['22px', { lineHeight: '1.25', fontWeight: '650', letterSpacing: '-0.011em' }],
-        h3: ['18px', { lineHeight: '1.3', fontWeight: '600' }],
-        h4: ['15px', { lineHeight: '1.4', fontWeight: '600' }],
-        body: ['15px', { lineHeight: '1.5' }],
-        'body-sm': ['13px', { lineHeight: '1.45' }],
-        caption: ['12px', { lineHeight: '1.4', fontWeight: '500', letterSpacing: '0.01em' }],
-        overline: ['11px', { lineHeight: '1.3', fontWeight: '600', letterSpacing: '0.06em' }],
-        mono: ['13px', { lineHeight: '1.5', fontWeight: '450' }],
-        'mono-sm': ['12px', { lineHeight: '1.45', fontWeight: '450' }],
-        'mono-lg': ['16px', { lineHeight: '1.4', fontWeight: '500' }],
-      },
-      // DESIGN.md radius scale: small 4px, buttons 8px, cards 12px, pills
-      // 9999px — and caps rectangular content at 12px (its "Don't"), so `lg`
-      // is kept equal to `md` rather than introducing a larger tier.
-      borderRadius: {
-        xs: '4px',
-        sm: '8px',
-        md: '12px',
-        lg: '12px',
-        pill: '9999px',
-      },
-      boxShadow: {
-        xs: 'var(--shadow-xs)',
-        sm: 'var(--shadow-sm)',
-        md: 'var(--shadow-md)',
-        lg: 'var(--shadow-lg)',
-        focus: 'var(--shadow-focus)',
-      },
-      maxWidth: {
-        landing: '560px',
-        'landing-hero': '1040px',
-        settings: '640px',
-        // The public /s/:code viewer's content column (design.md §2.4,
-        // operator-toolkit F4) — shared by the banner, main and footer so
-        // all three align.
-        viewer: '920px',
-      },
+      // Scales come from src/design/tokens.ts — the same module src/lib/cn.ts
+      // feeds to tailwind-merge, so every key here is one cn() understands.
+      fontSize,
+      borderRadius,
+      boxShadow,
+      maxWidth,
       minWidth: {
         feed: '360px',
       },
-      spacing: {
-        header: '52px',
-        subheader: '48px',
-      },
-      transitionTimingFunction: {
-        standard: 'cubic-bezier(.2,0,0,1)',
-        emphasized: 'cubic-bezier(.2,.7,0,1)',
-      },
-      transitionDuration: {
-        instant: '90ms',
-        fast: '120ms',
-        base: '180ms',
-        slow: '240ms',
-      },
-      zIndex: {
-        sticky: '100',
-        nav: '200',
-        dropdown: '1000',
-        popover: '1100',
-        dialog: '1200',
-        toast: '1300',
-        tooltip: '1400',
-      },
+      spacing,
+      transitionTimingFunction,
+      transitionDuration,
+      zIndex,
       keyframes: {
         'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },
         'overlay-in': { from: { opacity: '0' }, to: { opacity: '1' } },

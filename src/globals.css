@@ -40,6 +40,15 @@
   --signal-blue: #097fe8;
   --sky-wash: #62aef0; /* lightest blue in the cast — dark-mode accent */
   --midnight: #02093a;
+  --peach: #f6d5b8; /* Hero highlight pill / peach accent card */
+
+  /* AA adjustments (not in DESIGN.md's table; src/design/contrast.test.ts
+     decides them). Stone (#757575) is 4.2:1 on the paper canvas, so tertiary
+     text uses a warm step between Stone and Graphite (4.9:1). */
+  --stone-deep: #6f6b67;
+  --sky-tint-deep: #dcedfd; /* tint-button hover */
+  --sky-light: #8cc6f2; /* dark-theme accent hover / tint-button text */
+  --midnight-lift: #4a5bd0; /* midnight hue lifted so it reads on the dark canvas */
 
   /* Warm-neutral scale — hover/active steps + dark-mode complement (not in
      DESIGN.md; derived to keep the same warm undertone off the light canvas). */
@@ -99,13 +108,16 @@
   --border-strong: rgba(0, 0, 0, 0.16);
   --text-primary: var(--ink);
   --text-secondary: var(--graphite);
-  --text-tertiary: var(--stone);
+  --text-tertiary: var(--stone-deep);
   --text-on-accent: var(--white);
   /* Single chromatic filled-button color (DESIGN.md "Do"); AA-checked white-on-blue. */
   --accent: var(--blue);
   --accent-hover: var(--blue-hover);
   --accent-fill: var(--blue);
   --accent-subtle-bg: var(--sky-tint);
+  --accent-subtle-hover: var(--sky-tint-deep);
+  /* Tint-button text: Notion Blue is 4.2:1 on Sky Tint, its hover step is AA. */
+  --accent-strong: var(--blue-hover);
   --focus-ring: var(--blue);
   --success-fg: var(--green-600);
   --success-bg: var(--green-50);
@@ -115,9 +127,31 @@
   --warning-bg: var(--amber-50);
   --danger-fg: var(--red-600);
   --danger-bg: var(--red-50);
+  --danger-border: rgba(185, 28, 28, 0.32);
   --neutral-chip-fg: var(--stone);
   --neutral-chip-bg: var(--warm-100);
   --overlay-scrim: rgba(0, 0, 0, 0.45);
+
+  /* Accent feature cards (DESIGN.md "Accent/Dark Feature Card"): a full hue
+     fill with ink text and no border; midnight is the inverted island. */
+  --card-marigold: var(--marigold);
+  --card-marigold-fg: var(--ink);
+  --card-marigold-border: transparent;
+  --card-coral: var(--coral);
+  --card-coral-fg: var(--ink);
+  --card-coral-border: transparent;
+  --card-sky: var(--sky-wash);
+  --card-sky-fg: var(--ink);
+  --card-sky-border: transparent;
+  --card-tint: var(--sky-tint);
+  --card-tint-fg: var(--ink);
+  --card-tint-border: transparent;
+  --card-peach: var(--peach);
+  --card-peach-fg: var(--ink);
+  --card-peach-border: transparent;
+  --card-midnight: var(--midnight);
+  --card-midnight-fg: var(--white);
+  --card-midnight-border: transparent;
 
   /* Method colors — light (design.md §2.2) */
   --m-get-fg: var(--sky-600);
@@ -166,13 +200,19 @@
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.18), 0 4px 10px rgba(0, 0, 0, 0.06);
   --shadow-focus: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--focus-ring);
+  /* DESIGN.md "Elevation": the sticky nav and the product mockup are the only
+     non-floating surfaces allowed a shadow. */
+  --shadow-nav: 0 0.7px 1.462px rgba(0, 0, 0, 0.015), 0 3px 9px rgba(0, 0, 0, 0.03);
+  --shadow-mockup: 0 4px 12px rgba(0, 0, 0, 0.1);
 
-  /* Motion (design.md §2.8) */
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Motion — DESIGN.md: 200ms ease for hovers/transitions; spring only for
+     decorative marks (neutralised under reduced motion, below). */
+  --ease-standard: ease;
   --ease-emphasized: cubic-bezier(0.2, 0.7, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --dur-instant: 90ms;
   --dur-fast: 120ms;
-  --dur-base: 180ms;
+  --dur-base: 200ms;
   --dur-slow: 240ms;
 }
 
@@ -193,9 +233,11 @@
   --text-tertiary: var(--warm-400-dark);
   --text-on-accent: var(--warm-950);
   --accent: var(--sky-wash);
-  --accent-hover: #8cc6f2;
+  --accent-hover: var(--sky-light);
   --accent-fill: var(--sky-wash);
   --accent-subtle-bg: rgba(98, 174, 240, 0.14);
+  --accent-subtle-hover: rgba(98, 174, 240, 0.22);
+  --accent-strong: var(--sky-light);
   --focus-ring: var(--sky-wash);
   --success-fg: var(--green-400-dark);
   --success-bg: rgba(74, 222, 128, 0.14);
@@ -205,9 +247,31 @@
   --warning-bg: rgba(251, 191, 36, 0.14);
   --danger-fg: var(--red-400-dark);
   --danger-bg: rgba(248, 113, 113, 0.14);
+  --danger-border: rgba(248, 113, 113, 0.36);
   --neutral-chip-fg: var(--warm-200-dark);
   --neutral-chip-bg: var(--warm-800);
   --overlay-scrim: rgba(0, 0, 0, 0.62);
+
+  /* Accent cards — dark: a 16% wash of the hue with primary text and a 28%
+     hue border (a full-strength fill would glare on the charcoal canvas). */
+  --card-marigold: rgba(255, 177, 16, 0.16);
+  --card-marigold-fg: var(--text-primary);
+  --card-marigold-border: rgba(255, 177, 16, 0.28);
+  --card-coral: rgba(246, 73, 50, 0.16);
+  --card-coral-fg: var(--text-primary);
+  --card-coral-border: rgba(246, 73, 50, 0.28);
+  --card-sky: rgba(98, 174, 240, 0.16);
+  --card-sky-fg: var(--text-primary);
+  --card-sky-border: rgba(98, 174, 240, 0.28);
+  --card-tint: rgba(230, 243, 254, 0.16);
+  --card-tint-fg: var(--text-primary);
+  --card-tint-border: rgba(230, 243, 254, 0.28);
+  --card-peach: rgba(246, 213, 184, 0.16);
+  --card-peach-fg: var(--text-primary);
+  --card-peach-border: rgba(246, 213, 184, 0.28);
+  --card-midnight: rgba(74, 91, 208, 0.16);
+  --card-midnight-fg: var(--text-primary);
+  --card-midnight-border: rgba(74, 91, 208, 0.28);
 
   /* Method colors — dark (unchanged hues) */
   --m-get-fg: var(--sky-400-dark);
@@ -245,6 +309,8 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.55), 0 2px 4px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.62), 0 4px 10px rgba(0, 0, 0, 0.45);
+  --shadow-nav: 0 1px 0 rgba(0, 0, 0, 0.4), 0 3px 9px rgba(0, 0, 0, 0.45);
+  --shadow-mockup: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 @layer base {
@@ -258,9 +324,9 @@
     background: var(--bg-canvas);
     color: var(--text-primary);
     font-family: var(--font-sans);
-    font-size: 15px;
+    font-size: 16px;
     line-height: 1.5;
-    font-feature-settings: 'lnum' 1;
+    font-feature-settings: 'lnum' 1, 'locl' 0;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -287,7 +353,7 @@
     position: relative;
     overflow: hidden;
     background: var(--bg-subtle);
-    border-radius: 6px;
+    border-radius: 4px;
   }
   .skeleton::after {
     content: '';
@@ -303,6 +369,9 @@
    row arrival becomes an instant insert; skeleton becomes a static block;
    pills/spinners carry state in text, never spin-only. */
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --ease-spring: linear;
+  }
   *,
   *::before,
   *::after {
