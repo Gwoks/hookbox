@@ -6,12 +6,14 @@
 
 pub mod cookie;
 pub mod csrf;
+pub mod mock_harden;
 
 pub use cookie::{
     clear_cookie_value, cookie_name, is_session_cookie, read_session_cookie, set_cookie_value,
     strip_session_cookie,
 };
 pub use csrf::{csrf_guard, origin_allowed};
+pub use mock_harden::{harden_mock_response, MOCK_SANDBOX_CSP};
 
 /// Cookie name when `SESSION_COOKIE_SECURE` (https deployments).
 pub const COOKIE_NAME_SECURE: &str = "__Host-hookbox_key";

@@ -13,6 +13,7 @@ mod api {
     mod capture;
     mod feed_auth;
     mod management;
+    mod mock_hardening;
     mod mock_plane;
     mod session;
     mod share_leaks;

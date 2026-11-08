@@ -27,8 +27,9 @@ use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::interceptor::engine;
 use crate::net::headers::try_header;
-use crate::planes::{resolve_plane, Plane, PlaneResult};
+use crate::planes::{mock_host_token, resolve_plane, Plane, PlaneResult};
 use crate::routes;
+use crate::session::{harden_mock_response, strip_session_cookie};
 use crate::state::AppState;
 
 fn plane_str(p: &Plane) -> &'static str {
@@ -94,11 +95,18 @@ fn urlencoding_decode(s: &str) -> String {
 
 /// Run the P1 interceptor for a mock request: buffer the (capped) body, then
 /// hand off to `engine::handle_mock`.
+///
+/// INCOMING CHOKE POINT: the owner-key session cookie is stripped from the
+/// header copy before anything mock-side sees it, so it can never reach a
+/// trace, a `{{request.header.cookie}}` template, an echo body, a MITM
+/// upstream or a tunnel CLI (a browser on the app origin attaches it to
+/// every path-fallback `/e/<token>` request).
 async fn run_interceptor(state: &AppState, result: &PlaneResult, req: Request<Body>) -> Response {
     let token = result.token.clone().unwrap_or_default();
     let mock_path = result.mock_path.clone().unwrap_or_else(|| "/".to_string());
     let method = req.method().as_str().to_string();
-    let headers = req.headers().clone();
+    let mut headers = req.headers().clone();
+    strip_session_cookie(&mut headers);
     let query = parse_query(req.uri());
 
     // Early ingest cap via Content-Length, then buffer the body.
@@ -162,7 +170,15 @@ pub async fn plane_dispatch(
 
     let mut resp = match result.plane {
         // Mock host (or /e fallback) never enters the management/UI router.
-        Plane::Mock => run_interceptor(&state, &result, req).await,
+        // OUTGOING CHOKE POINT: every P1 response is hardened (sandbox CSP,
+        // no Clear-Site-Data, no session Set-Cookie; no Set-Cookie at all on
+        // the app origin) — see `session::mock_harden`.
+        Plane::Mock => {
+            let wildcard = mock_host_token(&host, &state.cfg.mock_domain, &state.cfg.app_hosts);
+            let mut resp = run_interceptor(&state, &result, req).await;
+            harden_mock_response(&mut resp, wildcard.is_none());
+            resp
+        }
         // Management API (P2) + UI/feed/health (P3) route normally.
         _ => next.run(req).await,
     };

@@ -2,6 +2,7 @@
 status: 404
 headers:
   content-length: 57
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   x-hookbox-endpoint: zzzzzzzzzzzz
   x-hookbox-plane: mock
@@ -11,6 +12,7 @@ body: {"detail":"No such endpoint.","error":"unknown_endpoint"}
 status: 404
 headers:
   content-length: 57
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   x-hookbox-endpoint: zzzzzzzzzzzz
   x-hookbox-plane: mock
@@ -22,6 +24,7 @@ headers:
   access-control-allow-origin: *
   access-control-expose-headers: *
   content-length: 61
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   vary: Origin
   x-hookbox-endpoint: <token>
@@ -33,6 +36,7 @@ body: {"detail":"No rule matched this request.","error":"no_match"}
 status: 410
 headers:
   content-length: 74
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   x-hookbox-endpoint: <token>
   x-hookbox-plane: mock
