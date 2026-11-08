@@ -6,15 +6,17 @@
 //! Ported from `app/auth.py` / `app/routes/api.py` / `app/interceptor/engine.py`,
 //! where every non-2xx body is `{"error": code, "detail": human}`.
 
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Request};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::net::headers::try_header;
+
+mod api_json;
+mod code;
+
+pub use api_json::ApiJson;
+pub use code::ErrorCode;
 
 /// Internal error type, converted to the flat JSON envelope on response.
 ///
@@ -25,16 +27,16 @@ use crate::net::headers::try_header;
 #[derive(Debug, Clone)]
 pub struct ApiError {
     pub status: StatusCode,
-    pub code: String,
+    pub code: ErrorCode,
     pub detail: String,
     pub headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl ApiError {
-    pub fn new(status: StatusCode, code: impl Into<String>, detail: impl Into<String>) -> Self {
+    pub fn new(status: StatusCode, code: ErrorCode, detail: impl Into<String>) -> Self {
         ApiError {
             status,
-            code: code.into(),
+            code,
             detail: detail.into(),
             headers: Vec::new(),
         }
@@ -50,7 +52,7 @@ impl ApiError {
 
     /// `401 unauthorized` + `WWW-Authenticate: Bearer` (§5.1).
     pub fn unauthorized(detail: impl Into<String>) -> Self {
-        ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized", detail)
+        ApiError::new(StatusCode::UNAUTHORIZED, ErrorCode::Unauthorized, detail)
             .with_header("www-authenticate", "Bearer")
     }
 
@@ -60,7 +62,7 @@ impl ApiError {
     pub fn csrf_rejected() -> Self {
         ApiError::new(
             StatusCode::FORBIDDEN,
-            "csrf_rejected",
+            ErrorCode::CsrfRejected,
             "This request must come from the HookBox app.",
         )
     }
@@ -69,7 +71,7 @@ impl ApiError {
     pub fn invalid_key() -> Self {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
-            "invalid_key",
+            ErrorCode::InvalidKey,
             "That recovery key is not valid.",
         )
     }
@@ -77,7 +79,7 @@ impl ApiError {
     /// `404 not_found` — used for both "absent" and "exists-but-not-mine"
     /// (a non-owner cannot distinguish the two; never 403). §5.1.
     pub fn not_found(detail: impl Into<String>) -> Self {
-        ApiError::new(StatusCode::NOT_FOUND, "not_found", detail)
+        ApiError::new(StatusCode::NOT_FOUND, ErrorCode::NotFound, detail)
     }
 
     /// `410 endpoint_gone` — the endpoint was deleted (tombstoned). The mock
@@ -85,14 +87,18 @@ impl ApiError {
     pub fn endpoint_gone() -> Self {
         ApiError::new(
             StatusCode::GONE,
-            "endpoint_gone",
+            ErrorCode::EndpointGone,
             "This endpoint was deleted or expired.",
         )
     }
 
     /// `422` validation failure (bad field / clamp).
     pub fn validation(detail: impl Into<String>) -> Self {
-        ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", detail)
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::ValidationError,
+            detail,
+        )
     }
 
     /// `422 invalid_collection` — a collection name outside the safe
@@ -100,20 +106,24 @@ impl ApiError {
     pub fn invalid_collection() -> Self {
         ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_collection",
+            ErrorCode::InvalidCollection,
             "Invalid collection name.",
         )
     }
 
     /// `429 rate_limited` with `Retry-After` (and optional `X-RateLimit-*`).
     pub fn rate_limited(detail: impl Into<String>, retry_after: i64) -> Self {
-        ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", detail)
-            .with_header("retry-after", retry_after.to_string())
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::RateLimited,
+            detail,
+        )
+        .with_header("retry-after", retry_after.to_string())
     }
 
     /// The flat JSON body value `{"error": <code>, "detail": <detail>}`.
     pub fn body(&self) -> serde_json::Value {
-        json!({ "error": self.code, "detail": self.detail })
+        json!({ "error": self.code.as_str(), "detail": self.detail })
     }
 }
 
@@ -142,82 +152,15 @@ impl From<sqlx::Error> for ApiError {
         tracing::error!("sqlite error: {e}");
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "store_unavailable",
+            ErrorCode::StoreUnavailable,
             "The data store is temporarily unavailable. Please try again.",
         )
     }
 }
 
-/// `axum::Json<T>` whose rejection (bad content-type, unparseable or
-/// mistyped body, oversize body) is the flat `{error, detail}` envelope
-/// instead of axum's text/plain body. The status is axum's own: 422 →
-/// `validation_error`, 413 → `payload_too_large`, 400 / 415 → `bad_request`;
-/// `detail` is axum's message.
-pub struct ApiJson<T>(pub T);
-
-#[axum::async_trait]
-impl<T, S> FromRequest<S> for ApiJson<T>
-where
-    T: DeserializeOwned,
-    S: Send + Sync,
-{
-    type Rejection = ApiError;
-
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
-            Ok(Json(value)) => Ok(ApiJson(value)),
-            Err(rejection) => Err(json_rejection(&rejection)),
-        }
-    }
-}
-
-fn json_rejection(rejection: &JsonRejection) -> ApiError {
-    let status = rejection.status();
-    let code = match status {
-        StatusCode::UNPROCESSABLE_ENTITY => "validation_error",
-        StatusCode::PAYLOAD_TOO_LARGE => "payload_too_large",
-        _ => "bad_request",
-    };
-    ApiError::new(status, code, rejection.body_text())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-
-    async fn api_json(content_type: &str, body: &'static str) -> Result<i64, ApiError> {
-        #[derive(serde::Deserialize)]
-        struct Probe {
-            n: i64,
-        }
-        let req = Request::builder()
-            .method("POST")
-            .uri("/")
-            .header("content-type", content_type)
-            .body(Body::from(body))
-            .unwrap();
-        ApiJson::<Probe>::from_request(req, &())
-            .await
-            .map(|ApiJson(p)| p.n)
-    }
-
-    #[tokio::test]
-    async fn api_json_maps_every_rejection_to_the_envelope() {
-        assert_eq!(api_json("application/json", r#"{"n":1}"#).await.unwrap(), 1);
-        let typed = api_json("application/json", r#"{"n":"x"}"#)
-            .await
-            .unwrap_err();
-        assert_eq!(typed.status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(typed.code, "validation_error");
-        assert!(typed.detail.contains("invalid type"), "{}", typed.detail);
-        let syntax = api_json("application/json", "{not json").await.unwrap_err();
-        assert_eq!(syntax.status, StatusCode::BAD_REQUEST);
-        assert_eq!(syntax.code, "bad_request");
-        let media = api_json("text/plain", r#"{"n":1}"#).await.unwrap_err();
-        assert_eq!(media.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert_eq!(media.code, "bad_request");
-    }
 
     #[test]
     fn flat_envelope_shape() {

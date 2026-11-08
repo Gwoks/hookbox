@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::Request,
     middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
     Router,
@@ -26,6 +26,7 @@ use http_body_util::BodyExt;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::interceptor::engine;
+use crate::interceptor::mock_error::MockError;
 use crate::net::headers::try_header;
 use crate::planes::{mock_host_token, resolve_plane, Plane, PlaneResult};
 use crate::routes;
@@ -144,12 +145,10 @@ async fn run_interceptor(state: &AppState, result: &PlaneResult, req: Request<Bo
     engine::handle_mock(state, &token, &mock_path, &method, headers, query, body).await
 }
 
+/// The early 413: only `X-HookBox-Endpoint` (no served-by / CORS headers —
+/// the endpoint config has not been loaded yet).
 fn oversize_response(token: &str) -> Response {
-    let mut r = (
-        StatusCode::PAYLOAD_TOO_LARGE,
-        axum::Json(serde_json::json!({"error":"payload_too_large","detail":"Request body exceeds the configured limit."})),
-    )
-        .into_response();
+    let mut r = MockError::PayloadTooLarge.into_response();
     if let Some((name, value)) = try_header("x-hookbox-endpoint", token) {
         r.headers_mut().insert(name, value);
     }
@@ -230,6 +229,7 @@ async fn test_panic_handler() -> Response {
 mod tests {
     use super::*;
     use crate::testing::{memory_pool, test_config};
+    use axum::http::StatusCode;
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
     use tower::ServiceExt;

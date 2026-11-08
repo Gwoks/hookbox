@@ -13,14 +13,16 @@
 //! `X-HookBox-Truncated` (MITM only) + auto-CORS (P1, when enabled).
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body, Bytes, HttpBody};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use serde_json::{json, Value};
 
+use crate::error::ApiError;
 use crate::feed::FeedEvent;
+use crate::interceptor::mock_error::MockError;
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
 use crate::net::headers::{
     contains_ci, header_pairs, redact, response_headers_for_trace, try_header, REDACTED,
@@ -29,6 +31,7 @@ use crate::net::headers::{
 use crate::repo::requests::{insert_trace, TraceRecord};
 use crate::rule_cache::{CompiledEndpoint, Resolved};
 use crate::state::AppState;
+use crate::tunnels::TunnelRequest;
 use crate::util::text::body_for_trace;
 use crate::util::time::now_iso;
 
@@ -68,11 +71,7 @@ pub async fn handle_mock(
     // 0a. Ingest body cap (413 before buffering further — body already read, so
     // we reject oversize here as a backstop; the router enforces the limit too).
     if body.len() > state.cfg.max_ingest_body_bytes {
-        let resp = json_response(
-            413,
-            &json!({"error":"payload_too_large","detail":"Request body exceeds the configured limit."}),
-            "application/json",
-        );
+        let resp = MockError::PayloadTooLarge.into_response();
         return identified(resp, token, "default", None, &ep, &headers_lower);
     }
     let body_text = String::from_utf8_lossy(&body).to_string();
@@ -267,18 +266,10 @@ pub async fn handle_mock(
         let rl = state.limiter.check(&key, eff_rate, 60);
         if !rl.allowed {
             trace.push(step("rate_limit", &format!("429 (limit {eff_rate}/min)")));
-            let mut r = json_response(
-                429,
-                &json!({"error":"rate_limited","detail":"Rate limit exceeded."}),
-                "application/json",
-            );
-            insert_header(r.headers_mut(), "retry-after", &rl.retry_after.to_string());
-            insert_header(r.headers_mut(), "x-ratelimit-limit", &rl.limit.to_string());
-            insert_header(
-                r.headers_mut(),
-                "x-ratelimit-remaining",
-                &rl.remaining.to_string(),
-            );
+            let r = ApiError::rate_limited("Rate limit exceeded.", rl.retry_after)
+                .with_header("x-ratelimit-limit", rl.limit.to_string())
+                .with_header("x-ratelimit-remaining", rl.remaining.to_string())
+                .into_response();
             let r = identified(r, token, "ratelimit", matched_rule_id, &ep, &headers_lower);
             let (r, rb) = capture_response_body(r).await;
             spawn_trace(
@@ -338,11 +329,7 @@ pub async fn handle_mock(
         }
         conditions::Chaos::Status(code) => {
             trace.push(step("chaos", &code.to_string()));
-            let r = json_response(
-                code as u16,
-                &json!({"error":"chaos","detail":"Injected chaos failure."}),
-                "application/json",
-            );
+            let r = MockError::Chaos(code as u16).into_response();
             let r = identified(r, token, "chaos", matched_rule_id, &ep, &headers_lower);
             let (r, rb) = capture_response_body(r).await;
             spawn_trace(
@@ -462,14 +449,11 @@ async fn resolve_unmatched(
                 };
                 return (resp, "crud".into());
             }
-            Err(_) => {
+            Err(e) => {
+                tracing::warn!("auto-crud store error: {e}");
                 trace.push(step("crud", "store error -> 503"));
                 return (
-                    json_response(
-                        503,
-                        &json!({"error":"store_unavailable","detail":"Auto-CRUD store unavailable."}),
-                        "application/json",
-                    ),
+                    MockError::CrudStoreUnavailable.into_response(),
                     "crud".into(),
                 );
             }
@@ -478,31 +462,23 @@ async fn resolve_unmatched(
 
     // 4b. Tunnel (if a CLI is bound).
     if state.tunnels.is_active(token) {
-        match crate::routes::tunnel_ws::forward_to_tunnel(
-            state,
-            token,
+        let req = TunnelRequest {
             method,
-            mock_path,
+            path: mock_path,
             query,
-            headers_lower,
+            headers: headers_lower,
             body,
-        )
-        .await
-        {
+        };
+        let timeout = Duration::from_secs(state.cfg.tunnel_request_timeout_s);
+        match state.tunnels.forward(token, &req, timeout).await {
             Ok(resp) => {
                 trace.push(step("tunnel", "forwarded to bound CLI"));
                 return (resp, "tunnel".into());
             }
-            Err(_) => {
+            Err(e) => {
+                tracing::debug!("tunnel forward failed: {e}");
                 trace.push(step("tunnel", "no_tunnel"));
-                return (
-                    json_response(
-                        504,
-                        &json!({"error":"no_tunnel","detail":"Tunnel error."}),
-                        "application/json",
-                    ),
-                    "tunnel".into(),
-                );
+                return (MockError::NoTunnel.into_response(), "tunnel".into());
             }
         }
     }
@@ -534,23 +510,12 @@ async fn resolve_unmatched(
                 }
                 Err(proxy::ProxyError::Timeout) => {
                     trace.push(step("forward", "MITM timeout -> 504"));
-                    return (
-                        json_response(
-                            504,
-                            &json!({"error":"upstream_timeout","detail":"Upstream did not respond in time."}),
-                            "application/json",
-                        ),
-                        "mitm".into(),
-                    );
+                    return (MockError::UpstreamTimeout.into_response(), "mitm".into());
                 }
                 Err(proxy::ProxyError::Unreachable(_)) => {
                     trace.push(step("forward", "MITM unreachable -> 502"));
                     return (
-                        json_response(
-                            502,
-                            &json!({"error":"upstream_unreachable","detail":"Could not reach the upstream target."}),
-                            "application/json",
-                        ),
+                        MockError::UpstreamUnreachable.into_response(),
                         "mitm".into(),
                     );
                 }
@@ -568,14 +533,7 @@ async fn resolve_unmatched(
         );
     }
     trace.push(step("default", "mock_404"));
-    (
-        json_response(
-            404,
-            &json!({"error":"no_match","detail":"No rule matched this request."}),
-            "application/json",
-        ),
-        "default".into(),
-    )
+    (MockError::NoMatch.into_response(), "default".into())
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -732,20 +690,12 @@ fn identified(
 }
 
 fn unknown_or_gone(token: &str, gone: bool) -> Response {
-    let (status, code, detail) = if gone {
-        (
-            410,
-            "endpoint_gone",
-            "This endpoint was deleted or expired.",
-        )
+    let error = if gone {
+        MockError::EndpointGone
     } else {
-        (404, "unknown_endpoint", "No such endpoint.")
+        MockError::UnknownEndpoint
     };
-    let mut r = json_response(
-        status,
-        &json!({"error": code, "detail": detail}),
-        "application/json",
-    );
+    let mut r = error.into_response();
     insert_header(r.headers_mut(), "x-hookbox-endpoint", token);
     r
 }

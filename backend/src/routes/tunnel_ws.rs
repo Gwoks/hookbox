@@ -11,20 +11,16 @@
 //! (req/res/err/ping/pong, base64 bodies). Last-authenticated-bind-wins: a new
 //! bind displaces the prior socket (`{t:err,message:"rebound elsewhere"}` then
 //! close `4409`). Rotating the owner key revokes the binding (close `4401`).
-//! `forward_to_tunnel` replays a public request down the bound socket and
-//! awaits the matching `res`, bounded by `TUNNEL_REQUEST_TIMEOUT_S` →
-//! `504 no_tunnel` (never hangs).
+//! `TunnelRegistry::forward` (tunnels.rs) replays a public request down the
+//! bound socket and awaits the matching `res`, bounded by
+//! `TUNNEL_REQUEST_TIMEOUT_S` → `504 no_tunnel` (never hangs).
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
 
-use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::Response;
-use base64::Engine;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -33,68 +29,9 @@ use tokio::task::JoinHandle;
 
 use crate::auth::{key_owns_token, parse_bearer};
 use crate::feed::FeedEvent;
-use crate::net::headers::{is_tunnel_response_stripped, try_header};
 use crate::net::ws::{close_with, WS_CLOSE_REBOUND, WS_CLOSE_UNAUTHORIZED};
 use crate::state::AppState;
 use crate::tunnels::TunnelConnection;
-
-/// Engine entry point: replay a public request down the bound tunnel (§5.5).
-/// Returns the CLI's response, or `Err(())` on no/closed tunnel / timeout / CLI
-/// error so the engine surfaces a deterministic `504 no_tunnel`.
-pub async fn forward_to_tunnel(
-    state: &AppState,
-    token: &str,
-    method: &str,
-    mock_path: &str,
-    query: &BTreeMap<String, String>,
-    headers: &BTreeMap<String, String>,
-    body: &[u8],
-) -> Result<Response, ()> {
-    let conn = state.tunnels.get(token).ok_or(())?;
-    let (id, rx) = conn.register_request().await;
-    let frame = json!({
-        "t": "req",
-        "id": id,
-        "method": method,
-        "path": mock_path,
-        "query": query,
-        "headers": headers,
-        "body_b64": base64::engine::general_purpose::STANDARD.encode(body),
-    });
-    if conn.outbound.send(frame).is_err() {
-        conn.forget(id).await;
-        return Err(());
-    }
-    let timeout = Duration::from_secs(state.cfg.tunnel_request_timeout_s);
-    let res = match tokio::time::timeout(timeout, rx).await {
-        Ok(Ok(frame)) => frame,
-        _ => {
-            conn.forget(id).await;
-            return Err(());
-        }
-    };
-    // Build the response from the CLI's res frame.
-    let status = res.get("status").and_then(Value::as_i64).unwrap_or(200) as u16;
-    let body_b64 = res.get("body_b64").and_then(Value::as_str).unwrap_or("");
-    let body_bytes = base64::engine::general_purpose::STANDARD
-        .decode(body_b64)
-        .unwrap_or_default();
-    let mut resp = Response::builder()
-        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
-        .body(Body::from(body_bytes))
-        .unwrap();
-    if let Some(h) = res.get("headers").and_then(Value::as_object) {
-        for (k, v) in h {
-            if is_tunnel_response_stripped(k) {
-                continue;
-            }
-            if let Some((name, hv)) = v.as_str().and_then(|val| try_header(k, val)) {
-                resp.headers_mut().insert(name, hv);
-            }
-        }
-    }
-    Ok(resp)
-}
 
 /// `/ws/tunnel/{slug}` handler. Auth runs BEFORE upgrade-accept; on failure we
 /// accept-then-close 4401 so the CLI sees the application close code.

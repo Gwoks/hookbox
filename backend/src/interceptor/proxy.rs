@@ -31,11 +31,13 @@ pub struct ProxyResponse {
 }
 
 /// Why a forward failed (mapped to the §5.5 status by the engine).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProxyError {
     /// SSRF block / connection / DNS error → 502 upstream_unreachable.
+    #[error("upstream unreachable: {0}")]
     Unreachable(String),
     /// Timeout → 504 upstream_timeout.
+    #[error("upstream timed out")]
     Timeout,
 }
 
