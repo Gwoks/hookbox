@@ -70,11 +70,6 @@ export const maxWidth = {
   content: '920px',
   doc: '720px',
   form: '560px',
-  // Legacy keys still used by the pre-rebuild screens (removed in S5).
-  landing: '560px',
-  'landing-hero': '1040px',
-  settings: '640px',
-  viewer: '920px',
 }
 
 export const spacing = {
