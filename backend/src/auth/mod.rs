@@ -19,18 +19,11 @@ use crate::error::ApiError;
 use crate::ids::hash_secret;
 use crate::state::AppState;
 
-/// Parse a `Bearer <secret>` header, returning the raw secret or 401.
-fn parse_bearer(authorization: Option<&str>) -> Result<String, ApiError> {
-    let unauthorized = || ApiError::unauthorized("Valid owner capability required.");
-    let header = authorization.ok_or_else(unauthorized)?;
-    let mut parts = header.splitn(2, ' ');
-    let scheme = parts.next().unwrap_or("");
-    let token = parts.next().unwrap_or("").trim();
-    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
-        return Err(unauthorized());
-    }
-    Ok(token.to_string())
-}
+mod bearer;
+mod ownership;
+
+pub(crate) use bearer::parse_bearer;
+pub use ownership::{assert_owns_endpoint, verify_cap_owns_token};
 
 /// Resolve the authenticated `owner_id` from the bearer secret (PORT of
 /// `require_owner`). Looks up `sha256(secret)`; missing/malformed/unknown → 401.
@@ -38,74 +31,16 @@ pub async fn require_owner(
     pool: &SqlitePool,
     authorization: Option<&str>,
 ) -> Result<String, ApiError> {
-    let secret = parse_bearer(authorization)?;
-    let secret_hash = hash_secret(&secret);
+    let secret = authorization
+        .and_then(parse_bearer)
+        .ok_or_else(|| ApiError::unauthorized("Valid owner capability required."))?;
+    let secret_hash = hash_secret(secret);
     let owner_id: Option<String> =
         sqlx::query_scalar("SELECT owner_id FROM owners WHERE secret_hash = ?")
             .bind(&secret_hash)
             .fetch_optional(pool)
             .await?;
     owner_id.ok_or_else(|| ApiError::unauthorized("Valid owner capability required."))
-}
-
-/// Return the endpoint row's owner check result: `Ok(())` iff `owner_id` owns
-/// `token`; else 404 (never 403). Mirrors `assert_owns_endpoint`. Callers that
-/// need the full row should select it themselves after this passes, or use the
-/// route-layer query that already loads the row.
-pub async fn assert_owns_endpoint(
-    pool: &SqlitePool,
-    token: &str,
-    owner_id: &str,
-) -> Result<(), ApiError> {
-    let row_owner: Option<String> =
-        sqlx::query_scalar("SELECT owner_id FROM endpoints WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await?;
-    match row_owner {
-        Some(o) if o == owner_id => Ok(()),
-        _ => Err(ApiError::not_found("Endpoint not found.")),
-    }
-}
-
-/// Return true iff `secret` is a valid owner capability that owns `token`.
-///
-/// Used by the WS/SSE feed gate (§5.4) and the tunnel bind handshake (§5.8),
-/// which run *before* any extractor and therefore cannot use `require_owner`.
-/// A missing/blank secret or token returns false without a credential DB hit.
-/// Never errors — a DB hiccup denies (returns false).
-pub async fn verify_cap_owns_token(pool: &SqlitePool, token: &str, secret: Option<&str>) -> bool {
-    let secret = match secret {
-        Some(s) if !s.is_empty() => s,
-        _ => return false,
-    };
-    if token.is_empty() {
-        return false;
-    }
-    let secret_hash = hash_secret(secret);
-    let owner_id: Option<String> =
-        match sqlx::query_scalar("SELECT owner_id FROM owners WHERE secret_hash = ?")
-            .bind(&secret_hash)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-    let owner_id = match owner_id {
-        Some(o) => o,
-        None => return false,
-    };
-    let ep_owner: Option<String> =
-        match sqlx::query_scalar("SELECT owner_id FROM endpoints WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-    matches!(ep_owner, Some(o) if o == owner_id)
 }
 
 /// Axum extractor: an authenticated owner id resolved from the `Authorization`
@@ -133,21 +68,12 @@ impl FromRequestParts<AppState> for OwnerId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-    use crate::ids::{gen_owner_secret, hash_email, hash_secret};
+    use crate::ids::gen_owner_secret;
+    use crate::testing::{memory_pool, seed_endpoint, seed_owner, SeededOwner};
 
     async fn setup() -> (SqlitePool, String, String) {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        let owner_id = hash_email("a@b.com");
-        let secret = gen_owner_secret(32);
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
-            .bind(&owner_id)
-            .bind("a@b.com")
-            .bind(hash_secret(&secret))
-            .execute(&pool)
-            .await
-            .unwrap();
+        let pool = memory_pool().await;
+        let SeededOwner { owner_id, secret } = seed_owner(&pool).await;
         (pool, owner_id, secret)
     }
 
@@ -227,22 +153,12 @@ mod tests {
     async fn non_owner_of_token_is_404_not_403() {
         let (pool, owner_id, secret) = setup().await;
         // Owner A's endpoint.
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES (?, ?)")
-            .bind("tokAAAAAAA")
-            .bind(&owner_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        seed_endpoint(&pool, &owner_id, "tokAAAAAAA").await;
         // Owner B.
-        let b_id = hash_email("b@c.com");
-        let b_secret = gen_owner_secret(32);
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
-            .bind(&b_id)
-            .bind("b@c.com")
-            .bind(hash_secret(&b_secret))
-            .execute(&pool)
-            .await
-            .unwrap();
+        let SeededOwner {
+            owner_id: b_id,
+            secret: b_secret,
+        } = seed_owner(&pool).await;
 
         // Owner A owns it.
         assert!(assert_owns_endpoint(&pool, "tokAAAAAAA", &owner_id)

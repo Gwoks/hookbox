@@ -11,6 +11,8 @@
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
+use crate::util::json::parse_json_or;
+
 /// Outcome of a mutation closure run inside the transaction.
 pub enum Mutation {
     /// New array + the item value to return to the caller.
@@ -19,17 +21,6 @@ pub enum Mutation {
     NotFound,
     /// A cap (item bytes) was exceeded.
     TooLarge,
-}
-
-#[derive(Debug)]
-pub enum CrudError {
-    Sqlx(sqlx::Error),
-}
-
-impl From<sqlx::Error> for CrudError {
-    fn from(e: sqlx::Error) -> Self {
-        CrudError::Sqlx(e)
-    }
 }
 
 /// Read the current items array for a collection (live, non-expired).
@@ -45,14 +36,7 @@ pub async fn list_items(
     .bind(name)
     .fetch_optional(pool)
     .await?;
-    Ok(parse_items(items))
-}
-
-fn parse_items(s: Option<String>) -> Vec<Value> {
-    match s {
-        Some(t) if !t.is_empty() => serde_json::from_str(&t).unwrap_or_default(),
-        _ => Vec::new(),
-    }
+    Ok(parse_json_or(items, Vec::new()))
 }
 
 /// Persist a new items array for a collection inside the calling transaction.
@@ -91,7 +75,7 @@ pub async fn append_item(
     mut obj: serde_json::Map<String, Value>,
     max_items: usize,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     let mut tx = pool.begin().await?;
     // BEGIN IMMEDIATE: take the write lock up front to serialize writers.
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
@@ -101,7 +85,7 @@ pub async fn append_item(
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_items(current);
+    let mut items = parse_json_or(current, Vec::new());
     if items.len() >= max_items {
         tx.rollback().await.ok();
         return Ok(Mutation::TooLarge);
@@ -123,7 +107,7 @@ pub async fn replace_item(
     id: &str,
     mut obj: serde_json::Map<String, Value>,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     obj.insert("id".into(), json!(id));
     cas_mutate(pool, token, name, ttl_seconds, |items| {
         match find_index(items, id) {
@@ -147,7 +131,7 @@ pub async fn merge_item(
     patch: serde_json::Map<String, Value>,
     max_item_bytes: usize,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     cas_mutate(pool, token, name, ttl_seconds, |items| {
         match find_index(items, id) {
             Some(i) => {
@@ -176,7 +160,7 @@ pub async fn delete_item(
     name: &str,
     id: &str,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     cas_mutate(pool, token, name, ttl_seconds, |items| {
         match find_index(items, id) {
             Some(i) => {
@@ -198,7 +182,7 @@ async fn cas_mutate<F>(
     name: &str,
     ttl_seconds: i64,
     f: F,
-) -> Result<Mutation, CrudError>
+) -> Result<Mutation, sqlx::Error>
 where
     F: FnOnce(&mut Vec<Value>) -> Mutation,
 {
@@ -210,7 +194,7 @@ where
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_items(current);
+    let mut items = parse_json_or(current, Vec::new());
     match f(&mut items) {
         Mutation::Ok(new_items, ret) => {
             write_items(&mut tx, token, name, &new_items, ttl_seconds).await?;
@@ -237,20 +221,10 @@ fn find_index(items: &[Value], id: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
+    use crate::testing::pool_with_endpoint;
 
     async fn pool_ep() -> SqlitePool {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool
+        pool_with_endpoint("tok").await.0
     }
 
     fn obj(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {

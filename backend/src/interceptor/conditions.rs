@@ -90,11 +90,7 @@ mod tests {
     use super::*;
 
     fn cfg() -> Config {
-        let _guard = crate::testutil::env_lock();
-        for k in ["LATENCY_MAX_MS", "RATE_LIMIT_MAX_PER_MIN"] {
-            std::env::remove_var(k);
-        }
-        Config::from_env()
+        crate::testing::test_config()
     }
 
     #[test]

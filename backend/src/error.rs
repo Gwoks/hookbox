@@ -10,6 +10,8 @@ use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+use crate::net::headers::try_header;
+
 /// Internal error type, converted to the flat JSON envelope on response.
 ///
 /// `code` is the stable machine string (e.g. `"unauthorized"`, `"not_found"`),
@@ -36,11 +38,8 @@ impl ApiError {
 
     /// Attach an extra response header (silently ignored if invalid).
     pub fn with_header(mut self, name: &'static str, value: impl AsRef<str>) -> Self {
-        if let (Ok(n), Ok(v)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value.as_ref()),
-        ) {
-            self.headers.push((n, v));
+        if let Some(pair) = try_header(name, value.as_ref()) {
+            self.headers.push(pair);
         }
         self
     }
@@ -60,6 +59,16 @@ impl ApiError {
     /// `422` validation failure (bad field / clamp / bad email).
     pub fn validation(detail: impl Into<String>) -> Self {
         ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", detail)
+    }
+
+    /// `422 invalid_collection` — a collection name outside the safe
+    /// `^[A-Za-z0-9_-]{1,64}$` charset (§5.2 #17/#18).
+    pub fn invalid_collection() -> Self {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_collection",
+            "Invalid collection name.",
+        )
     }
 
     /// `429 rate_limited` with `Retry-After` (and optional `X-RateLimit-*`).

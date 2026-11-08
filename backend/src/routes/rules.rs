@@ -1,0 +1,320 @@
+//! Mock-rule management routes (§5.2 #7–#11). A rule row's
+//! `match`/`response`/`state_writes`/`webhook_action` JSON columns come back
+//! as parsed values so the exact stored shape round-trips.
+
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde_json::{json, Value};
+use sqlx::Row;
+
+use crate::auth::{assert_owns_endpoint, OwnerId};
+use crate::error::ApiError;
+use crate::models::{MatchCriteria, MockRule, MockRuleCreate, ResponseSpec, StateWrite};
+use crate::repo::bind_value;
+use crate::state::AppState;
+use crate::util::json::parse_json_or;
+use crate::util::time::to_rfc3339;
+
+fn rule_from_row(row: &sqlx::sqlite::SqliteRow) -> MockRule {
+    let webhook: Option<String> = row.get("webhook_json");
+    MockRule {
+        id: row.get("id"),
+        token: row.get("token"),
+        name: row.get("name"),
+        priority: row.get("priority"),
+        enabled: row.get::<i64, _>("enabled") != 0,
+        match_: parse_json_or(row.get("match_json"), json!({})),
+        response: parse_json_or(row.get("response_json"), json!({})),
+        state_writes: parse_json_or(row.get("state_writes_json"), json!([])),
+        latency_ms: row.get("latency_ms"),
+        rate_limit_per_min: row.get("rate_limit_per_min"),
+        chaos_mode: row.get("chaos_mode"),
+        webhook_action: webhook.and_then(|w| serde_json::from_str(&w).ok()),
+        created_at: to_rfc3339(row.get("created_at")).unwrap_or_default(),
+    }
+}
+
+// --- 7. GET /api/endpoints/{token}/rules -------------------------------------
+
+pub(super) async fn list_rules(
+    State(state): State<AppState>,
+    OwnerId(owner_id): OwnerId,
+    Path(token): Path<String>,
+) -> Result<Json<Vec<MockRule>>, ApiError> {
+    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    let rows = sqlx::query("SELECT * FROM mock_rules WHERE token = ? ORDER BY priority, id")
+        .bind(&token)
+        .fetch_all(&state.pool)
+        .await?;
+    Ok(Json(rows.iter().map(rule_from_row).collect()))
+}
+
+// --- 8. POST /api/endpoints/{token}/rules ------------------------------------
+
+fn clamp_opt(v: Option<i64>, lo: i64, hi: i64) -> Option<i64> {
+    v.map(|n| n.clamp(lo, hi))
+}
+
+fn validate_rule(state: &AppState, r: &MockRuleCreate) -> Result<(), ApiError> {
+    if let Some(n) = &r.name {
+        if n.chars().count() > 120 {
+            return Err(ApiError::validation("name must be at most 120 characters."));
+        }
+    }
+    if !(0..=100000).contains(&r.priority) {
+        return Err(ApiError::validation(
+            "priority must be between 0 and 100000.",
+        ));
+    }
+    if r.response.status_code < 100 || r.response.status_code > 599 {
+        return Err(ApiError::validation(
+            "response.status_code must be 100..599.",
+        ));
+    }
+    if r.response.body_template.len() > state.cfg.template_max_size {
+        return Err(ApiError::validation("response.body_template is too large."));
+    }
+    if let Some(m) = &r.chaos_mode {
+        if m != "error" && m != "dropout" {
+            return Err(ApiError::validation(
+                "chaos_mode must be 'error' or 'dropout'.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn create_rule(
+    State(state): State<AppState>,
+    OwnerId(owner_id): OwnerId,
+    Path(token): Path<String>,
+    Json(data): Json<MockRuleCreate>,
+) -> Result<Response, ApiError> {
+    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    validate_rule(&state, &data)?;
+    let latency = clamp_opt(data.latency_ms, 0, state.cfg.latency_max_ms);
+    let rate = clamp_opt(data.rate_limit_per_min, 0, state.cfg.rate_limit_max_per_min);
+    let match_json = serde_json::to_string(&data.r#match).unwrap();
+    let response_json = serde_json::to_string(&data.response).unwrap();
+    let writes_json = serde_json::to_string(&data.state_writes).unwrap();
+    let webhook_json = data
+        .webhook_action
+        .as_ref()
+        .map(|w| serde_json::to_string(w).unwrap());
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO mock_rules
+            (token, name, priority, enabled, match_json, response_json,
+             state_writes_json, latency_ms, rate_limit_per_min, chaos_mode, webhook_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(&token)
+    .bind(&data.name)
+    .bind(data.priority)
+    .bind(data.enabled as i64)
+    .bind(&match_json)
+    .bind(&response_json)
+    .bind(&writes_json)
+    .bind(latency)
+    .bind(rate)
+    .bind(&data.chaos_mode)
+    .bind(&webhook_json)
+    .fetch_one(&state.pool)
+    .await?;
+
+    state.rule_cache.invalidate(&token);
+    let row = sqlx::query("SELECT * FROM mock_rules WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok((StatusCode::CREATED, Json(rule_from_row(&row))).into_response())
+}
+
+// --- 9. GET /api/endpoints/{token}/rules/{id} --------------------------------
+
+pub(super) async fn get_rule(
+    State(state): State<AppState>,
+    OwnerId(owner_id): OwnerId,
+    Path((token, rule_id)): Path<(String, i64)>,
+) -> Result<Json<MockRule>, ApiError> {
+    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    let row = sqlx::query("SELECT * FROM mock_rules WHERE id = ? AND token = ?")
+        .bind(rule_id)
+        .bind(&token)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Rule not found."))?;
+    Ok(Json(rule_from_row(&row)))
+}
+
+// --- 10. PATCH /api/endpoints/{token}/rules/{id} -----------------------------
+
+pub(super) async fn patch_rule(
+    State(state): State<AppState>,
+    OwnerId(owner_id): OwnerId,
+    Path((token, rule_id)): Path<(String, i64)>,
+    Json(raw): Json<Value>,
+) -> Result<Json<MockRule>, ApiError> {
+    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
+            .bind(rule_id)
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("Rule not found."));
+    }
+    let obj = raw
+        .as_object()
+        .ok_or_else(|| ApiError::validation("Request body must be a JSON object."))?;
+
+    let mut sets: Vec<String> = Vec::new();
+    let mut binds: Vec<Value> = Vec::new();
+
+    if let Some(v) = obj.get("name") {
+        sets.push("name = ?".into());
+        binds.push(v.clone());
+    }
+    if let Some(v) = obj.get("priority") {
+        let n = v
+            .as_i64()
+            .ok_or_else(|| ApiError::validation("priority must be an integer."))?;
+        if !(0..=100000).contains(&n) {
+            return Err(ApiError::validation(
+                "priority must be between 0 and 100000.",
+            ));
+        }
+        sets.push("priority = ?".into());
+        binds.push(json!(n));
+    }
+    if let Some(v) = obj.get("enabled") {
+        let b = v
+            .as_bool()
+            .ok_or_else(|| ApiError::validation("enabled must be a boolean."))?;
+        sets.push("enabled = ?".into());
+        binds.push(json!(b as i64));
+    }
+    if let Some(v) = obj.get("match") {
+        let m: MatchCriteria = serde_json::from_value(v.clone())
+            .map_err(|_| ApiError::validation("match is malformed."))?;
+        sets.push("match_json = ?".into());
+        binds.push(json!(serde_json::to_string(&m).unwrap()));
+    }
+    if let Some(v) = obj.get("response") {
+        let r: ResponseSpec = serde_json::from_value(v.clone())
+            .map_err(|_| ApiError::validation("response is malformed."))?;
+        if r.status_code < 100 || r.status_code > 599 {
+            return Err(ApiError::validation(
+                "response.status_code must be 100..599.",
+            ));
+        }
+        sets.push("response_json = ?".into());
+        binds.push(json!(serde_json::to_string(&r).unwrap()));
+    }
+    if let Some(v) = obj.get("state_writes") {
+        let w: Vec<StateWrite> = serde_json::from_value(v.clone())
+            .map_err(|_| ApiError::validation("state_writes is malformed."))?;
+        sets.push("state_writes_json = ?".into());
+        binds.push(json!(serde_json::to_string(&w).unwrap()));
+    }
+    if let Some(v) = obj.get("latency_ms") {
+        let n = if v.is_null() {
+            None
+        } else {
+            Some(
+                v.as_i64()
+                    .ok_or_else(|| ApiError::validation("latency_ms must be an integer."))?,
+            )
+        };
+        sets.push("latency_ms = ?".into());
+        binds.push(match clamp_opt(n, 0, state.cfg.latency_max_ms) {
+            Some(x) => json!(x),
+            None => Value::Null,
+        });
+    }
+    if let Some(v) = obj.get("rate_limit_per_min") {
+        let n =
+            if v.is_null() {
+                None
+            } else {
+                Some(v.as_i64().ok_or_else(|| {
+                    ApiError::validation("rate_limit_per_min must be an integer.")
+                })?)
+            };
+        sets.push("rate_limit_per_min = ?".into());
+        binds.push(match clamp_opt(n, 0, state.cfg.rate_limit_max_per_min) {
+            Some(x) => json!(x),
+            None => Value::Null,
+        });
+    }
+    if let Some(v) = obj.get("chaos_mode") {
+        if !v.is_null() {
+            let m = v.as_str().unwrap_or("");
+            if m != "error" && m != "dropout" {
+                return Err(ApiError::validation(
+                    "chaos_mode must be 'error' or 'dropout'.",
+                ));
+            }
+        }
+        sets.push("chaos_mode = ?".into());
+        binds.push(v.clone());
+    }
+    if let Some(v) = obj.get("webhook_action") {
+        sets.push("webhook_json = ?".into());
+        binds.push(match v {
+            Value::Null => Value::Null,
+            other => json!(other.to_string()),
+        });
+    }
+
+    if !sets.is_empty() {
+        let sql = format!(
+            "UPDATE mock_rules SET {} WHERE id = ? AND token = ?",
+            sets.join(", ")
+        );
+        let mut q = sqlx::query(&sql);
+        for b in &binds {
+            q = bind_value(q, b);
+        }
+        q = q.bind(rule_id).bind(&token);
+        q.execute(&state.pool).await?;
+        state.rule_cache.invalidate(&token);
+    }
+
+    let row = sqlx::query("SELECT * FROM mock_rules WHERE id = ?")
+        .bind(rule_id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(rule_from_row(&row)))
+}
+
+// --- 11. DELETE /api/endpoints/{token}/rules/{id} (204, no body) -------------
+
+pub(super) async fn delete_rule(
+    State(state): State<AppState>,
+    OwnerId(owner_id): OwnerId,
+    Path((token, rule_id)): Path<(String, i64)>,
+) -> Result<Response, ApiError> {
+    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
+            .bind(rule_id)
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("Rule not found."));
+    }
+    sqlx::query("DELETE FROM mock_rules WHERE id = ? AND token = ?")
+        .bind(rule_id)
+        .bind(&token)
+        .execute(&state.pool)
+        .await?;
+    state.rule_cache.invalidate(&token);
+    Ok(StatusCode::NO_CONTENT.into_response()) // 204 carries no body
+}

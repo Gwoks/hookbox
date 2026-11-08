@@ -17,10 +17,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::helpers::jsonpath_lite;
 use crate::models::{
     BodyCondition, MatchCriteria, ResponseSpec, StateRequirement, StateWrite, WebhookAction,
 };
+use crate::util::json::jsonpath_lite;
 
 /// A compiled path: a sequence of segment matchers plus a trailing-wildcard flag.
 #[derive(Debug, Clone)]

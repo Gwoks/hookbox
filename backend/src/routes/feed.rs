@@ -22,17 +22,15 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::error::ApiError;
 use crate::feed::FeedEvent;
+use crate::net::ws::{close_with, WS_CLOSE_TRY_AGAIN_LATER, WS_CLOSE_UNAUTHORIZED};
 use crate::state::AppState;
+use crate::util::time::now_iso;
 
 const SSE_HEARTBEAT_S: u64 = 25;
 
 #[derive(serde::Deserialize)]
 pub struct FeedQuery {
     pub cap: Option<String>,
-}
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
 }
 
 // --- WS ----------------------------------------------------------------------
@@ -48,24 +46,15 @@ pub async fn ws_handler(
         state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint;
     ws.on_upgrade(move |socket| async move {
         if !authed {
-            close_ws(socket, 4401, "unauthorized").await;
+            close_with(socket, WS_CLOSE_UNAUTHORIZED, "unauthorized").await;
             return;
         }
         if at_cap {
-            close_ws(socket, 1013, "too many connections").await;
+            close_with(socket, WS_CLOSE_TRY_AGAIN_LATER, "too many connections").await;
             return;
         }
         run_ws(state, token, socket).await;
     })
-}
-
-async fn close_ws(mut socket: WebSocket, code: u16, reason: &str) {
-    let _ = socket
-        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-            code,
-            reason: reason.to_string().into(),
-        })))
-        .await;
 }
 
 async fn run_ws(state: AppState, token: String, socket: WebSocket) {

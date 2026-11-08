@@ -17,7 +17,8 @@ use chrono::Utc;
 use rand::Rng;
 use uuid::Uuid;
 
-use crate::helpers::jsonpath_lite;
+use crate::util::json::jsonpath_lite;
+use crate::util::time::now_iso;
 
 const OPEN: &str = "{{";
 const CLOSE: &str = "}}";
@@ -84,7 +85,7 @@ fn t_now(args: &[String]) -> Option<String> {
     let fmt = args.first().map(String::as_str).unwrap_or("iso");
     let now = Utc::now();
     match fmt {
-        "iso" => Some(now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)),
+        "iso" => Some(now_iso()),
         "unix" => Some(now.timestamp().to_string()),
         "epoch_ms" => Some(now.timestamp_millis().to_string()),
         _ => None,

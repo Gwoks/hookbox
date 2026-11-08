@@ -17,9 +17,9 @@
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::crud_store::{self, Mutation};
-use crate::helpers::is_safe_key;
+use crate::repo::crud::{self as crud_repo, Mutation};
 use crate::state::AppState;
+use crate::validate::is_safe_key;
 
 /// A CRUD outcome the engine renders into an HTTP response (served_by="crud").
 pub struct CrudResponse {
@@ -126,7 +126,7 @@ pub async fn handle(
     if ident.is_none() {
         match method.as_str() {
             "GET" | "HEAD" => {
-                let items = crud_store::list_items(&state.pool, token, &coll)
+                let items = crud_repo::list_items(&state.pool, token, &coll)
                     .await
                     .map_err(|_| ())?;
                 return Ok(CrudResponse::json(200, Value::Array(items)));
@@ -136,7 +136,7 @@ pub async fn handle(
                     Ok(o) => o,
                     Err(e) => return Ok(CrudResponse::bad_request(&e)),
                 };
-                return match crud_store::append_item(
+                return match crud_repo::append_item(
                     &state.pool,
                     token,
                     &coll,
@@ -164,7 +164,7 @@ pub async fn handle(
     let id = ident.unwrap();
     match method.as_str() {
         "GET" | "HEAD" => {
-            let items = crud_store::list_items(&state.pool, token, &coll)
+            let items = crud_repo::list_items(&state.pool, token, &coll)
                 .await
                 .map_err(|_| ())?;
             match find(&items, &id) {
@@ -177,7 +177,7 @@ pub async fn handle(
                 Ok(o) => o,
                 Err(e) => return Ok(CrudResponse::bad_request(&e)),
             };
-            match crud_store::replace_item(&state.pool, token, &coll, &id, obj, ttl).await {
+            match crud_repo::replace_item(&state.pool, token, &coll, &id, obj, ttl).await {
                 Ok(Mutation::Ok(_, item)) => Ok(CrudResponse::json(200, item)),
                 Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
                 Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("item too large")),
@@ -189,7 +189,7 @@ pub async fn handle(
                 Ok(o) => o,
                 Err(e) => return Ok(CrudResponse::bad_request(&e)),
             };
-            match crud_store::merge_item(
+            match crud_repo::merge_item(
                 &state.pool,
                 token,
                 &coll,
@@ -206,7 +206,7 @@ pub async fn handle(
                 Err(_) => Err(()),
             }
         }
-        "DELETE" => match crud_store::delete_item(&state.pool, token, &coll, &id, ttl).await {
+        "DELETE" => match crud_repo::delete_item(&state.pool, token, &coll, &id, ttl).await {
             Ok(Mutation::Ok(..)) => Ok(CrudResponse::no_content()),
             Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
             Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("item too large")),

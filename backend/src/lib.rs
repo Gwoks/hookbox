@@ -10,29 +10,30 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
-pub mod helpers;
 pub mod ids;
 pub mod interceptor;
 pub mod models;
+pub mod net;
 pub mod planes;
 pub mod router;
 pub mod routes;
 pub mod state;
+pub(crate) mod util;
 
-// SQLite-backed stores (replace two Redis responsibilities).
-pub mod crud_store;
-pub mod state_store;
+// SQLite-backed stores (replace two Redis responsibilities) + trace writes.
+pub(crate) mod repo;
 
 // In-process components backing AppState.
 pub mod feed;
 pub mod limiter;
 pub mod rule_cache;
 pub mod tunnels;
+pub(crate) mod validate;
 
 // Background retention sweep.
 pub mod seed;
 pub mod tasks;
 
-// Test-only helpers (e.g. a process-global lock to serialize env-var mutation).
+// Test-only fixtures (deterministic Config, in-memory pool, seeded rows).
 #[cfg(test)]
-pub mod testutil;
+pub(crate) mod testing;

@@ -17,8 +17,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 
-const WS_CLOSE_UNAUTHORIZED: u16 = 4401;
-const WS_CLOSE_REBOUND: u16 = 4409;
+use hookbox::net::ws::{WS_CLOSE_REBOUND, WS_CLOSE_UNAUTHORIZED};
 
 struct Args {
     port: u16,

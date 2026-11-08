@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::is_safe_key;
+use crate::validate::is_safe_key;
 
 /// Read the live (non-expired) state map for an endpoint.
 pub async fn read_state(
@@ -76,20 +76,9 @@ pub async fn clear_state(pool: &SqlitePool, token: &str) -> Result<(), sqlx::Err
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
 
     async fn pool_with_endpoint() -> SqlitePool {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool
+        crate::testing::pool_with_endpoint("tok").await.0
     }
 
     #[tokio::test]
