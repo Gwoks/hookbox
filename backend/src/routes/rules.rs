@@ -75,40 +75,13 @@ pub(super) async fn create_rule(
 ) -> Result<Response, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     validate_rule(&state, &data)?;
-    let latency = clamp_opt(data.latency_ms, 0, state.cfg.latency_max_ms);
-    let rate = clamp_opt(data.rate_limit_per_min, 0, state.cfg.rate_limit_max_per_min);
-    let match_json = serde_json::to_string(&data.r#match).unwrap();
-    let response_json = serde_json::to_string(&data.response).unwrap();
-    let writes_json = serde_json::to_string(&data.state_writes).unwrap();
-    let webhook_json = data
-        .webhook_action
-        .as_ref()
-        .map(|w| serde_json::to_string(w).unwrap());
-
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO mock_rules
-            (token, name, priority, enabled, match_json, response_json,
-             state_writes_json, latency_ms, rate_limit_per_min, chaos_mode, webhook_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(&token)
-    .bind(&data.name)
-    .bind(data.priority)
-    .bind(data.enabled as i64)
-    .bind(&match_json)
-    .bind(&response_json)
-    .bind(&writes_json)
-    .bind(latency)
-    .bind(rate)
-    .bind(&data.chaos_mode)
-    .bind(&webhook_json)
-    .fetch_one(&state.pool)
-    .await?;
-
+    let data = MockRuleCreate {
+        latency_ms: clamp_opt(data.latency_ms, 0, state.cfg.latency_max_ms),
+        rate_limit_per_min: clamp_opt(data.rate_limit_per_min, 0, state.cfg.rate_limit_max_per_min),
+        ..data
+    };
+    let row = rules::insert(&state.pool, &token, &data).await?;
     state.rule_cache.invalidate(&token);
-    let row = rules::find(&state.pool, &token, id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)?;
     Ok((StatusCode::CREATED, Json(MockRule::from_row(&row))).into_response())
 }
 
@@ -270,20 +243,9 @@ pub(super) async fn delete_rule(
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
-            .bind(rule_id)
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await?;
-    if exists.is_none() {
+    if !rules::delete(&state.pool, &token, rule_id).await? {
         return Err(rule_not_found());
     }
-    sqlx::query("DELETE FROM mock_rules WHERE id = ? AND token = ?")
-        .bind(rule_id)
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
     state.rule_cache.invalidate(&token);
     Ok(StatusCode::NO_CONTENT.into_response()) // 204 carries no body
 }

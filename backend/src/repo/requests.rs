@@ -51,6 +51,15 @@ pub(crate) async fn find(pool: &SqlitePool, id: i64) -> Result<Option<RequestRow
         .await
 }
 
+/// Delete every trace on `token` (management #14).
+pub(crate) async fn clear(pool: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM request_logs WHERE token = ?")
+        .bind(token)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Trace `id`, only if it belongs to `token` (scoped in the same statement).
 pub(crate) async fn find_in(
     pool: &SqlitePool,

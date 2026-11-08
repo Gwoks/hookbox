@@ -7,6 +7,7 @@ pub(crate) mod crud;
 pub(crate) mod endpoints;
 pub(crate) mod owners;
 pub(crate) mod requests;
+pub(crate) mod retention;
 pub(crate) mod rules;
 pub(crate) mod shares;
 pub(crate) mod state;

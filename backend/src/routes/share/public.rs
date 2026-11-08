@@ -97,14 +97,10 @@ fn finish_public(result: Result<impl IntoResponse, ApiError>) -> Response {
 fn touch_last_used(state: &AppState, share_id: i64) {
     let pool = state.pool.clone();
     tokio::spawn(async move {
-        let _ = sqlx::query(
-            "UPDATE share_links SET last_used_at = datetime('now')
-              WHERE id = ? AND (last_used_at IS NULL
-                                OR last_used_at < datetime('now','-60 seconds'))",
-        )
-        .bind(share_id)
-        .execute(&pool)
-        .await;
+        if let Err(e) = shares::touch_last_used(&pool, share_id).await {
+            // Logs the non-secret share id only, never the code (AC-S6).
+            tracing::warn!(share_id, "last_used_at touch failed: {e}");
+        }
     });
 }
 

@@ -13,7 +13,6 @@ use serde_json::{json, Value};
 
 use crate::auth::{assert_owns_endpoint, require_owned_endpoint, OwnerId};
 use crate::error::ApiError;
-use crate::ids::gen_token;
 use crate::models::{EndpointCreate, EndpointDetail, EndpointSummary, Message};
 use crate::repo::bind_value;
 use crate::repo::endpoints::{self, EndpointRow};
@@ -32,31 +31,15 @@ fn endpoint_detail(state: &AppState, row: &EndpointRow) -> EndpointDetail {
     EndpointDetail::from_row(row, &state.cfg, state.tunnels.is_active(&row.token))
 }
 
-/// Insert a fresh endpoint for an owner, retrying on the (astronomically rare)
-/// token collision. Returns the new token.
+/// Insert a fresh endpoint for an owner (shared with the session mint).
+/// Returns the new token.
 pub(super) async fn new_endpoint(
     state: &AppState,
     owner_id: &str,
     name: Option<&str>,
 ) -> Result<String, ApiError> {
-    let mut token = gen_token(state.cfg.endpoint_id_length);
-    for _ in 0..5 {
-        let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM endpoints WHERE token = ?")
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await?;
-        if exists.is_none() {
-            break;
-        }
-        token = gen_token(state.cfg.endpoint_id_length);
-    }
-    sqlx::query("INSERT INTO endpoints (token, owner_id, name) VALUES (?, ?, ?)")
-        .bind(&token)
-        .bind(owner_id)
-        .bind(name)
-        .execute(&state.pool)
-        .await?;
-    Ok(token)
+    let len = state.cfg.endpoint_id_length;
+    Ok(endpoints::create_with_fresh_token(&state.pool, owner_id, name, len).await?)
 }
 
 async fn fetch_endpoint(state: &AppState, token: &str) -> Result<EndpointRow, ApiError> {
@@ -217,31 +200,7 @@ pub(super) async fn delete_endpoint(
     Path(token): Path<String>,
 ) -> Result<Json<Message>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    // OQ-1: tombstone rather than hard-delete so the mock plane returns 410.
-    // Clear live config (rules/state/crud cascade or empty) and set gone_at.
-    sqlx::query("DELETE FROM mock_rules WHERE token = ?")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("DELETE FROM endpoint_state WHERE token = ?")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("DELETE FROM crud_collections WHERE token = ?")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
-    // F4/AC-S9: tombstone-revokes-all-shares, BEFORE gone_at is set, so the
-    // public resolver's belt-and-braces `gone_at IS NULL` check and this
-    // revoke agree even if one of the two statements were to fail.
-    sqlx::query("UPDATE share_links SET revoked_at = datetime('now') WHERE token = ? AND revoked_at IS NULL")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("UPDATE endpoints SET gone_at = datetime('now') WHERE token = ?")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
+    endpoints::tombstone(&state.pool, &token).await?;
     state.rule_cache.invalidate(&token);
     Ok(Json(Message::new("Endpoint deleted.")))
 }

@@ -47,13 +47,7 @@ pub(super) async fn peek_collection(
 ) -> Result<Json<CollectionResponse>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     let name = CollectionName::parse(name)?;
-    let items: Option<String> = sqlx::query_scalar(
-        "SELECT items_json FROM crud_collections WHERE token = ? AND name = ? AND expires_at > datetime('now')",
-    )
-    .bind(&token)
-    .bind(name.as_str())
-    .fetch_optional(&state.pool)
-    .await?;
+    let items = repo::crud::read_items_json(&state.pool, &token, name.as_str()).await?;
     Ok(Json(CollectionResponse {
         items: parse_json_or(items.as_deref(), json!([])),
     }))
@@ -68,10 +62,6 @@ pub(super) async fn clear_collection(
 ) -> Result<Json<Message>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     let name = CollectionName::parse(name)?;
-    sqlx::query("DELETE FROM crud_collections WHERE token = ? AND name = ?")
-        .bind(&token)
-        .bind(name.as_str())
-        .execute(&state.pool)
-        .await?;
+    repo::crud::clear(&state.pool, &token, name.as_str()).await?;
     Ok(Json(Message::new("Collection cleared.")))
 }

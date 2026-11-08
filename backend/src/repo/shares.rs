@@ -37,6 +37,61 @@ pub(crate) async fn list_active(
     .await
 }
 
+/// How many unrevoked links `token` has (the per-endpoint cap check).
+pub(crate) async fn count_active(pool: &SqlitePool, token: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM share_links WHERE token = ? AND revoked_at IS NULL")
+        .bind(token)
+        .fetch_one(pool)
+        .await
+}
+
+/// Store a new link by its code HASH only; returns the stored row.
+pub(crate) async fn insert(
+    pool: &SqlitePool,
+    code_hash: &str,
+    token: &str,
+    label: Option<&str>,
+) -> Result<ShareRow, sqlx::Error> {
+    sqlx::query_as(
+        "INSERT INTO share_links (code_hash, token, label) VALUES (?, ?, ?)
+         RETURNING id, label, created_at, last_used_at",
+    )
+    .bind(code_hash)
+    .bind(token)
+    .bind(label)
+    .fetch_one(pool)
+    .await
+}
+
+/// Soft-revoke link `id` on `token` — never a row delete, so a revoked
+/// `code_hash` can never be re-minted and the UNIQUE constraint keeps
+/// enforcing global uniqueness against revoked codes too. `false` when no
+/// live link matched (unknown, other endpoint, or already revoked).
+pub(crate) async fn revoke(pool: &SqlitePool, token: &str, id: i64) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE share_links SET revoked_at = datetime('now')
+          WHERE id = ? AND token = ? AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .bind(token)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Stamp `last_used_at`, coalesced to at most once a minute.
+pub(crate) async fn touch_last_used(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE share_links SET last_used_at = datetime('now')
+          WHERE id = ? AND (last_used_at IS NULL
+                            OR last_used_at < datetime('now','-60 seconds'))",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// One round trip, joining liveness so a tombstone is indistinguishable from
 /// an unknown/revoked code (AC-S9): `s.revoked_at IS NULL AND e.gone_at IS
 /// NULL`, both read fresh on every request (never cached — `rule_cache` is

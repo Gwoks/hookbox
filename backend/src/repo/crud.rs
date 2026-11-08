@@ -23,20 +23,39 @@ pub enum Mutation {
     TooLarge,
 }
 
+/// The stored items JSON of a live (non-expired) collection, verbatim.
+pub(crate) async fn read_items_json(
+    pool: &SqlitePool,
+    token: &str,
+    name: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT items_json FROM crud_collections WHERE token = ? AND name = ? AND expires_at > datetime('now')",
+    )
+    .bind(token)
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Read the current items array for a collection (live, non-expired).
 pub async fn list_items(
     pool: &SqlitePool,
     token: &str,
     name: &str,
 ) -> Result<Vec<Value>, sqlx::Error> {
-    let items: Option<String> = sqlx::query_scalar(
-        "SELECT items_json FROM crud_collections WHERE token = ? AND name = ? AND expires_at > datetime('now')",
-    )
-    .bind(token)
-    .bind(name)
-    .fetch_optional(pool)
-    .await?;
+    let items = read_items_json(pool, token, name).await?;
     Ok(parse_json_or(items.as_deref(), Vec::new()))
+}
+
+/// Drop a collection outright (management #18).
+pub(crate) async fn clear(pool: &SqlitePool, token: &str, name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM crud_collections WHERE token = ? AND name = ?")
+        .bind(token)
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Persist a new items array for a collection inside the calling transaction.

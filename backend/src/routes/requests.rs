@@ -57,9 +57,6 @@ pub(super) async fn clear_requests(
     Path(token): Path<String>,
 ) -> Result<Json<Message>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    sqlx::query("DELETE FROM request_logs WHERE token = ?")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
+    requests::clear(&state.pool, &token).await?;
     Ok(Json(Message::new("Trace history cleared.")))
 }

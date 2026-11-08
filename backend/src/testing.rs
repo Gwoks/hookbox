@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 use crate::config::Config;
 use crate::db;
 use crate::ids::{gen_owner_id, gen_owner_secret, hash_secret};
+use crate::repo::endpoints::{self, NewEndpoint};
 use crate::repo::owners;
 
 /// A `Config` loaded from exactly `pairs`; every other knob takes its
@@ -52,10 +53,13 @@ pub(crate) async fn seed_owner(pool: &SqlitePool) -> SeededOwner {
 
 /// Insert a live endpoint `token` owned by `owner_id` (schema defaults).
 pub(crate) async fn seed_endpoint(pool: &SqlitePool, owner_id: &str, token: &str) {
-    sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES (?, ?)")
-        .bind(token)
-        .bind(owner_id)
-        .execute(pool)
+    let new = NewEndpoint {
+        token,
+        owner_id,
+        name: None,
+        auto_crud: false,
+    };
+    endpoints::insert(pool, &new)
         .await
         .expect("insert endpoint");
 }

@@ -9,13 +9,14 @@ use axum::{
 };
 
 use super::no_store;
-use crate::auth::{assert_owns_endpoint, OwnerId};
+use crate::auth::{assert_owns_endpoint, require_owned_endpoint, OwnerId};
 use crate::error::ApiError;
 use crate::ids::{gen_share_code, hash_secret};
 use crate::models::{ShareLink, ShareLinkCreate, ShareLinkCreated};
 use crate::repo::shares;
 use crate::state::AppState;
 use crate::util::time::rfc3339;
+use crate::validate::share_label;
 
 /// `url` is built from `PUBLIC_BASE_URL` only — never `mock_url`'s wildcard
 /// form, never `Host`/`X-Forwarded-Host` (AC-99, AC-S14). A share URL on the
@@ -36,42 +37,19 @@ pub(crate) async fn create_share(
 ) -> Result<Response, ApiError> {
     // 1. OwnerId extractor already ran (401 handled by the extractor itself).
     // 2. 404 for unknown token *and* another owner's token.
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    let endpoint = require_owned_endpoint(&state.pool, &token, &owner_id).await?;
 
     // 3. Reject a tombstoned endpoint — a link minted for a dead endpoint
     // would be dead on arrival.
-    let gone_at: Option<String> =
-        sqlx::query_scalar("SELECT gone_at FROM endpoints WHERE token = ?")
-            .bind(&token)
-            .fetch_one(&state.pool)
-            .await?;
-    if gone_at.is_some() {
+    if endpoint.is_gone() {
         return Err(ApiError::not_found("Endpoint not found."));
     }
 
     // 4. Validate + trim the label; a label that trims to empty is NULL.
-    let label = match body.label {
-        None => None,
-        Some(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                None
-            } else if trimmed.chars().count() > 80 {
-                return Err(ApiError::validation("label must be at most 80 characters."));
-            } else {
-                Some(trimmed.to_string())
-            }
-        }
-    };
+    let label = share_label(body.label.as_deref())?;
 
     // 5. Enforce the active-link cap.
-    let active_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM share_links WHERE token = ? AND revoked_at IS NULL",
-    )
-    .bind(&token)
-    .fetch_one(&state.pool)
-    .await?;
-    if active_count >= state.cfg.share_max_per_endpoint {
+    if shares::count_active(&state.pool, &token).await? >= state.cfg.share_max_per_endpoint {
         return Err(ApiError::validation(format!(
             "This endpoint already has the maximum of {} active share links. Revoke one first.",
             state.cfg.share_max_per_endpoint
@@ -81,24 +59,16 @@ pub(crate) async fn create_share(
     // 6. Mint + store only the hash — the code appears in plaintext nowhere
     // in this database, ever.
     let code = gen_share_code(state.cfg.share_code_bytes);
-    let code_hash = hash_secret(&code);
-    let (id, created_at): (i64, String) = sqlx::query_as(
-        "INSERT INTO share_links (code_hash, token, label) VALUES (?, ?, ?) RETURNING id, created_at",
-    )
-    .bind(&code_hash)
-    .bind(&token)
-    .bind(&label)
-    .fetch_one(&state.pool)
-    .await?;
+    let row = shares::insert(&state.pool, &hash_secret(&code), &token, label.as_deref()).await?;
 
     // 7. `code` and `url` appear ONLY here, in ONLY this response, and are
     // never re-derivable (AC-104).
     let resp = ShareLinkCreated {
-        id,
-        code: code.clone(),
+        id: row.id,
         url: share_url(&state, &code),
-        label,
-        created_at: rfc3339(&created_at),
+        code,
+        label: row.label,
+        created_at: rfc3339(&row.created_at),
         last_used_at: None,
     };
     Ok(no_store((StatusCode::CREATED, Json(resp)).into_response()))
@@ -125,17 +95,8 @@ pub(crate) async fn revoke_share(
     Path((token, id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    // Soft revoke only — never a row delete, so a revoked code_hash can never
-    // be re-minted and the UNIQUE constraint keeps enforcing global
-    // uniqueness against revoked codes too.
-    let result = sqlx::query(
-        "UPDATE share_links SET revoked_at = datetime('now') WHERE id = ? AND token = ? AND revoked_at IS NULL",
-    )
-    .bind(id)
-    .bind(&token)
-    .execute(&state.pool)
-    .await?;
-    if result.rows_affected() == 0 {
+    // Soft revoke only (see `repo::shares::revoke`).
+    if !shares::revoke(&state.pool, &token, id).await? {
         // Unknown id, id on another endpoint, and already-revoked are all
         // indistinguishable here, and idempotent from the caller's POV.
         return Err(ApiError::not_found("Share link not found."));
