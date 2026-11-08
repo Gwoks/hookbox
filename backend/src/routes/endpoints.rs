@@ -12,7 +12,7 @@ use axum::{
 use serde_json::Value;
 
 use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiJson};
 use crate::models::{EndpointCreate, EndpointDetail, EndpointPatch, EndpointSummary, Message};
 use crate::repo::endpoints::{self, EndpointRow};
 use crate::state::AppState;
@@ -65,7 +65,7 @@ pub(super) async fn list_endpoints(
 pub(super) async fn create_endpoint(
     State(state): State<AppState>,
     OwnerId(owner_id): OwnerId,
-    Json(body): Json<EndpointCreate>,
+    ApiJson(body): ApiJson<EndpointCreate>,
 ) -> Result<Response, ApiError> {
     validate::endpoint_name(body.name.as_deref())?;
     let row = create(&state, &owner_id, body.name.as_deref()).await?;

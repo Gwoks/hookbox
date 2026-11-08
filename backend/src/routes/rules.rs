@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
 use crate::config::Config;
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiJson};
 use crate::models::{MockRule, MockRuleCreate, RulePatch};
 use crate::repo::rules;
 use crate::state::AppState;
@@ -50,7 +50,7 @@ pub(super) async fn create_rule(
     State(state): State<AppState>,
     OwnerId(owner_id): OwnerId,
     Path(token): Path<String>,
-    Json(data): Json<MockRuleCreate>,
+    ApiJson(data): ApiJson<MockRuleCreate>,
 ) -> Result<Response, ApiError> {
     require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     validate_rule(&state.cfg, &data)?;

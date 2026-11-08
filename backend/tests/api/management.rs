@@ -5,7 +5,8 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::common::{
-    add_rule, call, create_owner, mint_session, new_endpoint, patch_endpoint, TestApp, APP_HOST,
+    add_rule, call, call_raw, create_owner, mint_session, new_endpoint, patch_endpoint, TestApp,
+    APP_HOST,
 };
 
 #[tokio::test]
@@ -261,6 +262,36 @@ async fn rule_patch_validates_like_create_and_types_webhook_action() {
         json!({"url": "https://hook.example.com", "body_template": ""})
     );
 }
+
+/// B2: a body the create routes cannot decode gets the flat JSON envelope
+/// (it used to be axum's text/plain message), keeping axum's status.
+#[tokio::test]
+async fn create_routes_reject_bad_json_with_the_flat_envelope() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    let rules = format!("/api/endpoints/{token}/rules");
+    let shares = format!("/api/endpoints/{token}/shares");
+    let cases = [
+        (
+            rules.as_str(),
+            JSON,
+            r#"{"priority":"high"}"#,
+            422,
+            "validation_error",
+        ),
+        ("/api/endpoints", JSON, "{not json", 400, "bad_request"),
+        (shares.as_str(), "text/plain", "{}", 415, "bad_request"),
+    ];
+    for (path, content_type, body, status, code) in cases {
+        let (s, err, h) = call_raw(&app, "POST", path, &secret, content_type, body).await;
+        assert_eq!(s.as_u16(), status, "{path}: {err}");
+        assert_eq!(h.get("content-type").unwrap(), JSON);
+        assert_eq!(err["error"], json!(code), "{path}");
+        assert!(err["detail"].as_str().is_some_and(|d| !d.is_empty()));
+    }
+}
+
+const JSON: &str = "application/json";
 
 /// B7: a stored value that cannot decode into its column type (a BLOB in a
 /// TEXT column keeps its storage class; 'high' in an INTEGER column stays

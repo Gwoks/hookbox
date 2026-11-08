@@ -10,7 +10,7 @@ use axum::{
 
 use super::no_store;
 use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiJson};
 use crate::ids::{gen_share_code, hash_secret};
 use crate::models::{ShareLink, ShareLinkCreate, ShareLinkCreated};
 use crate::repo::shares;
@@ -33,7 +33,7 @@ pub(crate) async fn create_share(
     State(state): State<AppState>,
     OwnerId(owner_id): OwnerId,
     Path(token): Path<String>,
-    Json(body): Json<ShareLinkCreate>,
+    ApiJson(body): ApiJson<ShareLinkCreate>,
 ) -> Result<Response, ApiError> {
     // 1. OwnerId extractor already ran (401 handled by the extractor itself).
     // 2. 404 for unknown token *and* another owner's token.

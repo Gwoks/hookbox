@@ -33,10 +33,10 @@ body: {"detail":"chaos_mode must be 'error' or 'dropout'.","error":"validation_e
 ## create malformed json shape
 status: 422
 headers:
-  content-length: 129
-  content-type: text/plain; charset=utf-8
+  content-length: 171
+  content-type: application/json
   x-hookbox-plane: api
-body: Failed to deserialize the JSON body into the target type: priority: invalid type: string "high", expected i64 at line 1 column 18
+body: {"detail":"Failed to deserialize the JSON body into the target type: priority: invalid type: string \"high\", expected i64 at line 1 column 18","error":"validation_error"}
 
 ## create ok
 status: 201
