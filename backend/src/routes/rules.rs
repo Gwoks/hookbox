@@ -10,7 +10,7 @@ use axum::{
 };
 use serde_json::Value;
 
-use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
+use crate::auth::{require_live_endpoint, OwnedEndpoint, OwnerId};
 use crate::config::Config;
 use crate::error::{ApiError, ApiJson};
 use crate::models::{MockRule, MockRuleCreate, RulePatch};
@@ -52,7 +52,7 @@ pub(super) async fn create_rule(
     Path(token): Path<String>,
     ApiJson(data): ApiJson<MockRuleCreate>,
 ) -> Result<Response, ApiError> {
-    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    require_live_endpoint(&state.pool, &token, &owner_id).await?;
     validate_rule(&state.cfg, &data)?;
     let data = MockRuleCreate {
         latency_ms: clamp_to(data.latency_ms, state.cfg.latency_max_ms),
@@ -71,7 +71,7 @@ pub(super) async fn get_rule(
     OwnerId(owner_id): OwnerId,
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Json<MockRule>, ApiError> {
-    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    require_live_endpoint(&state.pool, &token, &owner_id).await?;
     let row = rules::find(&state.pool, &token, rule_id)
         .await?
         .ok_or_else(rule_not_found)?;
@@ -88,7 +88,7 @@ pub(super) async fn patch_rule(
     Path((token, rule_id)): Path<(String, i64)>,
     Json(raw): Json<Value>,
 ) -> Result<Json<MockRule>, ApiError> {
-    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    require_live_endpoint(&state.pool, &token, &owner_id).await?;
     let current = rules::find(&state.pool, &token, rule_id)
         .await?
         .ok_or_else(rule_not_found)?;
@@ -108,7 +108,7 @@ pub(super) async fn delete_rule(
     OwnerId(owner_id): OwnerId,
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
-    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    require_live_endpoint(&state.pool, &token, &owner_id).await?;
     let delete = rules::delete(&state.pool, &token, rule_id);
     if !state.write_through(&token, delete).await? {
         return Err(rule_not_found());

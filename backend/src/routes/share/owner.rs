@@ -9,7 +9,7 @@ use axum::{
 };
 
 use super::no_store;
-use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
+use crate::auth::{require_live_endpoint, require_owned_endpoint, OwnedEndpoint, OwnerId};
 use crate::error::{ApiError, ApiJson};
 use crate::ids::{gen_share_code, hash_secret};
 use crate::models::{ShareLink, ShareLinkCreate, ShareLinkCreated};
@@ -39,7 +39,8 @@ pub(crate) async fn create_share(
     // 2. 404 for unknown token *and* another owner's token.
     let endpoint = require_owned_endpoint(&state.pool, &token, &owner_id).await?;
 
-    // 3. Reject a tombstoned endpoint — a link minted for a dead endpoint
+    // 3. Reject a tombstoned endpoint with the same 404 (not the 410 the
+    // other owner routes give) — a link minted for a dead endpoint
     // would be dead on arrival.
     if endpoint.is_gone() {
         return Err(ApiError::not_found("Endpoint not found."));
@@ -92,7 +93,7 @@ pub(crate) async fn revoke_share(
     OwnerId(owner_id): OwnerId,
     Path((token, id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
-    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    require_live_endpoint(&state.pool, &token, &owner_id).await?;
     // Soft revoke only (see `repo::shares::revoke`).
     if !shares::revoke(&state.pool, &token, id).await? {
         // Unknown id, id on another endpoint, and already-revoked are all

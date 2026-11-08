@@ -33,12 +33,37 @@ pub(crate) async fn require_owned_endpoint(
     }
 }
 
+/// `require_owned_endpoint`, then 410 `endpoint_gone` when the owner's
+/// endpoint is tombstoned. A non-owner still gets the 404 (ownership is
+/// checked first), so a tombstone reveals nothing to strangers.
+pub(crate) async fn require_live_endpoint(
+    pool: &SqlitePool,
+    token: &str,
+    owner_id: &str,
+) -> Result<EndpointRow, ApiError> {
+    require_owned_endpoint(pool, token, owner_id)
+        .await?
+        .require_live()
+}
+
+impl EndpointRow {
+    /// 410 `endpoint_gone` for a tombstoned endpoint.
+    pub(crate) fn require_live(self) -> Result<Self, ApiError> {
+        if self.is_gone() {
+            Err(ApiError::endpoint_gone())
+        } else {
+            Ok(self)
+        }
+    }
+}
+
 /// Extractor for an endpoint-scoped owner route (`/api/endpoints/:token…`):
 /// authenticates the owner (`OwnerId`: 401/403), reads the `:token` path
-/// parameter, then requires ownership (404). Handlers whose own validation
-/// must run BEFORE the ownership check (a typed `Path`/`Query`/JSON body
-/// rejection today precedes the 404) use `OwnerId` + `require_owned_endpoint`
-/// explicitly instead, so that order is kept.
+/// parameter, then requires a live owned endpoint (404 not yours / 410
+/// tombstoned). Handlers whose own validation must run BEFORE the ownership
+/// check (a typed `Path`/`Query`/JSON body rejection today precedes the 404)
+/// use `OwnerId` + `require_live_endpoint` explicitly instead, so that order
+/// is kept.
 pub(crate) struct OwnedEndpoint {
     pub(crate) endpoint: EndpointRow,
 }
@@ -61,7 +86,7 @@ impl FromRequestParts<AppState> for OwnedEndpoint {
             .iter()
             .find_map(|(name, value)| (name == TOKEN_PARAM).then_some(value))
             .ok_or_else(|| endpoint_not_found().into_response())?;
-        let endpoint = require_owned_endpoint(&state.pool, token, &owner_id)
+        let endpoint = require_live_endpoint(&state.pool, token, &owner_id)
             .await
             .map_err(IntoResponse::into_response)?;
         Ok(OwnedEndpoint { endpoint })

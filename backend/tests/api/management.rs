@@ -5,8 +5,8 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::common::{
-    add_rule, call, call_raw, create_owner, mint_session, new_endpoint, patch_endpoint, TestApp,
-    APP_HOST,
+    add_rule, call, call_raw, create_owner, list_requests, mint_session, new_endpoint,
+    patch_endpoint, TestApp, APP_HOST,
 };
 
 #[tokio::test]
@@ -261,6 +261,85 @@ async fn rule_patch_validates_like_create_and_types_webhook_action() {
         rule["webhook_action"],
         json!({"url": "https://hook.example.com", "body_template": ""})
     );
+}
+
+/// B5: once tombstoned, the endpoint is gone for its owner — every owner
+/// route answers 410 `endpoint_gone` (a stranger still gets the 404), the
+/// list drops it, and minting a share link stays the plain 404.
+#[tokio::test]
+async fn owner_routes_on_a_tombstoned_endpoint_are_410() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let stranger = create_owner(&app).await;
+    let token = new_endpoint(&app, &secret).await;
+    let rule = add_rule(&app, &secret, &token, json!({})).await;
+    let mock_host = format!("{token}.mock.local");
+    call(&app, "GET", &mock_host, "/traced", None, None).await;
+    // The trace is written off the response path — wait for it.
+    let mut trace = json!(null);
+    for _ in 0..100 {
+        trace = list_requests(&app, &secret, &token).await[0]["id"].clone();
+        if !trace.is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(trace.is_i64(), "trace written");
+    let base = format!("/api/endpoints/{token}");
+    let (s, _, _) = call(&app, "DELETE", APP_HOST, &base, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let owner_routes = [
+        ("GET", base.clone()),
+        ("PATCH", base.clone()),
+        ("DELETE", base.clone()),
+        ("GET", format!("{base}/rules")),
+        ("POST", format!("{base}/rules")),
+        ("GET", format!("{base}/rules/{rule}")),
+        ("PATCH", format!("{base}/rules/{rule}")),
+        ("DELETE", format!("{base}/rules/{rule}")),
+        ("GET", format!("{base}/requests")),
+        ("DELETE", format!("{base}/requests")),
+        ("GET", format!("/api/requests/{trace}")),
+        ("GET", format!("{base}/state")),
+        ("DELETE", format!("{base}/state")),
+        ("GET", format!("{base}/collections/items")),
+        ("DELETE", format!("{base}/collections/items")),
+        ("GET", format!("{base}/shares")),
+        ("DELETE", format!("{base}/shares/1")),
+    ];
+    for (method, path) in &owner_routes {
+        let (s, body, _) = call(&app, method, APP_HOST, path, Some(&secret), Some(json!({}))).await;
+        assert_eq!(s, StatusCode::GONE, "{method} {path}: {body}");
+        assert_eq!(body["error"], json!("endpoint_gone"), "{method} {path}");
+        let (s, _, _) = call(
+            &app,
+            method,
+            APP_HOST,
+            path,
+            Some(&stranger),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "stranger {method} {path}");
+    }
+
+    let (_, list, _) = call(&app, "GET", APP_HOST, "/api/endpoints", Some(&secret), None).await;
+    assert!(list
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["token"] != json!(token)));
+    let shares = format!("{base}/shares");
+    let (s, _, _) = call(
+        &app,
+        "POST",
+        APP_HOST,
+        &shares,
+        Some(&secret),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
 /// B2: a body the create routes cannot decode gets the flat JSON envelope

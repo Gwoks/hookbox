@@ -80,6 +80,16 @@ impl ApiError {
         ApiError::new(StatusCode::NOT_FOUND, "not_found", detail)
     }
 
+    /// `410 endpoint_gone` — the endpoint was deleted (tombstoned). The mock
+    /// plane and the owner routes share this exact body.
+    pub fn endpoint_gone() -> Self {
+        ApiError::new(
+            StatusCode::GONE,
+            "endpoint_gone",
+            "This endpoint was deleted or expired.",
+        )
+    }
+
     /// `422` validation failure (bad field / clamp).
     pub fn validation(detail: impl Into<String>) -> Self {
         ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", detail)

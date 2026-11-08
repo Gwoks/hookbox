@@ -11,10 +11,11 @@ use axum::{
 };
 use serde_json::Value;
 
-use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
+use crate::auth::{require_live_endpoint, OwnedEndpoint, OwnerId};
 use crate::error::{ApiError, ApiJson};
 use crate::models::{EndpointCreate, EndpointDetail, EndpointPatch, EndpointSummary, Message};
 use crate::repo::endpoints::{self, EndpointRow};
+use crate::repo::owners;
 use crate::state::AppState;
 use crate::validate;
 
@@ -54,7 +55,7 @@ pub(super) async fn list_endpoints(
     State(state): State<AppState>,
     OwnerId(owner_id): OwnerId,
 ) -> Result<Json<Vec<EndpointSummary>>, ApiError> {
-    let rows = endpoints::list_by_owner(&state.pool, &owner_id).await?;
+    let rows = owners::live_endpoints(&state.pool, &owner_id).await?;
     Ok(Json(
         rows.iter().map(|r| endpoint_summary(&state, r)).collect(),
     ))
@@ -91,7 +92,7 @@ pub(super) async fn patch_endpoint(
     Path(token): Path<String>,
     Json(raw): Json<Value>,
 ) -> Result<Json<EndpointDetail>, ApiError> {
-    let current = require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    let current = require_live_endpoint(&state.pool, &token, &owner_id).await?;
     let patch = EndpointPatch::parse(&raw, &state.cfg)?;
     let update = endpoints::update(&state.pool, &token, patch);
     let row = state

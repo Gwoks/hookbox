@@ -58,17 +58,6 @@ pub(crate) async fn owner_of(
         .await
 }
 
-/// Every endpoint the owner holds (tombstones included), oldest first.
-pub(crate) async fn list_by_owner(
-    pool: &SqlitePool,
-    owner_id: &str,
-) -> Result<Vec<EndpointRow>, sqlx::Error> {
-    sqlx::query_as("SELECT * FROM endpoints WHERE owner_id = ? ORDER BY created_at, token")
-        .bind(owner_id)
-        .fetch_all(pool)
-        .await
-}
-
 /// Whether the table holds any endpoint at all (first-run detection).
 pub(crate) async fn any_exist(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM endpoints LIMIT 1")

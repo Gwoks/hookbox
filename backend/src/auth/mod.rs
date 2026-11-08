@@ -36,7 +36,7 @@ mod ownership;
 
 pub(crate) use bearer::parse_bearer;
 pub use ownership::key_owns_token;
-pub(crate) use ownership::{require_owned_endpoint, OwnedEndpoint};
+pub(crate) use ownership::{require_live_endpoint, require_owned_endpoint, OwnedEndpoint};
 
 /// How the caller presented its owner key.
 #[derive(Debug, Clone, PartialEq, Eq)]
