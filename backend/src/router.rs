@@ -213,9 +213,7 @@ async fn test_panic_handler() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::db;
-    use crate::ids::{gen_owner_secret, hash_email, hash_secret};
+    use crate::testing::{memory_pool, seed_endpoint, seed_owner, test_config};
     use axum::http::Request;
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
@@ -223,27 +221,10 @@ mod tests {
     use tower::ServiceExt;
 
     async fn app_with_owner() -> (Router, SqlitePool, String, String) {
-        // Build the Config under the global env lock so the set_var -> from_env
-        // window is atomic w.r.t. other env-mutating tests (AC-55 determinism).
-        let cfg = {
-            let _guard = crate::testutil::env_lock();
-            std::env::set_var("MOCK_DOMAIN", "mock.local");
-            std::env::set_var("APP_HOST", "app.local");
-            Config::from_env()
-        };
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        let owner_id = hash_email("a@b.com");
-        let secret = gen_owner_secret(32);
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
-            .bind(&owner_id)
-            .bind("a@b.com")
-            .bind(hash_secret(&secret))
-            .execute(&pool)
-            .await
-            .unwrap();
-        let state = AppState::new(pool.clone(), cfg);
-        (build_app(state), pool, owner_id, secret)
+        let pool = memory_pool().await;
+        let owner = seed_owner(&pool).await;
+        let state = AppState::new(pool.clone(), test_config());
+        (build_app(state), pool, owner.owner_id, owner.secret)
     }
 
     async fn req(
@@ -538,14 +519,9 @@ mod tests {
 
     #[tokio::test]
     async fn mock_host_served_by_rule_and_default_404() {
-        let (app, pool, _oid, _secret) = app_with_owner().await;
+        let (app, pool, oid, _secret) = app_with_owner().await;
         // Create an endpoint owned by our owner with a GET /* rule.
-        let oid = crate::ids::hash_email("a@b.com");
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tokLIVE001', ?)")
-            .bind(&oid)
-            .execute(&pool)
-            .await
-            .unwrap();
+        seed_endpoint(&pool, &oid, "tokLIVE001").await;
         sqlx::query(
             "INSERT INTO mock_rules (token, priority, enabled, match_json, response_json, state_writes_json)
              VALUES ('tokLIVE001', 100, 1, '{\"method\":\"GET\",\"path\":\"/hello\"}',
@@ -587,20 +563,8 @@ mod tests {
     async fn non_owner_endpoint_is_404() {
         let (app, pool, _oid, secret) = app_with_owner().await;
         // create owner B's endpoint directly.
-        let b_id = hash_email("b@c.com");
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?,?,?)")
-            .bind(&b_id)
-            .bind("b@c.com")
-            .bind(hash_secret("xyz"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES (?,?)")
-            .bind("tokBBBBBBB")
-            .bind(&b_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        let owner_b = seed_owner(&pool).await;
+        seed_endpoint(&pool, &owner_b.owner_id, "tokBBBBBBB").await;
         // owner A (secret) cannot see it -> 404 not 403.
         let (s, body, _) = req(
             &app,

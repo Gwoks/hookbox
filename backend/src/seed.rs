@@ -88,12 +88,11 @@ pub async fn seed_if_empty(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
+    use crate::testing::memory_pool;
 
     #[tokio::test]
     async fn seeds_once_then_idempotent() {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
+        let pool = memory_pool().await;
         let first = seed_if_empty(&pool, 10).await.unwrap();
         assert!(first.is_some());
         let (_e, _s, token) = first.unwrap();

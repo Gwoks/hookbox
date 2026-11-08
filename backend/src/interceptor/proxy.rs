@@ -202,7 +202,7 @@ mod tests {
     use super::*;
 
     fn cfg() -> Config {
-        Config::from_env()
+        crate::testing::test_config()
     }
 
     #[test]

@@ -68,21 +68,12 @@ impl FromRequestParts<AppState> for OwnerId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-    use crate::ids::{gen_owner_secret, hash_email, hash_secret};
+    use crate::ids::gen_owner_secret;
+    use crate::testing::{memory_pool, seed_endpoint, seed_owner, SeededOwner};
 
     async fn setup() -> (SqlitePool, String, String) {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        let owner_id = hash_email("a@b.com");
-        let secret = gen_owner_secret(32);
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
-            .bind(&owner_id)
-            .bind("a@b.com")
-            .bind(hash_secret(&secret))
-            .execute(&pool)
-            .await
-            .unwrap();
+        let pool = memory_pool().await;
+        let SeededOwner { owner_id, secret } = seed_owner(&pool).await;
         (pool, owner_id, secret)
     }
 
@@ -162,22 +153,12 @@ mod tests {
     async fn non_owner_of_token_is_404_not_403() {
         let (pool, owner_id, secret) = setup().await;
         // Owner A's endpoint.
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES (?, ?)")
-            .bind("tokAAAAAAA")
-            .bind(&owner_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        seed_endpoint(&pool, &owner_id, "tokAAAAAAA").await;
         // Owner B.
-        let b_id = hash_email("b@c.com");
-        let b_secret = gen_owner_secret(32);
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
-            .bind(&b_id)
-            .bind("b@c.com")
-            .bind(hash_secret(&b_secret))
-            .execute(&pool)
-            .await
-            .unwrap();
+        let SeededOwner {
+            owner_id: b_id,
+            secret: b_secret,
+        } = seed_owner(&pool).await;
 
         // Owner A owns it.
         assert!(assert_owns_endpoint(&pool, "tokAAAAAAA", &owner_id)

@@ -221,20 +221,10 @@ fn find_index(items: &[Value], id: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
+    use crate::testing::pool_with_endpoint;
 
     async fn pool_ep() -> SqlitePool {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool
+        pool_with_endpoint("tok").await.0
     }
 
     fn obj(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {

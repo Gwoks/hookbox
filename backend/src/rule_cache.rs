@@ -143,22 +143,14 @@ impl RuleCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-
-    async fn pool() -> SqlitePool {
-        let p = db::pool(":memory:").await.unwrap();
-        db::migrate(&p).await.unwrap();
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&p)
-            .await
-            .unwrap();
-        p
-    }
+    use crate::testing::{memory_pool, seed_owner};
 
     #[tokio::test]
     async fn cold_load_compile_and_invalidate() {
-        let p = pool().await;
-        sqlx::query("INSERT INTO endpoints (token, owner_id, auto_crud) VALUES ('tok','o',1)")
+        let p = memory_pool().await;
+        let owner = seed_owner(&p).await;
+        sqlx::query("INSERT INTO endpoints (token, owner_id, auto_crud) VALUES ('tok',?,1)")
+            .bind(&owner.owner_id)
             .execute(&p)
             .await
             .unwrap();

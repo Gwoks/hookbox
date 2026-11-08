@@ -34,6 +34,6 @@ pub(crate) mod validate;
 pub mod seed;
 pub mod tasks;
 
-// Test-only helpers (e.g. a process-global lock to serialize env-var mutation).
+// Test-only fixtures (deterministic Config, in-memory pool, seeded rows).
 #[cfg(test)]
-pub mod testutil;
+pub(crate) mod testing;

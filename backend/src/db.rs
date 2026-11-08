@@ -35,29 +35,16 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::testing::{memory_pool, seed_endpoint, seed_owner};
 
     #[tokio::test]
     async fn migrate_then_round_trip_owner_endpoint() {
-        let pool = pool(":memory:").await.unwrap();
-        migrate(&pool).await.unwrap();
+        // `memory_pool` is `pool(":memory:")` + `migrate`.
+        let pool = memory_pool().await;
 
         // owners -> endpoints FK round trip, parameterized SQL (AC-S17).
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES (?, ?, ?)")
-            .bind("ownerabc12345678")
-            .bind("a@b.com")
-            .bind("hash")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        sqlx::query("INSERT INTO endpoints (token, owner_id, name) VALUES (?, ?, ?)")
-            .bind("tok1234567")
-            .bind("ownerabc12345678")
-            .bind("demo")
-            .execute(&pool)
-            .await
-            .unwrap();
+        let owner = seed_owner(&pool).await;
+        seed_endpoint(&pool, &owner.owner_id, "tok1234567").await;
 
         // Defaults from the §5.6 DDL apply.
         let (default_mode, latency, chaos_mode, cors, gone): (
