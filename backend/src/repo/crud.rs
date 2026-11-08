@@ -11,6 +11,7 @@
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
+use super::begin_immediate;
 use crate::util::json::parse_json_or;
 
 /// Outcome of a mutation closure run inside the transaction.
@@ -95,27 +96,17 @@ pub async fn append_item(
     max_items: usize,
     ttl_seconds: i64,
 ) -> Result<Mutation, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    // BEGIN IMMEDIATE: take the write lock up front to serialize writers.
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
-    let current: Option<String> =
-        sqlx::query_scalar("SELECT items_json FROM crud_collections WHERE token = ? AND name = ?")
-            .bind(token)
-            .bind(name)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let mut items = parse_json_or(current.as_deref(), Vec::new());
-    if items.len() >= max_items {
-        tx.rollback().await.ok();
-        return Ok(Mutation::TooLarge);
-    }
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    obj.insert("id".into(), json!(id));
-    let stored = Value::Object(obj);
-    items.push(stored.clone());
-    write_items(&mut tx, token, name, &items, ttl_seconds).await?;
-    tx.commit().await?;
-    Ok(Mutation::Ok(items, stored))
+    cas_mutate(pool, token, name, ttl_seconds, |mut items| {
+        if items.len() >= max_items {
+            return Mutation::TooLarge;
+        }
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        obj.insert("id".into(), json!(id));
+        let stored = Value::Object(obj);
+        items.push(stored.clone());
+        Mutation::Ok(items, stored)
+    })
+    .await
 }
 
 /// Replace an item by id (PUT). `id` is forced immutable.
@@ -128,16 +119,20 @@ pub async fn replace_item(
     ttl_seconds: i64,
 ) -> Result<Mutation, sqlx::Error> {
     obj.insert("id".into(), json!(id));
-    cas_mutate(pool, token, name, ttl_seconds, |items| {
-        match find_index(items, id) {
+    cas_mutate(
+        pool,
+        token,
+        name,
+        ttl_seconds,
+        |mut items| match find_index(&items, id) {
             Some(i) => {
-                let v = Value::Object(obj.clone());
+                let v = Value::Object(obj);
                 items[i] = v.clone();
-                Mutation::Ok(items.clone(), v)
+                Mutation::Ok(items, v)
             }
             None => Mutation::NotFound,
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -151,24 +146,26 @@ pub async fn merge_item(
     max_item_bytes: usize,
     ttl_seconds: i64,
 ) -> Result<Mutation, sqlx::Error> {
-    cas_mutate(pool, token, name, ttl_seconds, |items| {
-        match find_index(items, id) {
+    cas_mutate(
+        pool,
+        token,
+        name,
+        ttl_seconds,
+        |mut items| match find_index(&items, id) {
             Some(i) => {
                 let mut merged = items[i].as_object().cloned().unwrap_or_default();
-                for (k, v) in &patch {
-                    merged.insert(k.clone(), v.clone());
-                }
+                merged.extend(patch);
                 merged.insert("id".into(), json!(id));
                 let v = Value::Object(merged);
                 if serde_json::to_string(&v).map(|s| s.len()).unwrap_or(0) > max_item_bytes {
                     return Mutation::TooLarge;
                 }
                 items[i] = v.clone();
-                Mutation::Ok(items.clone(), v)
+                Mutation::Ok(items, v)
             }
             None => Mutation::NotFound,
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -180,21 +177,28 @@ pub async fn delete_item(
     id: &str,
     ttl_seconds: i64,
 ) -> Result<Mutation, sqlx::Error> {
-    cas_mutate(pool, token, name, ttl_seconds, |items| {
-        match find_index(items, id) {
+    cas_mutate(
+        pool,
+        token,
+        name,
+        ttl_seconds,
+        |mut items| match find_index(&items, id) {
             Some(i) => {
                 items.remove(i);
-                Mutation::Ok(items.clone(), Value::Null)
+                Mutation::Ok(items, Value::Null)
             }
             None => Mutation::NotFound,
-        }
-    })
+        },
+    )
     .await
 }
 
-/// Run a mutation closure under one `BEGIN IMMEDIATE` transaction (atomic
-/// read-modify-write). The closure receives the parsed items and returns a
-/// `Mutation`; on `Ok` the new array is persisted.
+/// Run a mutation closure as one atomic read-modify-write under
+/// `repo::begin_immediate` (the write lock is held BEFORE the read, so a
+/// concurrent writer can never invalidate the snapshot this mutates). The
+/// closure receives the parsed items and returns a `Mutation`; on `Ok` the
+/// new array is persisted and committed, otherwise the transaction is
+/// dropped (rolled back) untouched.
 async fn cas_mutate<F>(
     pool: &SqlitePool,
     token: &str,
@@ -203,28 +207,21 @@ async fn cas_mutate<F>(
     f: F,
 ) -> Result<Mutation, sqlx::Error>
 where
-    F: FnOnce(&mut Vec<Value>) -> Mutation,
+    F: FnOnce(Vec<Value>) -> Mutation,
 {
-    let mut tx = pool.begin().await?;
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
+    let mut tx = begin_immediate(pool).await?;
     let current: Option<String> =
         sqlx::query_scalar("SELECT items_json FROM crud_collections WHERE token = ? AND name = ?")
             .bind(token)
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_json_or(current.as_deref(), Vec::new());
-    match f(&mut items) {
-        Mutation::Ok(new_items, ret) => {
-            write_items(&mut tx, token, name, &new_items, ttl_seconds).await?;
-            tx.commit().await?;
-            Ok(Mutation::Ok(new_items, ret))
-        }
-        other => {
-            tx.rollback().await.ok();
-            Ok(other)
-        }
+    let outcome = f(parse_json_or(current.as_deref(), Vec::new()));
+    if let Mutation::Ok(new_items, _) = &outcome {
+        write_items(&mut tx, token, name, new_items, ttl_seconds).await?;
+        tx.commit().await?;
     }
+    Ok(outcome)
 }
 
 fn find_index(items: &[Value], id: &str) -> Option<usize> {
@@ -361,5 +358,83 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 20, "uuid ids never collide");
+    }
+
+    /// A migrated, file-backed WAL pool with one endpoint `tok`. The
+    /// in-memory pool uses shared-cache table locks, which hide the DEFERRED
+    /// read-then-write upgrade failure (`SQLITE_BUSY_SNAPSHOT`) that real WAL
+    /// databases hit under concurrent writers.
+    async fn wal_file_pool() -> (tempfile::TempDir, SqlitePool) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("crud.db");
+        let pool = crate::db::pool(path.to_str().expect("utf-8 path"))
+            .await
+            .expect("open WAL pool");
+        crate::db::migrate(&pool).await.expect("migrate");
+        let owner = crate::testing::seed_owner(&pool).await;
+        crate::testing::seed_endpoint(&pool, &owner.owner_id, "tok").await;
+        (dir, pool)
+    }
+
+    /// B8: `begin_immediate` really holds the write lock from BEGIN until
+    /// commit — a second writer (short busy timeout) is refused meanwhile.
+    #[tokio::test]
+    async fn begin_immediate_holds_the_write_lock_until_commit() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        let (dir, _pool) = wal_file_pool().await;
+        let opts = SqliteConnectOptions::new()
+            .filename(dir.path().join("crud.db"))
+            .busy_timeout(std::time::Duration::from_millis(50));
+        let fast = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        let wipe = "DELETE FROM crud_collections";
+        let tx = begin_immediate(&fast).await.unwrap();
+        let blocked = sqlx::query(wipe).execute(&fast).await;
+        assert!(
+            blocked.is_err(),
+            "a second writer must wait on the held lock"
+        );
+        tx.commit().await.unwrap();
+        sqlx::query(wipe).execute(&fast).await.unwrap();
+    }
+
+    /// B8: a read-modify-write must take the write lock BEFORE it reads.
+    /// Another writer holds the lock and commits a change to the same
+    /// collection while `append_item` is in flight: under a DEFERRED
+    /// transaction the append reads the stale snapshot and then either fails
+    /// its lock upgrade (`SQLITE_BUSY_SNAPSHOT`) or overwrites the other
+    /// write; under `BEGIN IMMEDIATE` it waits on `busy_timeout`, then reads
+    /// the committed row and appends to it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn append_waits_for_a_concurrent_writer_instead_of_losing_its_update() {
+        let (_dir, pool) = wal_file_pool().await;
+        let mut other = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *other)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO crud_collections (token, name, items_json, expires_at)
+             VALUES ('tok', 'items', '[{\"id\":\"first\"}]', datetime('now', '+1 day'))",
+        )
+        .execute(&mut *other)
+        .await
+        .unwrap();
+
+        let p = pool.clone();
+        let append = tokio::spawn(async move {
+            append_item(&p, "tok", "items", obj(&[("n", json!(2))]), 1000, 86400).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        sqlx::query("COMMIT").execute(&mut *other).await.unwrap();
+
+        let outcome = append.await.expect("append task");
+        assert!(outcome.is_ok(), "append failed: {:?}", outcome.err());
+        let items = list_items(&pool, "tok", "items").await.unwrap();
+        assert_eq!(items.len(), 2, "both writes survive: {items:?}");
+        assert_eq!(items[0]["id"], json!("first"));
     }
 }
