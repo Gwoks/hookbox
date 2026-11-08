@@ -35,7 +35,6 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/theme/theme";
 import {
   api,
-  session,
   useSession,
   type EndpointDetail,
   type EndpointSummary,
@@ -43,6 +42,11 @@ import {
 import { t } from "@/lib/copy";
 import { cn } from "@/lib/cn";
 import { absolutize } from "@/lib/url";
+import { RECOVERY_KEY_SECTION_ID } from "./recovery-key-section";
+import { SignOutDialog } from "./sign-out-dialog";
+
+/** The account menu shows only this much of the anonymous owner id. */
+const OWNER_ID_PREVIEW_LENGTH = 8;
 
 export interface AppShellProps {
   token: string;
@@ -65,10 +69,10 @@ export function AppShell({
   headerExtra,
   children,
 }: AppShellProps) {
-  const navigate = useNavigate();
-  const snap = useSession();
+  const { ownerId } = useSession();
   const tunnelOn = tunnelActive ?? endpoint?.tunnel_active ?? false;
   const [shareOpen, setShareOpen] = useState(false);
+  const [signOutOpen, setSignOutOpen] = useState(false);
   // AC-98: one GET per owner-screen mount for the count badge; any failure
   // just renders the plain "Share" label, no error surfaced for a glance-only
   // count.
@@ -85,11 +89,6 @@ export function AppShell({
       cancelled = true;
     };
   }, [token]);
-
-  function signOut() {
-    session.clear();
-    navigate("/", { replace: true });
-  }
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-canvas">
@@ -112,7 +111,11 @@ export function AppShell({
         </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          <AccountMenu email={snap.email} onSignOut={signOut} />
+          <AccountMenu
+            token={token}
+            ownerId={ownerId}
+            onSignOut={() => setSignOutOpen(true)}
+          />
         </div>
       </header>
 
@@ -198,6 +201,7 @@ export function AppShell({
         onOpenChange={setShareOpen}
         onCountChange={setShareCount}
       />
+      <SignOutDialog open={signOutOpen} onClose={() => setSignOutOpen(false)} />
     </div>
   );
 }
@@ -283,13 +287,18 @@ function EndpointSwitcher({
   );
 }
 
+/** Anonymous identity: a short owner-id preview (never an email, never the
+ * key), a jump to the recovery-key card, and sign out (confirmed). */
 function AccountMenu({
-  email,
+  token,
+  ownerId,
   onSignOut,
 }: {
-  email: string | null;
+  token: string;
+  ownerId: string | null;
   onSignOut: () => void;
 }) {
+  const navigate = useNavigate();
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -298,14 +307,23 @@ function AccountMenu({
         </Button>
       </MenuTrigger>
       <MenuContent align="end">
-        {email && (
+        {ownerId && (
           <>
             <div className="px-2 py-1.5 text-caption text-text-tertiary">
-              {t("shell.account.signedInAs", { email })}
+              {t("shell.account.owner", {
+                id: ownerId.slice(0, OWNER_ID_PREVIEW_LENGTH),
+              })}
             </div>
             <MenuSeparator />
           </>
         )}
+        <MenuItem
+          onSelect={() =>
+            navigate(`/d/${token}/settings#${RECOVERY_KEY_SECTION_ID}`)
+          }
+        >
+          {t("shell.account.recoveryKey")}
+        </MenuItem>
         <MenuItem onSelect={onSignOut}>{t("shell.account.signOut")}</MenuItem>
       </MenuContent>
     </Menu>

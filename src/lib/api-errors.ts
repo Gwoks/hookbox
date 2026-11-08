@@ -32,6 +32,19 @@ export function errorMessage(
   return fallback
 }
 
+/** Seconds to suggest when a 429 carries no Retry-After. */
+const DEFAULT_RETRY_AFTER_SECONDS = 60
+
+/** Banner copy for a failed sign-in step (mint a session, restore a key):
+ * rate limit with its wait, a network failure, else the server's detail. */
+export function signInErrorMessage(err: unknown): string {
+  if (err instanceof ApiError && err.status === 429) {
+    return t('landing.error.rateLimit', { seconds: err.retryAfter ?? DEFAULT_RETRY_AFTER_SECONDS })
+  }
+  if (err instanceof ApiError && err.code === 'network') return t('landing.error.network')
+  return errorMessage(err, t('landing.error.generic'))
+}
+
 /** Rethrows `err` unchanged, EXCEPT a 404/410 `ApiError`, whose `detail` is
  * replaced with the shared endpoint-gone copy. Always throws — never returns
  * — so callers can write `catch (err) { remapEndpointGone(err) }`. */

@@ -1,18 +1,24 @@
 /**
- * Typed API client over the 18 §5.2 management routes (PRD §5.1/§5.2/§5.3,
- * AC-1..5/60/S14/J7). The single typed boundary the SPA uses against the frozen
- * contract.
+ * Typed API client over the owner management routes (PRD §5.1/§5.2/§5.3,
+ * AC-1..5/60, hookbox-a73.3). The single typed boundary the SPA uses against
+ * the frozen contract.
  *
- * - Attaches `Authorization: Bearer <owner_secret>` to ALL /api/** EXCEPT
- *   POST /api/session (§5.1). The cap comes from the memory/localStorage session
- *   store — NEVER a cookie (AC-S14), and requests are sent WITHOUT credentials so
- *   no ambient cookie auth is ever used.
+ * - The owner credential is the anonymous recovery key in an HttpOnly,
+ *   SameSite=Strict cookie. Every owner request sends it same-origin
+ *   (`credentials: 'same-origin'`) plus `X-HookBox: 1`, the custom header the
+ *   server requires before it trusts the cookie (CSRF guard: a cross-site form
+ *   or `<img>` cannot set it). This module never sees the key except in the
+ *   explicit reveal/rotate replies, and never puts it in a URL.
  * - Parses the FLAT error envelope {error, detail} uniformly (AC-60).
- * - On a /api 401, bounces to / with the common.error.401 reason and clears the
- *   stale secret so a stale tab stops retrying until the stored secret changes
- *   (AC-J7); a 422 keeps the field-level detail; a 429 carries Retry-After.
+ * - A 401 on an owner route means the cookie is gone or was rotated
+ *   elsewhere: mark the tab signed out and bounce to / with the
+ *   common.error.401 reason. Session routes whose 401 is an expected answer
+ *   (GET /api/session, restore) opt out with `noBounce`.
+ * - The public share viewer does NOT use this module (api/public-client.ts
+ *   keeps `credentials: 'omit'` and sends no X-HookBox header).
  */
 import { z } from 'zod'
+import { t } from '@/lib/copy'
 import { ApiError } from './errors'
 import { apiPath, buildUrl, doFetch, parseJsonResponse, type CallOptions } from './http'
 import { session } from './session'
@@ -20,11 +26,12 @@ import {
   collectionResponseSchema,
   endpointDetailSchema,
   endpointSummarySchema,
+  keyResponseSchema,
   messageSchema,
   mockRuleSchema,
   requestDetailSchema,
   requestSummarySchema,
-  sessionResponseSchema,
+  sessionSummarySchema,
   shareLinkCreatedSchema,
   shareLinkSchema,
   stateResponseSchema,
@@ -32,7 +39,7 @@ import {
   type EndpointCreate,
   type MockRuleCreate,
   type MockRulePatch,
-  type SessionCreate,
+  type RestoreSession,
   type ShareLinkCreate,
 } from './schemas'
 
@@ -45,45 +52,43 @@ export function setUnauthorizedHandler(fn: (reason: string) => void) {
   onUnauthorized = fn
 }
 
+/** The custom header the server requires before it trusts the session cookie. */
+export const CSRF_HEADER = 'X-HookBox'
+
 interface RequestOpts<T> {
   method?: string
   body?: unknown
-  /** POST /api/session is the only route that must NOT carry the Bearer cap. */
-  noAuth?: boolean
+  /** A 401 here is an expected answer (not signed in / wrong key), not a
+   * dead session: throw it to the caller instead of bouncing to /. */
+  noBounce?: boolean
   query?: Record<string, string | number | undefined>
   /** zod schema for the success body; its inferred type becomes the return type. */
   schema?: z.ZodType<T>
-  /** Lets a caller abort an in-flight request (operator-toolkit AC-105f — the
-   * public share viewer aborts its poll/detail fetches on unmount). */
+  /** Lets a caller abort an in-flight request (operator-toolkit AC-105f). */
   signal?: AbortSignal
 }
 
 async function request<T = void>(path: string, opts: RequestOpts<T> = {}): Promise<T> {
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { [CSRF_HEADER]: '1' }
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
-  if (!opts.noAuth) {
-    const secret = session.getSecret()
-    if (secret) headers['Authorization'] = `Bearer ${secret}`
-  }
 
-  // No cookies — the cap is the only credential, attached as a header
-  // (AC-S14). `doFetch`'s 'omit' guarantees no ambient cookie auth. An
-  // aborted fetch is not a network failure — `doFetch` re-throws AbortError
-  // as-is so the caller's own `signal.aborted` check can decide what to do.
+  // The cookie rides along same-origin (overriding http.ts's 'omit', which
+  // the public viewer keeps). An aborted fetch is not a network failure —
+  // `doFetch` re-throws AbortError as-is so the caller's own
+  // `signal.aborted` check can decide what to do.
   const res = await doFetch(buildUrl(path, opts.query), {
     method: opts.method ?? 'GET',
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     signal: opts.signal,
+    credentials: 'same-origin',
   })
 
-  // 401 on a /api route → the stored secret is stale/rotated. Clear it (so this
-  // tab stops re-trying with the dead secret) and bounce to the gate (AC-J7).
-  if (res.status === 401 && !opts.noAuth) {
-    session.clear()
-    onUnauthorized?.(
-      'Your session ended — your secret was rotated somewhere else. Enter your email to continue.',
-    )
+  // 401 on an owner route → the cookie is gone or its key was rotated
+  // elsewhere. Mark this tab signed out and bounce to the gate.
+  if (res.status === 401 && !opts.noBounce) {
+    session.markSignedOut()
+    onUnauthorized?.(t('common.error.401'))
     throw new ApiError('unauthorized', 'Unauthorized', 401)
   }
 
@@ -93,15 +98,45 @@ async function request<T = void>(path: string, opts: RequestOpts<T> = {}): Promi
 type Opts = CallOptions
 
 export const api = {
-  // #1 — no auth, no bounce on 401 (this route mints the cap).
-  createSession(payload: SessionCreate, opts?: Opts) {
+  // ── Session (anonymous recovery key in an HttpOnly cookie) ──
+  /** The signed-in owner's summary; 401 when this browser has no valid key. */
+  getSession(opts?: Opts) {
+    return request(apiPath('session'), { noBounce: true, schema: sessionSummarySchema, signal: opts?.signal })
+  },
+  /** Mint a new anonymous owner + primary endpoint (or return the current
+   * one when a valid cookie is already present). Sets the cookie. */
+  createSession(opts?: Opts) {
     return request(apiPath('session'), {
       method: 'POST',
-      body: payload,
-      noAuth: true,
-      schema: sessionResponseSchema,
+      noBounce: true,
+      schema: sessionSummarySchema,
       signal: opts?.signal,
     })
+  },
+  /** Sign this browser in with a recovery key (does not rotate it). 401
+   * `invalid_key` for a malformed or unknown key. */
+  restoreSession(key: string, opts?: Opts) {
+    const body: RestoreSession = { key }
+    return request(apiPath('session', 'restore'), {
+      method: 'POST',
+      body,
+      noBounce: true,
+      schema: sessionSummarySchema,
+      signal: opts?.signal,
+    })
+  },
+  /** Reveal the recovery key this browser is signed in with. */
+  revealKey(opts?: Opts) {
+    return request(apiPath('session', 'key'), { method: 'POST', schema: keyResponseSchema, signal: opts?.signal })
+  },
+  /** Replace the key: the old one stops working everywhere (other browsers,
+   * a running tunnel CLI); this browser gets the new cookie. */
+  rotateKey(opts?: Opts) {
+    return request(apiPath('session', 'rotate'), { method: 'POST', schema: keyResponseSchema, signal: opts?.signal })
+  },
+  /** Clear the cookie from this browser. The key itself stays valid. */
+  signOut(opts?: Opts) {
+    return request<void>(apiPath('session'), { method: 'DELETE', noBounce: true, signal: opts?.signal })
   },
   // #2
   listEndpoints(opts?: Opts) {

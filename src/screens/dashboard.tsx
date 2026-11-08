@@ -4,7 +4,8 @@
  * the deep inspector on the right.
  *
  * SHELL states (AC-J2, copy.md dash.state.*):
- *   not-signed-in → bounce to / (no secret)
+ *   not-signed-in → the router's RequireSession gate bounces to / (this
+ *                   screen only mounts once the tab is signed in)
  *   loading       → GET /api/endpoints/{token} in flight (dash.state.loading.aria)
  *   not-found     → 404 unknown_endpoint card (distinct from gone, OQ-1)
  *   gone          → 410 endpoint_gone card (distinct copy)
@@ -20,12 +21,11 @@
  * endpoint_updated reflects tunnel_active live (AC-J10 / dash.tunnel.active).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { MoreHorizontal, Pause, Play } from "lucide-react";
 import {
   api,
   ApiError,
-  session,
   type EndpointDetail,
   type EndpointSummary,
   type RequestSummary,
@@ -62,6 +62,7 @@ import { Progress } from "@/components/ui/progress";
 import { SkeletonLines } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { Inspector } from "./dashboard/inspector";
+import { SaveKeyAlert } from "./dashboard/save-key-alert";
 
 type ExportPhase =
   | { kind: "idle" }
@@ -77,7 +78,6 @@ type Shell =
 export function Dashboard() {
   const { token = "" } = useParams();
   const navigate = useNavigate();
-  const hasSession = !!session.getSecret();
 
   const [shell, setShell] = useState<Shell>({ kind: "loading" });
   const [endpoints, setEndpoints] = useState<EndpointSummary[]>([]);
@@ -112,7 +112,6 @@ export function Dashboard() {
   }, [token]);
 
   useEffect(() => {
-    if (!hasSession) return;
     void loadShell();
     api
       .listEndpoints()
@@ -120,7 +119,7 @@ export function Dashboard() {
       .catch(() => {
         /* the switcher just shows the current token if listing fails */
       });
-  }, [hasSession, loadShell]);
+  }, [loadShell]);
 
   useEffect(() => {
     const on = () => {
@@ -156,12 +155,6 @@ export function Dashboard() {
     },
     [token],
   );
-
-  if (!hasSession) {
-    return (
-      <Navigate to="/" replace state={{ reason: t("common.error.401") }} />
-    );
-  }
 
   // Shell error cards (not-found / gone) — distinct copy (OQ-1).
   if (shell.kind === "not-found" || shell.kind === "gone") {
@@ -407,6 +400,7 @@ function DashboardLoaded({
       tunnelActive={tunnelActive}
       headerExtra={pill}
     >
+      <SaveKeyAlert token={token} />
       {offline && (
         <div className="border-b border-border px-4 py-2">
           <InlineAlert

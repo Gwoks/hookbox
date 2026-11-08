@@ -8,21 +8,16 @@
  * does an optimistic PATCH (#10) with revert-on-error.
  *
  * Opening with ?new=1 (the dashboard "New rule" link) auto-opens the builder.
- * Wrapped in the AppShell so the dashboard chrome stays consistent.
+ * Wrapped in the AppShell so the dashboard chrome stays consistent; the
+ * router's RequireSession gate mounts it only once the tab is signed in.
  */
 import { useCallback, useEffect, useState } from "react";
-import {
-  Link,
-  useNavigate,
-  useParams,
-  useSearchParams,
-} from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, MoreHorizontal, Plus, RotateCw } from "lucide-react";
 import {
   api,
   ApiError,
   mockRuleSchema,
-  session,
   type EndpointDetail,
   type EndpointSummary,
   type MockRule,
@@ -111,10 +106,8 @@ function activeShadowedFallbacks(endpoint: EndpointDetail | null): string[] {
 
 export function RulesManager() {
   const { token = "" } = useParams();
-  const navigate = useNavigate();
   const { toast } = useToast();
   const [search, setSearch] = useSearchParams();
-  const hasSession = !!session.getSecret();
 
   const [state, setState] = useState<ListState>({ kind: "loading" });
   const [endpoint, setEndpoint] = useState<EndpointDetail | null>(null);
@@ -142,7 +135,6 @@ export function RulesManager() {
   }, [token]);
 
   useEffect(() => {
-    if (!hasSession) return;
     void load();
     api
       .getEndpoint(token)
@@ -152,7 +144,7 @@ export function RulesManager() {
       .listEndpoints()
       .then(setEndpoints)
       .catch(() => {});
-  }, [hasSession, token, load]);
+  }, [token, load]);
 
   // ?new=1 auto-opens the builder for a fresh rule, then strips the param.
   useEffect(() => {
@@ -163,11 +155,6 @@ export function RulesManager() {
       setSearch(search, { replace: true });
     }
   }, [search, setSearch]);
-
-  if (!hasSession) {
-    navigate("/", { replace: true, state: { reason: t("common.error.401") } });
-    return null;
-  }
 
   function openNew() {
     setEditing(null);

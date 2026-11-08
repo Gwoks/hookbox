@@ -81,9 +81,10 @@ test("AC-59: F6's default catch-all payload matches the frozen §5.5.7 bytes exa
 });
 
 test("AC-42/AC-S13: the /s/:code viewer's module graph never reaches src/api/session.ts", () => {
-  // A static source check, not a bundler trace: the owner secret lives in
-  // localStorage (src/api/session.ts), and this page is same-origin with the
-  // dashboard, so any accidental import here would be owner takeover on XSS.
+  // A static source check, not a bundler trace: the owner identity layer
+  // (src/api/session.ts + bootstrap.ts + client.ts, which can reveal or
+  // rotate the recovery key) is same-origin with this page, so any
+  // accidental import here widens what an XSS in the viewer could reach.
   const files = [
     "src/screens/share-view.tsx",
     "src/screens/share-view/use-shared-feed.ts",

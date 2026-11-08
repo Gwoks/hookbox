@@ -1,26 +1,33 @@
 /**
- * Landing / email gate (/) — PRD §3, AC-1(FE), AC-D22, AC-J1. The entry point;
- * anti-enumeration is both UX and security: the gate is visually AND copy
- * identical for a brand-new vs. existing email through submit/success — there is
- * NO "welcome back" string (copy.md §4.2 note, AC-D22).
+ * Landing (/) — PRD §3, AC-1(FE), AC-J1, hookbox-a73.3. The entry point.
+ * There is no email and no account: identity is an anonymous recovery key
+ * the server keeps in an HttpOnly cookie. There is also no "welcome back"
+ * copy anywhere (AC-D22).
  *
- * States (AC-J1): auto-resume (stored owner+token → redirect to /d/:token, no
- * form) · idle · submitting (landing.email.submitting, input disabled, button
- * loading) · field-error on 422 (landing.error.email.invalid) · 429 banner with
- * Retry-After (landing.error.rateLimit {seconds}) · network-error banner
- * (landing.error.network) · no-endpoint banner (landing.error.noEndpoint) ·
- * storage-unavailable warn (landing.warn.storage, still submits, no redirect
- * loop). Also surfaces the 401-bounce reason (common.error.401) carried in
- * router state.
+ * States:
+ *   unknown            → the session gate asks the server (loading frame, or
+ *                        a retry frame when it can't be reached)
+ *   signed-in          → resume: straight to the primary endpoint (one is
+ *                        created first if the owner has none left)
+ *   signed-out         → "Get my endpoint" mints an anonymous owner + primary
+ *                        endpoint and opens it with `{ fresh: true }` (the
+ *                        dashboard then nudges them to save the key);
+ *                        "I have a recovery key" reveals the restore form
+ * Banners: the 401-bounce reason carried in router state (common.error.401),
+ * rate limit (Retry-After), network, and a warning when the browser blocks
+ * cookies (nothing could keep the tab signed in).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { api, ApiError, session, useSession } from '@/api'
+import { api, ApiError, resolvePrimaryToken, session, useSessionGate, type SessionStatus } from '@/api'
+import { signInErrorMessage } from '@/lib/api-errors'
 import { t } from '@/lib/copy'
+import { useAsyncAction } from '@/lib/hooks/use-async-action'
 import { BrandMark } from '@/components/hookbox/brand-mark'
 import { InlineAlert } from '@/components/hookbox/inline-alert'
+import { RestoreKeyForm } from '@/components/owner/restore-key-form'
+import { SessionPending } from '@/components/owner/require-session'
 import { Button } from '@/components/ui/button'
-import { Field, Input } from '@/components/ui/input'
 import { ThemeToggle } from '@/theme/theme'
 
 const STRIP = [
@@ -29,104 +36,75 @@ const STRIP = [
   { title: t('landing.strip.inspect.title'), body: t('landing.strip.inspect.body') },
 ]
 
-type Banner =
-  | { kind: 'rateLimit'; seconds: number }
-  | { kind: 'network' }
-  | { kind: 'noEndpoint' }
-  | { kind: 'bounced'; message: string }
-  | null
-
-export function Landing() {
+/**
+ * When the gate resolves to signed-in (a returning visitor, or another tab
+ * signing this browser in), open the owner's primary endpoint. A
+ * signed-out → signed-in flip is this tab's own mint/restore, which marks
+ * the tab signed in right before navigating itself, so it is skipped.
+ * Returns true once the resume failed (the page then shows a banner).
+ */
+function useResumeSignedIn(status: SessionStatus): boolean {
   const navigate = useNavigate()
-  const location = useLocation()
-  const snap = useSession()
+  const previous = useRef<SessionStatus | null>(null)
+  const [failed, setFailed] = useState(false)
 
-  const [email, setEmail] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [fieldError, setFieldError] = useState<string | null>(null)
-  const [banner, setBanner] = useState<Banner>(null)
-
-  // 401-bounce reason carried via router state (common.error.401).
-  const bounceReason = (location.state as { reason?: string } | null)?.reason
   useEffect(() => {
-    if (bounceReason) setBanner({ kind: 'bounced', message: bounceReason })
-  }, [bounceReason])
-
-  // Auto-resume: a stored owner secret means a live session — go straight to the
-  // dashboard. We resolve the primary endpoint token from the endpoint list.
-  const [resuming, setResuming] = useState(snap.hasSession)
-  useEffect(() => {
+    const before = previous.current
+    previous.current = status
+    if (status !== 'signed-in' || before === 'signed-out') return
     let cancelled = false
-    if (!session.getSecret()) {
-      setResuming(false)
-      return
-    }
-    setResuming(true)
+    setFailed(false)
     api
-      .listEndpoints()
-      .then((eps) => {
-        if (cancelled) return
-        if (eps.length > 0) {
-          navigate(`/d/${eps[0].token}`, { replace: true })
-        } else {
-          // Session exists but no endpoint — show the gate (no redirect loop).
-          setResuming(false)
-        }
+      .getSession()
+      .then(resolvePrimaryToken)
+      .then((token) => {
+        if (!cancelled) navigate(`/d/${token}`, { replace: true })
       })
-      .catch(() => {
-        // A 401 already cleared the secret + bounced; otherwise show the gate.
-        if (!cancelled) setResuming(false)
+      .catch((err: unknown) => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 401) session.markSignedOut()
+        else setFailed(true)
       })
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [status, navigate])
 
-  if (resuming) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-canvas" aria-busy="true">
-        <span className="sr-only">{t('dash.state.loading.aria')}</span>
-        <Button variant="ghost" loading aria-hidden="true" />
-      </div>
-    )
+  return failed
+}
+
+export function Landing() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const gate = useSessionGate()
+  const resumeFailed = useResumeSignedIn(gate.status)
+  const [restoreOpen, setRestoreOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const start = useAsyncAction(async () => {
+    const summary = await api.createSession()
+    const token = await resolvePrimaryToken(summary)
+    return { ownerId: summary.owner_id, token }
+  })
+
+  const bounceReason = (location.state as { reason?: unknown } | null)?.reason
+
+  if (gate.status === 'unknown') {
+    return <SessionPending error={gate.bootstrapError} onRetry={gate.retry} />
+  }
+  if (gate.status === 'signed-in' && !resumeFailed) {
+    return <SessionPending error={null} onRetry={gate.retry} />
   }
 
-  const storageWarn = !snap.storageAvailable
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setFieldError(null)
-    setBanner(null)
-    setSubmitting(true)
-    try {
-      const res = await api.createSession({ email })
-      // Persist the capability (rotate-overwrite). The active tab keeps it.
-      session.set(res.owner_secret, res.owner_id, email)
-      if (!res.primary || !res.primary.token) {
-        setBanner({ kind: 'noEndpoint' })
-        setSubmitting(false)
-        return
-      }
-      navigate(`/d/${res.primary.token}`, { replace: true })
-    } catch (err) {
-      setSubmitting(false)
-      if (err instanceof ApiError) {
-        if (err.status === 422) {
-          setFieldError(t('landing.error.email.invalid'))
-          return
-        }
-        if (err.status === 429) {
-          setBanner({ kind: 'rateLimit', seconds: err.retryAfter ?? 60 })
-          return
-        }
-        if (err.status === 0 || err.code === 'network') {
-          setBanner({ kind: 'network' })
-          return
-        }
-      }
-      setBanner({ kind: 'network' })
+  async function handleStart() {
+    setError(null)
+    const result = await start.run()
+    if (!result.ok) {
+      setError(signInErrorMessage(result.error))
+      return
     }
+    session.markSignedIn(result.value.ownerId, { broadcast: true })
+    navigate(`/d/${result.value.token}`, { replace: true, state: { fresh: true } })
   }
 
   return (
@@ -152,57 +130,40 @@ export function Landing() {
               <p className="text-body text-text-secondary">{t('landing.hero.subhead')}</p>
             </div>
 
-            {banner?.kind === 'bounced' && (
+            {typeof bounceReason === 'string' && (
               <InlineAlert variant="info" role="status">
-                {banner.message}
+                {bounceReason}
               </InlineAlert>
             )}
-            {banner?.kind === 'rateLimit' && (
-              <InlineAlert variant="warning" role="alert">
-                {t('landing.error.rateLimit', { seconds: banner.seconds })}
-              </InlineAlert>
-            )}
-            {banner?.kind === 'network' && (
+            {(error || resumeFailed) && (
               <InlineAlert variant="danger" role="alert">
-                {t('landing.error.network')}
+                {error ?? t('landing.error.network')}
               </InlineAlert>
             )}
-            {banner?.kind === 'noEndpoint' && (
-              <InlineAlert variant="danger" role="alert">
-                {t('landing.error.noEndpoint')}
-              </InlineAlert>
-            )}
-            {storageWarn && (
-              <InlineAlert variant="info" role="status">
-                {t('landing.warn.storage')}
+            {!gate.cookiesEnabled && (
+              <InlineAlert variant="warning" role="status">
+                {t('landing.warn.cookies')}
               </InlineAlert>
             )}
 
-            <form onSubmit={onSubmit} className="space-y-3" noValidate>
-              <Field
-                label={t('landing.email.label')}
-                helper={t('landing.email.helper')}
-                error={fieldError}
-                render={(p) => (
-                  <Input
-                    id={p.id}
-                    aria-describedby={p.describedBy}
-                    invalid={p.invalid}
-                    type="email"
-                    inputMode="email"
-                    autoComplete="email"
-                    mono
-                    placeholder={t('landing.email.placeholder')}
-                    value={email}
-                    disabled={submitting}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                )}
-              />
-              <Button type="submit" variant="primary" size="lg" loading={submitting} className="w-full sm:w-auto">
-                {submitting ? t('landing.email.submitting') : t('landing.email.submit')}
-              </Button>
-            </form>
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <Button variant="primary" size="lg" loading={start.pending} onClick={() => void handleStart()}>
+                  {start.pending ? t('landing.start.submitting') : t('landing.start.submit')}
+                </Button>
+                <Button
+                  variant="tint"
+                  size="lg"
+                  aria-expanded={restoreOpen}
+                  onClick={() => setRestoreOpen((open) => !open)}
+                >
+                  {t('landing.restore.toggle')}
+                </Button>
+              </div>
+              <p className="text-body-sm text-text-tertiary">{t('landing.start.helper')}</p>
+            </div>
+
+            {restoreOpen && <RestoreKeyForm />}
           </div>
 
           <ul className="mx-auto mt-10 grid max-w-landing-hero gap-4 sm:grid-cols-3">
