@@ -18,9 +18,9 @@
  * (`#recovery-key`) sits above the endpoint form. The router's RequireSession
  * gate mounts this screen only once the tab is signed in.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, RotateCw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import {
   api,
@@ -28,7 +28,6 @@ import {
   mockRuleSchema,
   type EndpointConfigPatch,
   type EndpointDetail,
-  type EndpointSummary,
 } from "@/api";
 import { t } from "@/lib/copy";
 import { absolutize } from "@/lib/url";
@@ -45,7 +44,7 @@ import {
   type ConfigBundle,
   type ConfigDiffRow,
 } from "@/lib/config-bundle";
-import { AppShell } from "@/components/owner/app-shell";
+import { useEndpoints } from "@/components/owner/endpoint-context";
 import { RecoveryKeySection } from "@/components/owner/recovery-key-section";
 import { CodeBlock } from "@/components/hookbox/code-block";
 import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
@@ -66,114 +65,32 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "error" }
-  | { kind: "ready"; endpoint: EndpointDetail };
-
 const COLLECTION_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function Settings() {
-  const { token = "" } = useParams();
-
-  const [load, setLoad] = useState<LoadState>({ kind: "loading" });
-  const [endpoints, setEndpoints] = useState<EndpointSummary[]>([]);
+  const { token, endpoint, replace } = useEndpoints();
   // AC-89: bumped only after a successful import, so SettingsForm's
   // reset-effect can distinguish "server truth changed out from under the
-  // form" from an ordinary Save (which already matches what's on screen).
-  // NOT a remount key — a remount would also destroy ConfigurationSection's
-  // own in-flight progress/report state, which lives inside SettingsForm's
-  // tree so it can read the form's `dirty` flag.
+  // form" from an ordinary Save.
   const [importGen, setImportGen] = useState(0);
 
-  const fetchAll = useCallback(async () => {
-    setLoad({ kind: "loading" });
-    try {
-      const endpoint = await api.getEndpoint(token);
-      setLoad({ kind: "ready", endpoint });
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) return;
-      setLoad({ kind: "error" });
-    }
-  }, [token]);
-
-  useEffect(() => {
-    void fetchAll();
-    api
-      .listEndpoints()
-      .then(setEndpoints)
-      .catch(() => {});
-  }, [fetchAll]);
-
-  const endpoint = load.kind === "ready" ? load.endpoint : null;
-
   return (
-    <AppShell token={token} endpoint={endpoint} endpoints={endpoints}>
-      <div className="mx-auto h-full max-w-2xl overflow-auto p-6">
-        <div className="mb-4 flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            asChild
-            aria-label={t("dash.action.rules")}
-          >
-            <Link to={`/d/${token}`}>
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            </Link>
-          </Button>
-          <h1 className="text-h2 text-text-primary">{t("set.title")}</h1>
-        </div>
-
-        {/* Owner-level, independent of this endpoint's load state, so the
-         * `#recovery-key` anchor is stable while the form below loads. */}
-        <div className="mb-8">
-          <RecoveryKeySection />
-        </div>
-
-        {load.kind === "loading" && (
-          <div aria-busy="true" className="space-y-3">
-            <span className="sr-only">{t("set.loading.aria")}</span>
-            <div className="skeleton h-9 w-full" />
-            <div className="skeleton h-9 w-2/3" />
-            <div className="skeleton h-9 w-1/2" />
-          </div>
-        )}
-
-        {load.kind === "error" && (
-          <InlineAlert
-            variant="danger"
-            role="alert"
-            title={t("set.error.title")}
-            action={
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void fetchAll()}
-              >
-                <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
-                {t("set.error.retry")}
-              </Button>
-            }
-          />
-        )}
-
-        {load.kind === "ready" && (
-          <SettingsForm
-            token={token}
-            endpoint={load.endpoint}
-            importGen={importGen}
-            onSaved={(e) => setLoad({ kind: "ready", endpoint: e })}
-            onImported={(e) => {
-              // AC-89: refresh server truth AND signal SettingsForm to reset
-              // its field state from the new `endpoint` prop it is about to
-              // receive — a re-fetch alone leaves the on-screen fields stale.
-              setLoad({ kind: "ready", endpoint: e });
-              setImportGen((g) => g + 1);
-            }}
-          />
-        )}
+    <div className="mx-auto w-full max-w-2xl p-6">
+      <h1 className="mb-4 text-h2 text-text-primary">{t("set.title")}</h1>
+      <div className="mb-8">
+        <RecoveryKeySection />
       </div>
-    </AppShell>
+      <SettingsForm
+        token={token}
+        endpoint={endpoint}
+        importGen={importGen}
+        onSaved={replace}
+        onImported={(e) => {
+          replace(e);
+          setImportGen((g) => g + 1);
+        }}
+      />
+    </div>
   );
 }
 

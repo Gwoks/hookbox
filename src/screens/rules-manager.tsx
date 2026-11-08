@@ -12,20 +12,19 @@
  * router's RequireSession gate mounts it only once the tab is signed in.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, MoreHorizontal, Plus, RotateCw } from "lucide-react";
 import {
   api,
   ApiError,
   mockRuleSchema,
   type EndpointDetail,
-  type EndpointSummary,
   type MockRule,
   type MockRuleCreate,
 } from "@/api";
 import { z } from "zod";
 import { t } from "@/lib/copy";
-import { AppShell } from "@/components/owner/app-shell";
+import { useEndpoints } from "@/components/owner/endpoint-context";
 import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { MethodBadge } from "@/components/hookbox/method-badge";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
@@ -105,13 +104,11 @@ function activeShadowedFallbacks(endpoint: EndpointDetail | null): string[] {
 }
 
 export function RulesManager() {
-  const { token = "" } = useParams();
+  const { token, endpoint } = useEndpoints();
   const { toast } = useToast();
   const [search, setSearch] = useSearchParams();
 
   const [state, setState] = useState<ListState>({ kind: "loading" });
-  const [endpoint, setEndpoint] = useState<EndpointDetail | null>(null);
-  const [endpoints, setEndpoints] = useState<EndpointSummary[]>([]);
 
   // Builder + delete dialog state.
   const [builderOpen, setBuilderOpen] = useState(false);
@@ -136,15 +133,7 @@ export function RulesManager() {
 
   useEffect(() => {
     void load();
-    api
-      .getEndpoint(token)
-      .then(setEndpoint)
-      .catch(() => {});
-    api
-      .listEndpoints()
-      .then(setEndpoints)
-      .catch(() => {});
-  }, [token, load]);
+  }, [load]);
 
   // ?new=1 auto-opens the builder for a fresh rule, then strips the param.
   useEffect(() => {
@@ -274,8 +263,8 @@ export function RulesManager() {
   }
 
   return (
-    <AppShell token={token} endpoint={endpoint} endpoints={endpoints}>
-      <div className="mx-auto h-full max-w-3xl overflow-auto p-6">
+    <>
+      <div className="mx-auto w-full max-w-3xl p-6">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button
@@ -477,7 +466,7 @@ export function RulesManager() {
         errorFallback={t("rules.default.error")}
         onConfirm={handleAddDefaultConfirmed}
       />
-    </AppShell>
+    </>
   );
 }
 

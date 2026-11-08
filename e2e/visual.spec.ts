@@ -13,7 +13,7 @@
  *
  * Reduced-motion (AC-D16) is its own project (reduced-motion.spec.ts).
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { installMockBackend, TOKEN } from "./mock-backend";
 
 test("AC-D24: light first-paint default for a new visitor (no .dark)", async ({
@@ -114,7 +114,14 @@ test("AC-7: the dashboard sub-header renders exactly one URL label ('Mock URL', 
   await expect(page.getByText("Local path", { exact: true })).toHaveCount(0);
 });
 
-test("AC-127: the sub-header wraps without horizontal scroll at the 360px floor", async ({
+const hasHorizontalScroll = (page: Page) =>
+  page.evaluate(
+    () =>
+      document.documentElement.scrollWidth >
+      document.documentElement.clientWidth,
+  );
+
+test("AC-127: at the 360px floor the Mock URL stays visible and the Menu sheet carries the nav, with no horizontal scroll", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 360, height: 800 });
@@ -123,14 +130,30 @@ test("AC-127: the sub-header wraps without horizontal scroll at the 360px floor"
   // See the AC-7 test above re: waiting out the transient FeedEmpty window.
   await expect(page.getByRole("option").first()).toBeVisible();
   await expect(page.getByText("Mock URL", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Rules" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "New rule" })).toBeVisible();
-  const hasHorizontalScroll = await page.evaluate(
-    () =>
-      document.documentElement.scrollWidth >
-      document.documentElement.clientWidth,
-  );
-  expect(hasHorizontalScroll).toBe(false);
+  expect(await hasHorizontalScroll(page)).toBe(false);
+
+  // Below md, Rules / New rule live in the "Menu" sheet (design call D5).
+  await page.getByRole("button", { name: "Open menu", exact: true }).click();
+  const menu = page.getByRole("dialog", { name: "Menu" });
+  await expect(menu.getByRole("link", { name: "Rules", exact: true })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "New rule", exact: true })).toBeVisible();
+  expect(await hasHorizontalScroll(page)).toBe(false);
+});
+
+test("below md, the selected feed row opens the inspector in a bottom sheet", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await installMockBackend(page, { authed: true });
+  await page.goto(`/d/${TOKEN}`);
+  await page.getByRole("option").first().click();
+  const sheet = page.getByRole("dialog", { name: "Request detail" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("tab", { name: "Headers", exact: true })).toBeVisible();
+  await expect(sheet.getByText("user-agent")).toBeVisible();
+  expect(await hasHorizontalScroll(page)).toBe(false);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
 });
 
 test("AC-127 (F1): the feed header's title/count/actions-menu/pause stay usable at the 360px floor", async ({

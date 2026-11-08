@@ -4,7 +4,9 @@
 import { cn } from '@/lib/cn'
 import { t } from '@/lib/copy'
 
-export function BrandMark({ className }: { className?: string }) {
+/** `wordmark="lg"` keeps only the glyph below `lg` (the owner top nav at
+ * narrow widths); the glyph's aria-label still names the brand. */
+export function BrandMark({ className, wordmark = 'always' }: { className?: string; wordmark?: 'always' | 'lg' }) {
   return (
     <span className={cn('inline-flex items-center gap-2', className)}>
       <svg
@@ -22,7 +24,7 @@ export function BrandMark({ className }: { className?: string }) {
         <path d="M16 4v8a5 5 0 0 1-10 0" />
         <circle cx="16" cy="3.5" r="1.4" fill="currentColor" stroke="none" />
       </svg>
-      <span className="text-h2 font-bold text-text-primary">{t('landing.brand.wordmark')}</span>
+      <span className={cn('text-h2 font-bold text-text-primary', wordmark === 'lg' && 'hidden lg:inline')}>{t('landing.brand.wordmark')}</span>
     </span>
   )
 }

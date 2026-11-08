@@ -73,6 +73,17 @@ export const copy = {
   'shell.account.signOut.error': "Couldn't sign out. Try again.",
   'shell.mobileNav.open.aria': 'Open menu',
   'shell.mobileNav.title': 'Menu',
+  'shell.nav.requests': 'Requests',
+  'shell.nav.rules': 'Rules',
+  'shell.nav.settings': 'Settings',
+  'shell.nav.newRule': 'New rule',
+  'shell.nav.newEndpoint.error': "Couldn't create a new endpoint. Try again.",
+  'theme.toggle.toDark': 'Switch to dark theme',
+  'theme.toggle.toLight': 'Switch to light theme',
+
+  // ── Owner layout frames (endpoint load failures) ──
+  'owner.error.title': "Couldn't load this endpoint",
+  'owner.error.body': 'Something went wrong reaching the server. Check your connection and try again.',
 
   // ── 5.2 Dashboard sub-header ──
   'dash.mockUrl.label': 'Mock URL',
@@ -165,6 +176,7 @@ export const copy = {
     "Too many connections to this endpoint's feed ({max} max). Close another tab and it'll reconnect.",
 
   // ── 5.5 Inspector ──
+  'insp.sheet.title': 'Request detail',
   'insp.empty.title': 'Select a request',
   'insp.empty.body': 'Pick a request on the left to inspect it.',
   'insp.loading.aria': 'Loading request detail',
