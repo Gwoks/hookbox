@@ -65,7 +65,7 @@ use crate::models::{
     PublicEndpointInfo, PublicRequestDetail, PublicRequestSummary, PublicShareFeed, ShareLink,
     ShareLinkCreate, ShareLinkCreated,
 };
-use crate::routes::api::effective_client_ip;
+use crate::net::client_ip::effective_client_ip;
 use crate::state::AppState;
 use crate::util::json::parse_json_or;
 use crate::util::time::to_rfc3339;

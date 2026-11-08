@@ -20,7 +20,6 @@ use axum::{
     http::{HeaderValue, Request, StatusCode},
     middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
-    routing::get,
     Router,
 };
 use http_body_util::BodyExt;
@@ -28,7 +27,7 @@ use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::interceptor::engine;
 use crate::planes::{resolve_plane, Plane, PlaneResult};
-use crate::routes::{api_router, feed, healthz, share_router, tunnel_ws};
+use crate::routes;
 use crate::state::AppState;
 
 fn plane_str(p: &Plane) -> &'static str {
@@ -174,8 +173,8 @@ pub async fn plane_dispatch(
 }
 
 /// Build the top-level app: the plane-dispatch middleware wrapping the inner
-/// router (the real `/api` management routes + `/healthz` + UI fallback). The
-/// middleware short-circuits P1 so the mock catch-all can never shadow these.
+/// router (`routes::router()` — the single route table). The middleware
+/// short-circuits P1 so the mock catch-all can never shadow these.
 ///
 /// `CatchPanicLayer` is added **outermost** (AC-S18): F7's truncation path now
 /// routes attacker/upstream-controlled bytes, and this turns any future panic
@@ -183,24 +182,7 @@ pub async fn plane_dispatch(
 /// any non-panicking response (AC-72). No `TraceLayer` is added here — AC-S6
 /// requires the app's own logging to never see a share code or the full path.
 pub fn build_app(state: AppState) -> Router {
-    let inner = Router::new()
-        .merge(api_router())
-        // F4 share links: three owner routes + two PUBLIC unauthenticated
-        // routes (§5.1/§5.2). Merged here, not layered separately, so no
-        // TraceLayer or other logging middleware can end up wrapping only
-        // this router and start logging a share code (AC-S6).
-        .merge(share_router())
-        .route("/healthz", get(healthz))
-        // P3 live feed (owner-gated via ?cap=).
-        .route("/ws/:token", get(feed::ws_handler))
-        .route("/sse/:token", get(feed::sse_handler))
-        // P3 tunnel control channel (bind auth before accept).
-        .route("/ws/tunnel/:slug", get(tunnel_ws::tunnel_ws_handler))
-        // P3 SPA: serve dist/ with index.html fallback (R6 — never shadows P1/P2).
-        .fallback(crate::routes::spa::serve_spa);
-    let inner = add_test_only_routes(inner);
-
-    inner
+    add_test_only_routes(routes::router())
         .layer(from_fn_with_state(state.clone(), plane_dispatch))
         .with_state(state)
         .layer(CatchPanicLayer::new())
@@ -219,7 +201,7 @@ fn add_test_only_routes(router: Router<AppState>) -> Router<AppState> {
 /// of every non-test build.
 #[cfg(test)]
 fn add_test_only_routes(router: Router<AppState>) -> Router<AppState> {
-    router.route("/__test_panic", get(test_panic_handler))
+    router.route("/__test_panic", axum::routing::get(test_panic_handler))
 }
 
 #[cfg(test)]
