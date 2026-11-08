@@ -20,9 +20,8 @@ pub mod routes;
 pub mod state;
 pub(crate) mod util;
 
-// SQLite-backed stores (replace two Redis responsibilities).
-pub mod crud_store;
-pub mod state_store;
+// SQLite-backed stores (replace two Redis responsibilities) + trace writes.
+pub(crate) mod repo;
 
 // In-process components backing AppState.
 pub mod feed;

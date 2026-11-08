@@ -23,17 +23,6 @@ pub enum Mutation {
     TooLarge,
 }
 
-#[derive(Debug)]
-pub enum CrudError {
-    Sqlx(sqlx::Error),
-}
-
-impl From<sqlx::Error> for CrudError {
-    fn from(e: sqlx::Error) -> Self {
-        CrudError::Sqlx(e)
-    }
-}
-
 /// Read the current items array for a collection (live, non-expired).
 pub async fn list_items(
     pool: &SqlitePool,
@@ -86,7 +75,7 @@ pub async fn append_item(
     mut obj: serde_json::Map<String, Value>,
     max_items: usize,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     let mut tx = pool.begin().await?;
     // BEGIN IMMEDIATE: take the write lock up front to serialize writers.
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *tx).await.ok();
@@ -118,7 +107,7 @@ pub async fn replace_item(
     id: &str,
     mut obj: serde_json::Map<String, Value>,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     obj.insert("id".into(), json!(id));
     cas_mutate(pool, token, name, ttl_seconds, |items| {
         match find_index(items, id) {
@@ -142,7 +131,7 @@ pub async fn merge_item(
     patch: serde_json::Map<String, Value>,
     max_item_bytes: usize,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     cas_mutate(pool, token, name, ttl_seconds, |items| {
         match find_index(items, id) {
             Some(i) => {
@@ -171,7 +160,7 @@ pub async fn delete_item(
     name: &str,
     id: &str,
     ttl_seconds: i64,
-) -> Result<Mutation, CrudError> {
+) -> Result<Mutation, sqlx::Error> {
     cas_mutate(pool, token, name, ttl_seconds, |items| {
         match find_index(items, id) {
             Some(i) => {
@@ -193,7 +182,7 @@ async fn cas_mutate<F>(
     name: &str,
     ttl_seconds: i64,
     f: F,
-) -> Result<Mutation, CrudError>
+) -> Result<Mutation, sqlx::Error>
 where
     F: FnOnce(&mut Vec<Value>) -> Mutation,
 {

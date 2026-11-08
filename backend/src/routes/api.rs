@@ -905,10 +905,7 @@ async fn clear_state(
     Path(token): Path<String>,
 ) -> Result<Json<Message>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    sqlx::query("DELETE FROM endpoint_state WHERE token = ?")
-        .bind(&token)
-        .execute(&state.pool)
-        .await?;
+    crate::repo::state::clear_state(&state.pool, &token).await?;
     Ok(Json(Message::new("State cleared.")))
 }
 

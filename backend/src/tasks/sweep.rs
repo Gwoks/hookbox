@@ -7,7 +7,7 @@
 //!   (b) deletes expired `endpoint_state` / `crud_collections` rows,
 //!   (c) hard-deletes endpoint tombstones older than `GONE_TTL_HOURS`,
 //!   (d) evicts idle rate-limit buckets so the in-memory map stays bounded.
-//! The 100-cap is also held at write time (db::insert_trace) so it never drifts.
+//! The 100-cap is also held at write time (repo::requests::insert_trace) so it never drifts.
 
 use std::sync::Arc;
 use std::time::Duration;

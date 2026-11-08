@@ -1669,7 +1669,7 @@ async fn share_row_invariant_masked_value_never_appears_elsewhere() {
 
 /// Re-validates journey F4-viewer + PRD §5.5.4 / AC-77: `request_count` is a
 /// monotonic lifetime counter, bumped on the same write path as the trace
-/// (`db::insert_trace`), so it can never drift from the number of rows the
+/// (`repo::requests::insert_trace`), so it can never drift from the number of rows the
 /// viewer (and the owner) actually see listed.
 #[tokio::test]
 async fn request_count_and_last_hit_increment_on_the_trace_write_path() {

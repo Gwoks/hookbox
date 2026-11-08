@@ -20,10 +20,10 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde_json::{json, Value};
 
-use crate::db::{self, TraceRecord};
 use crate::feed::FeedEvent;
 use crate::helpers::{self, redact, value_to_string};
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
+use crate::repo::requests::{insert_trace, TraceRecord};
 use crate::rule_cache::{CompiledEndpoint, Resolved};
 use crate::state::AppState;
 use crate::util::time::now_iso;
@@ -108,7 +108,7 @@ pub async fn handle_mock(
     // 2. Lazily read state ONLY if some enabled rule gates on it.
     let mut endpoint_state: BTreeMap<String, String> = BTreeMap::new();
     if ep.any_rule_gates_on_state {
-        match crate::state_store::read_state(&state.pool, token).await {
+        match crate::repo::state::read_state(&state.pool, token).await {
             Ok(s) => {
                 trace.push(step("state_read", &format!("{} key(s)", s.len())));
                 endpoint_state = s;
@@ -172,7 +172,7 @@ pub async fn handle_mock(
                 state.cfg.template_max_size,
                 state.cfg.template_max_tags,
             );
-            match crate::state_store::write_state(
+            match crate::repo::state::write_state(
                 &state.pool,
                 token,
                 &w.key,
@@ -834,7 +834,7 @@ fn spawn_trace(
     });
 
     tokio::spawn(async move {
-        let row_id = db::insert_trace(&pool, &rec, trace_cap).await.unwrap_or(0);
+        let row_id = insert_trace(&pool, &rec, trace_cap).await.unwrap_or(0);
         let mut summary = summary_base;
         summary["id"] = json!(row_id);
         hub.publish(&token_s, FeedEvent::new("new_request", summary));
