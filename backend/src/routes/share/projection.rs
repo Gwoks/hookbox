@@ -39,7 +39,7 @@ const PUBLIC_RESPONSE_HEADER_REDACT: [&str; 5] = [
 /// documented as lowercase, so a case-sensitive `contains` let a
 /// case-folded token survive verbatim. The `response_body` column is NOT
 /// filtered here at all (§5.11) — that channel is closed on the persist path
-/// instead, in `interceptor::engine::redact_echo_persisted_headers`, which
+/// instead, in `interceptor::engine::echo::redact_echo_persisted_headers`, which
 /// shares this exact case-insensitive comparison via `contains_ci`
 /// so the two can never drift apart again (hookbox-mun.37).
 fn mask_token_in_value(token: &str, value: Value) -> Value {
