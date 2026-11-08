@@ -44,6 +44,7 @@ export const copy = {
 
   // ── 5.1 App shell & nav ──
   'shell.skipLink': 'Skip to content',
+  'layout.nav.aria': 'Main',
   'shell.nav.endpointSwitcher.label': 'Switch endpoint',
   'shell.nav.endpointSwitcher.placeholder': 'Select an endpoint',
   'shell.nav.newEndpoint': 'New endpoint',
