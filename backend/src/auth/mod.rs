@@ -19,18 +19,11 @@ use crate::error::ApiError;
 use crate::ids::hash_secret;
 use crate::state::AppState;
 
-/// Parse a `Bearer <secret>` header, returning the raw secret or 401.
-fn parse_bearer(authorization: Option<&str>) -> Result<String, ApiError> {
-    let unauthorized = || ApiError::unauthorized("Valid owner capability required.");
-    let header = authorization.ok_or_else(unauthorized)?;
-    let mut parts = header.splitn(2, ' ');
-    let scheme = parts.next().unwrap_or("");
-    let token = parts.next().unwrap_or("").trim();
-    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
-        return Err(unauthorized());
-    }
-    Ok(token.to_string())
-}
+mod bearer;
+mod ownership;
+
+use bearer::parse_bearer;
+pub use ownership::{assert_owns_endpoint, verify_cap_owns_token};
 
 /// Resolve the authenticated `owner_id` from the bearer secret (PORT of
 /// `require_owner`). Looks up `sha256(secret)`; missing/malformed/unknown → 401.
@@ -46,66 +39,6 @@ pub async fn require_owner(
             .fetch_optional(pool)
             .await?;
     owner_id.ok_or_else(|| ApiError::unauthorized("Valid owner capability required."))
-}
-
-/// Return the endpoint row's owner check result: `Ok(())` iff `owner_id` owns
-/// `token`; else 404 (never 403). Mirrors `assert_owns_endpoint`. Callers that
-/// need the full row should select it themselves after this passes, or use the
-/// route-layer query that already loads the row.
-pub async fn assert_owns_endpoint(
-    pool: &SqlitePool,
-    token: &str,
-    owner_id: &str,
-) -> Result<(), ApiError> {
-    let row_owner: Option<String> =
-        sqlx::query_scalar("SELECT owner_id FROM endpoints WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await?;
-    match row_owner {
-        Some(o) if o == owner_id => Ok(()),
-        _ => Err(ApiError::not_found("Endpoint not found.")),
-    }
-}
-
-/// Return true iff `secret` is a valid owner capability that owns `token`.
-///
-/// Used by the WS/SSE feed gate (§5.4) and the tunnel bind handshake (§5.8),
-/// which run *before* any extractor and therefore cannot use `require_owner`.
-/// A missing/blank secret or token returns false without a credential DB hit.
-/// Never errors — a DB hiccup denies (returns false).
-pub async fn verify_cap_owns_token(pool: &SqlitePool, token: &str, secret: Option<&str>) -> bool {
-    let secret = match secret {
-        Some(s) if !s.is_empty() => s,
-        _ => return false,
-    };
-    if token.is_empty() {
-        return false;
-    }
-    let secret_hash = hash_secret(secret);
-    let owner_id: Option<String> =
-        match sqlx::query_scalar("SELECT owner_id FROM owners WHERE secret_hash = ?")
-            .bind(&secret_hash)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-    let owner_id = match owner_id {
-        Some(o) => o,
-        None => return false,
-    };
-    let ep_owner: Option<String> =
-        match sqlx::query_scalar("SELECT owner_id FROM endpoints WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-    matches!(ep_owner, Some(o) if o == owner_id)
 }
 
 /// Axum extractor: an authenticated owner id resolved from the `Authorization`
