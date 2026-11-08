@@ -144,6 +144,11 @@ const config: Config = {
           '0%': { boxShadow: 'inset 3px 0 0 var(--accent)' },
           '100%': { boxShadow: 'inset 3px 0 0 transparent' },
         },
+        // Landing hero character marks (decorative; reduced motion skips them).
+        'mark-in': {
+          from: { opacity: '0', transform: 'translateY(12px) scale(.8)' },
+          to: { opacity: '1', transform: 'translateY(0) scale(1)' },
+        },
         shimmer: { '100%': { transform: 'translateX(100%)' } },
         spin: { to: { transform: 'rotate(360deg)' } },
       },
@@ -156,6 +161,7 @@ const config: Config = {
         'toast-in': 'toast-in var(--dur-base) var(--ease-standard)',
         'feed-row-in':
           'feed-row-in var(--dur-base) var(--ease-emphasized), rail-flash 600ms var(--ease-standard)',
+        'mark-in': 'mark-in var(--dur-slow) var(--ease-spring) both',
         spin: 'spin 1s linear infinite',
       },
     },

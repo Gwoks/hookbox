@@ -176,18 +176,14 @@ export function ShareDialog({
               label={t('share.label.label')}
               helper={!labelTooLong ? t('share.label.helper') : undefined}
               error={labelTooLong ? t('share.label.tooLong') : null}
-              render={(p) => (
-                <Input
-                  id={p.id}
-                  aria-describedby={p.describedBy}
-                  invalid={p.invalid}
-                  placeholder={t('share.label.placeholder')}
-                  value={label}
-                  disabled={creating}
-                  onChange={(e) => setLabel(e.target.value)}
-                />
-              )}
-            />
+            >
+              <Input
+                placeholder={t('share.label.placeholder')}
+                value={label}
+                disabled={creating}
+                onChange={(e) => setLabel(e.target.value)}
+              />
+            </Field>
             <div className="flex justify-end">
               <Button
                 variant="primary"
@@ -238,7 +234,7 @@ export function ShareDialog({
                 role="alert"
                 title={t('share.list.error.title')}
                 action={
-                  <Button variant="secondary" size="sm" onClick={() => void load()}>
+                  <Button variant="outline" size="sm" onClick={() => void load()}>
                     {t('common.retry')}
                   </Button>
                 }

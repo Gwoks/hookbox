@@ -1,6 +1,6 @@
 /** SplitPane (design.md §3.9 / §7). LEFT feed-pct / min feed-min-w, RIGHT
- * flex-1. Divider is a splitter-w hit area with a centered 1px border-strong
- * hairline; on hover/focus it thickens to 2px accent. Below bp-md it stacks
+ * flex-1. The divider is a 16px gutter between two cards (each already has
+ * its own hairline border); on hover/focus a 2px accent line marks it. Below bp-md it stacks
  * (the parent screen swaps to the mobile slide-over). Drag-to-resize keeps the
  * left width within [min, 70%]. */
 import { useCallback, useRef, useState, type ReactNode } from 'react'
@@ -62,10 +62,10 @@ export function SplitPane({
           if (e.key === 'ArrowLeft') setLeftPct((p) => Math.max(20, p - 2))
           if (e.key === 'ArrowRight') setLeftPct((p) => Math.min(70, p + 2))
         }}
-        className="group relative w-1.5 shrink-0 cursor-col-resize"
+        className="group relative w-4 shrink-0 cursor-col-resize"
         aria-label="Resize feed and inspector"
       >
-        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border-strong transition-all group-hover:w-0.5 group-hover:bg-accent group-focus-visible:w-0.5 group-focus-visible:bg-accent" />
+        <span className="absolute inset-y-3 left-1/2 w-px -translate-x-1/2 bg-transparent transition-all duration-base group-hover:w-0.5 group-hover:bg-accent group-focus-visible:w-0.5 group-focus-visible:bg-accent" />
       </div>
       <div className="min-w-0 flex-1 overflow-hidden">{right}</div>
     </div>

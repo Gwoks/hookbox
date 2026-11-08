@@ -17,7 +17,13 @@ export default mergeConfig(
       restoreMocks: true,
       coverage: {
         provider: 'v8',
-        include: ['src/lib/**', 'src/design/**', 'src/components/{ui,hookbox,layout}/**'],
+        include: [
+          'src/lib/**',
+          'src/design/**',
+          'src/components/{ui,hookbox,layout}/**',
+          // The pure screen modules (no React).
+          'src/screens/**/{draft,form,default-rule}.ts',
+        ],
         exclude: ['src/**/*.test.{ts,tsx}', 'src/lib/copy.ts'],
         reporter: ['text-summary', 'text'],
       },

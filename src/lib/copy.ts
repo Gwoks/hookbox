@@ -12,6 +12,8 @@ export const copy = {
   'landing.brand.wordmark': 'HookBox',
   'landing.brand.markAlt': 'HookBox',
   'landing.hero.headline': 'Mock, intercept, and watch HTTP — live.',
+  // The one word of the headline set on the peach hero pill.
+  'landing.hero.highlight': 'intercept',
   'landing.hero.subhead':
     'Self-hosted API mocking and request interception with a real-time inspector. One click, one endpoint. No email, no password, no setup.',
   'landing.start.submit': 'Get my endpoint',
@@ -28,7 +30,21 @@ export const copy = {
   'landing.strip.inspect.title': 'Inspect',
   'landing.strip.inspect.body':
     'A streaming feed of every hit with a deep inspector — headers, query, body, the response served, and the full resolution trace.',
-  'landing.cli.link': 'Already have an endpoint? Tunnel from your machine →',
+  'landing.nav.how': 'How it works',
+  'landing.nav.cli': 'CLI',
+  'landing.nav.getStarted': 'Get started',
+  'landing.mockup.caption':
+    'A preview of the HookBox dashboard: a live feed of requests beside the selected request and its headers.',
+  'landing.mockup.endpoint': 'checkout-api',
+  'landing.features.eyebrow': 'How it works',
+  'landing.features.title': 'One URL. Every request on the record.',
+  'landing.features.lead':
+    "Point a webhook or a client at your mock URL. HookBox answers by your rules, forwards what you don't mock, and shows every hit the moment it lands.",
+  'landing.features.mock.sample': 'POST /login  →  201\n{ "token": "{{random \'uuid\'}}" }',
+  'landing.tunnel.body':
+    "Forward an endpoint's public traffic to a server on your localhost — test webhooks against the code you're running right now.",
+  'landing.tunnel.command': 'tunnel --port 3000 --endpoint <endpoint> --key <recovery-key>',
+  'landing.tunnel.link': 'Read the CLI guide',
   'landing.footer.tagline':
     "Self-hosted · Single binary · No tracking — built for developers who'd rather run it themselves.",
   // ── 4.2 Landing states ──
@@ -73,6 +89,17 @@ export const copy = {
   'shell.account.signOut.error': "Couldn't sign out. Try again.",
   'shell.mobileNav.open.aria': 'Open menu',
   'shell.mobileNav.title': 'Menu',
+  'shell.nav.requests': 'Requests',
+  'shell.nav.rules': 'Rules',
+  'shell.nav.settings': 'Settings',
+  'shell.nav.newRule': 'New rule',
+  'shell.nav.newEndpoint.error': "Couldn't create a new endpoint. Try again.",
+  'theme.toggle.toDark': 'Switch to dark theme',
+  'theme.toggle.toLight': 'Switch to light theme',
+
+  // ── Owner layout frames (endpoint load failures) ──
+  'owner.error.title': "Couldn't load this endpoint",
+  'owner.error.body': 'Something went wrong reaching the server. Check your connection and try again.',
 
   // ── 5.2 Dashboard sub-header ──
   'dash.mockUrl.label': 'Mock URL',
@@ -85,9 +112,6 @@ export const copy = {
   'dash.pathUrl.copy.aria': 'Copy local path',
   'dash.autoCrud.label': 'Auto-CRUD',
   'dash.autoCrud.tooltip': 'Serve a REST store for unmatched requests.',
-  'dash.action.rules': 'Rules',
-  'dash.action.newRule': 'New rule',
-  'dash.action.settings': 'Settings',
   'dash.tunnel.active': 'Tunnel connected',
   'dash.tunnel.active.tooltip': 'A tunnel is forwarding this endpoint to a local machine.',
   'dash.saveKey.title': 'Save your recovery key',
@@ -165,6 +189,7 @@ export const copy = {
     "Too many connections to this endpoint's feed ({max} max). Close another tab and it'll reconnect.",
 
   // ── 5.5 Inspector ──
+  'insp.sheet.title': 'Request detail',
   'insp.empty.title': 'Select a request',
   'insp.empty.body': 'Pick a request on the left to inspect it.',
   'insp.loading.aria': 'Loading request detail',
@@ -243,6 +268,15 @@ export const copy = {
   'rule.tab.templating': 'Templating',
   'rule.tab.actions': 'Actions',
   'rule.tab.throttling': 'Throttling',
+  'rule.tab.errors': '({n} to fix)',
+  // List-editor column names (never the bare words "Path" / "Name").
+  'rule.col.header': 'Header',
+  'rule.col.expected': 'Expected value',
+  'rule.col.param': 'Param',
+  'rule.col.field': 'Field',
+  'rule.col.operator': 'Operator',
+  'rule.col.value': 'Value',
+  'rule.col.stateKey': 'State key',
   'rule.cancel': 'Cancel',
   'rule.save': 'Save rule',
   'rule.saving': 'Saving…',
@@ -256,9 +290,11 @@ export const copy = {
   'rule.match.headers.helper': 'Request must include these. Names are case-insensitive.',
   'rule.match.headers.keyPlaceholder': 'Header name',
   'rule.match.headers.valPlaceholder': 'Expected value',
+  'rule.match.headers.add': 'Add required header',
   'rule.match.query.label': 'Required query params',
   'rule.match.query.keyPlaceholder': 'Param',
   'rule.match.query.valPlaceholder': 'Expected value',
+  'rule.match.query.add': 'Add query param',
   'rule.match.body.label': 'Body conditions',
   'rule.match.body.helper': 'Test the JSON body by path.',
   'rule.match.body.pathPlaceholder': '$.user.role',
@@ -267,6 +303,7 @@ export const copy = {
   'rule.match.body.op.contains': 'contains',
   'rule.match.body.op.exists': 'exists',
   'rule.match.body.valPlaceholder': 'Value',
+  'rule.match.body.add': 'Add condition',
   'rule.match.state.label': 'State requirements',
   'rule.match.state.helper': "Match only when the endpoint's state holds.",
   'rule.match.state.keyPlaceholder': 'State key',
@@ -275,12 +312,13 @@ export const copy = {
   'rule.match.state.op.exists': 'exists',
   'rule.match.state.op.absent': 'absent',
   'rule.match.state.valPlaceholder': 'Value',
-  'rule.match.addRow': 'Add',
-  'rule.match.removeRow.aria': 'Remove row',
+  'rule.match.state.add': 'Add requirement',
   'rule.resp.status.label': 'Status code',
   'rule.resp.status.helper': '100–599.',
   'rule.resp.contentType.label': 'Content-Type',
   'rule.resp.headers.label': 'Response headers',
+  'rule.resp.headers.valPlaceholder': 'Value',
+  'rule.resp.headers.add': 'Add response header',
   'rule.resp.body.label': 'Response body',
   'rule.resp.body.placeholder': '{ "id": "{{random \'uuid\'}}" }',
   'rule.resp.body.counter': '{used} / 256 KB',
@@ -305,9 +343,12 @@ export const copy = {
     'Set state when this rule matches. Applied before the body renders, so {{state.key}} sees the new value.',
   'rule.act.stateWrites.keyPlaceholder': 'State key',
   'rule.act.stateWrites.valPlaceholder': 'Value (tags allowed)',
+  'rule.act.stateWrites.add': 'Add state write',
   'rule.act.webhook.label': 'Webhook',
   'rule.act.webhook.badge': 'Stored, not yet sent',
   'rule.act.webhook.helper': "HookBox saves this with the rule but doesn't fire it yet.",
+  'rule.act.webhook.url.label': 'Webhook URL',
+  'rule.act.webhook.body.label': 'Body template',
   'rule.act.webhook.urlPlaceholder': 'https://example.com/hook',
   'rule.act.webhook.bodyPlaceholder': 'Webhook body (templated)',
   'rule.thr.intro': "Overrides the endpoint's values for requests this rule serves.",
@@ -334,6 +375,8 @@ export const copy = {
 
   // ── 5.8 Rules manager ──
   'rules.title': 'Rules',
+  'rules.description':
+    'Every request is checked against your enabled rules in priority order, lowest number first. The first match answers it.',
   'rules.newRule': 'New rule',
   'rules.loading.aria': 'Loading rules',
   'rules.col.priority': 'Priority',
@@ -344,8 +387,8 @@ export const copy = {
   'rules.empty.body':
     'Without a rule, unmatched requests fall through to Auto-CRUD, then your tunnel, then your proxy target, then the default response.',
   'rules.error.title': "Couldn't load rules",
-  'rules.error.retry': 'Retry',
   'rules.row.menu.aria': 'Rule actions',
+  'rules.row.toggle.aria': 'Enabled: {name}',
   'rules.row.edit': 'Edit',
   'rules.row.duplicate': 'Duplicate',
   'rules.row.delete': 'Delete',
@@ -510,9 +553,10 @@ export const copy = {
 
   // ── 5.9 Endpoint settings ──
   'set.title': 'Settings',
-  'set.loading.aria': 'Loading settings',
-  'set.error.title': "Couldn't load settings",
-  'set.error.retry': 'Retry',
+  'set.nav.aria': 'Settings sections',
+  'set.saveBar.dirty': 'Unsaved changes',
+  'set.saveBar.clean': 'All changes saved',
+  'set.discard': 'Discard',
   'set.save': 'Save',
   'set.saving': 'Saving…',
   'set.toast.saved': 'Settings saved.',
@@ -693,6 +737,7 @@ export const copy = {
 
   // ── 5.11 Tunnel / CLI page ──
   'cli.title': 'Tunnel from your machine',
+  'cli.nav.dashboard': 'Back to dashboard',
   'cli.intro':
     'The tunnel forwards public traffic for an endpoint to a server on your localhost — so you can test webhooks and integrations against code you\'re running right now. Tunneled requests show up in the feed labeled tunnel.',
   'cli.command.label': 'Run this',

@@ -21,24 +21,22 @@ export function SaveKeyAlert({ token }: { token: string }) {
   }
 
   return (
-    <div className="border-b border-border px-4 py-2">
-      <InlineAlert
-        variant="warning"
-        role="status"
-        title={t('dash.saveKey.title')}
-        action={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" asChild>
-              <Link to={`/d/${token}/settings#${RECOVERY_KEY_SECTION_ID}`}>{t('dash.saveKey.action')}</Link>
-            </Button>
-            <Button variant="ghost" size="sm" onClick={dismiss}>
-              {t('common.dismiss')}
-            </Button>
-          </div>
-        }
-      >
-        {t('dash.saveKey.body')}
-      </InlineAlert>
-    </div>
+    <InlineAlert
+      variant="warning"
+      role="status"
+      title={t('dash.saveKey.title')}
+      action={
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/d/${token}/settings#${RECOVERY_KEY_SECTION_ID}`}>{t('dash.saveKey.action')}</Link>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={dismiss}>
+            {t('common.dismiss')}
+          </Button>
+        </div>
+      }
+    >
+      {t('dash.saveKey.body')}
+    </InlineAlert>
   )
 }

@@ -35,6 +35,9 @@ export interface MockOptions {
   rules?: MockRule[];
   /** Force GET /api/endpoints/{token} to fail with this status (404/410/500). */
   endpointStatus?: number;
+  /** Fail the first N GET /api/endpoints/{token} calls with a 500, then
+   * serve it normally (a transient outage the Retry recovers from). */
+  endpointFailures?: number;
   /** Force DELETE /api/endpoints/{token}/requests to fail with this status
    * (ConfirmDialog failure-path coverage, AC-83). */
   clearRequestsStatus?: number;
@@ -234,6 +237,7 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
     ],
     rules: opts.rules ?? [],
     nextRuleId: 100,
+    endpointFailuresLeft: opts.endpointFailures ?? 0,
     shares: opts.shares ?? ([] as ShareLinkStub[]),
     nextShareId: 500,
     shareCode: opts.shareCode ?? DEFAULT_SHARE_CODE,
@@ -399,9 +403,28 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
       return json(route, 201, created);
     }
 
+    // An endpoint minted by POST /api/endpoints: its detail, and empty
+    // requests / rules / share-link lists.
+    const minted = store.created.find(
+      (e) =>
+        path === `/api/endpoints/${e.token}` ||
+        path.startsWith(`/api/endpoints/${e.token}/`),
+    );
+    if (minted && method === "GET") {
+      return json(
+        route,
+        200,
+        path === `/api/endpoints/${minted.token}` ? minted : [],
+      );
+    }
+
     // #4/#5/#6 GET/PATCH/DELETE /api/endpoints/{token}
     if (path === `/api/endpoints/${TOKEN}`) {
       if (method === "GET") {
+        if (store.endpointFailuresLeft > 0) {
+          store.endpointFailuresLeft -= 1;
+          return err(route, 500, "server_error", "Boom.");
+        }
         if (store.deleted || opts.endpointStatus === 410)
           return err(route, 410, "endpoint_gone", "Endpoint deleted.");
         if (opts.endpointStatus === 404)

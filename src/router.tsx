@@ -1,66 +1,38 @@
 /**
- * SPA route tree (PRD §3 surfaces): landing / session gate (/), split-screen
- * dashboard (/d/:token), rules manager + 5-tab rule builder, endpoint settings,
- * public tunnel/CLI page (/cli). Screen components are delivered by issues
- * .29–.32; this scaffold (.26) wires the route shape + a primitives gallery and
- * a token-aware not-found. Later issues replace the placeholders with real
- * screens via createBrowserRouter children.
+ * SPA route tree (PRD §3 surfaces). URLs: landing / session gate (/), the
+ * owner screens under /d/:token (dashboard, rules, settings — gated by the
+ * session, then by the endpoint load in OwnerLayout), the public CLI page
+ * (/cli), the public read-only share viewer (/s/:code) and a NotFound.
  */
-import { createBrowserRouter, Link } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
+import { NotFound } from "@/app/not-found";
+import { OwnerLayout } from "@/app/owner-layout";
 import { PrimitivesGallery } from "@/components/dev/primitives-gallery";
 import { RequireSession } from "@/components/owner/require-session";
-import { Button } from "@/components/ui/button";
-import { t } from "@/lib/copy";
 import { Landing } from "@/screens/landing";
 import { Dashboard } from "@/screens/dashboard";
-import { RulesManager } from "@/screens/rules-manager";
+import { RulesManager } from "@/screens/rules";
 import { Settings } from "@/screens/settings";
 import { Cli } from "@/screens/cli";
 import { ShareView } from "@/screens/share-view";
 
-function NotFound() {
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-canvas p-6 text-center">
-      <h1 className="text-h2 text-text-primary">
-        {t("common.notFound.title")}
-      </h1>
-      <p className="text-body-sm text-text-tertiary">
-        {t("common.notFound.body")}
-      </p>
-      <Button variant="link" asChild>
-        <Link to="/">{t("common.notFound.home")}</Link>
-      </Button>
-    </div>
-  );
-}
-
 export const router = createBrowserRouter([
   { path: "/", element: <Landing /> },
   // Owner screens render only once the session gate knows the tab is signed
-  // in (cookie identity, hookbox-a73.3); signed-out bounces to /.
+  // in (cookie identity, hookbox-a73.3; signed-out bounces to /), then once
+  // OwnerLayout has loaded the endpoint they all share.
   {
     path: "/d/:token",
     element: (
       <RequireSession>
-        <Dashboard />
+        <OwnerLayout />
       </RequireSession>
     ),
-  },
-  {
-    path: "/d/:token/rules",
-    element: (
-      <RequireSession>
-        <RulesManager />
-      </RequireSession>
-    ),
-  },
-  {
-    path: "/d/:token/settings",
-    element: (
-      <RequireSession>
-        <Settings />
-      </RequireSession>
-    ),
+    children: [
+      { index: true, element: <Dashboard /> },
+      { path: "rules", element: <RulesManager /> },
+      { path: "settings", element: <Settings /> },
+    ],
   },
   { path: "/cli", element: <Cli /> },
   // Public, unauthenticated read-only share viewer (operator-toolkit F4).
@@ -69,8 +41,7 @@ export const router = createBrowserRouter([
   { path: "/s/:code", element: <ShareView /> },
   // Dev-only route: `import.meta.env.DEV` is a build-time constant, so Vite
   // dead-code-eliminates this branch (and the PrimitivesGallery import with
-  // it) from the production bundle — nginx's SPA fallback never has a page
-  // to serve here in prod, and /_gallery falls through to NotFound.
+  // it) from the production bundle — /_gallery falls through to NotFound.
   ...(import.meta.env.DEV
     ? [{ path: "/_gallery", element: <PrimitivesGallery /> }]
     : []),

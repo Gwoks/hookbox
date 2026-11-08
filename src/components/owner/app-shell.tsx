@@ -1,331 +1,39 @@
 /**
- * AppShell — the dashboard chrome (design.md §3 / §7, copy.md §5.1/§5.2). A
- * top app bar (brand · endpoint switcher · account menu · theme toggle) plus a
- * sub-header carrying the endpoint subject: the Mock URL chip (copy-only
- * MockUrlChip, AC-D19 — the "Local path" chip was removed, operator-toolkit
- * F2/AC-7; it stays reachable via Settings → Identity and the Mock URL chip's
- * tooltip), the Auto-CRUD glance, the live tunnel-active badge
- * (dash.tunnel.active, reflected from endpoint_updated), and the Rules / New
- * rule / Settings actions. The body fills the rest of the viewport.
+ * AppShell — the owner chrome around every owner screen: skip link, the
+ * sticky TopNav, `<main id="main">`, and the two dialogs the nav opens
+ * (Share, Sign out). Rendered by OwnerLayout inside a ready
+ * EndpointProvider; the screens below it read the endpoint from context.
  *
- * Strings come from copy.md §5.1/§5.2 via t(); no copy lives here. The switcher
- * + account menu use the Radix-backed Menu primitive.
+ * The Share count is one glance-only GET per endpoint (AC-98): a failure
+ * just leaves the plain "Share" label.
  */
-import { useEffect, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import {
-  Database,
-  Plus,
-  RadioTower,
-  Settings as SettingsIcon,
-  Share2,
-} from "lucide-react";
-import { BrandMark } from "@/components/hookbox/brand-mark";
-import { MockUrlChip } from "@/components/hookbox/code-block";
-import { ShareDialog } from "./share-dialog";
-import { Button } from "@/components/ui/button";
-import {
-  Menu,
-  MenuContent,
-  MenuItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "@/components/ui/menu";
-import { Tooltip } from "@/components/ui/tooltip";
-import { ThemeToggle } from "@/theme/theme";
-import {
-  api,
-  useSession,
-  type EndpointDetail,
-  type EndpointSummary,
-} from "@/api";
-import { t } from "@/lib/copy";
-import { cn } from "@/lib/cn";
-import { absolutize } from "@/lib/url";
-import { RECOVERY_KEY_SECTION_ID } from "./recovery-key-section";
-import { SignOutDialog } from "./sign-out-dialog";
+import { useState, type ReactNode } from 'react'
+import { api } from '@/api'
+import { useResource } from '@/lib/hooks/use-resource'
+import { SkipLink } from '@/components/layout/skip-link'
+import { useEndpoints } from './endpoint-context'
+import { ShareDialog } from './share-dialog'
+import { SignOutDialog } from './sign-out-dialog'
+import { TopNav } from './top-nav'
 
-/** The account menu shows only this much of the anonymous owner id. */
-const OWNER_ID_PREVIEW_LENGTH = 8;
-
-export interface AppShellProps {
-  token: string;
-  /** The current endpoint detail (null while the sub-header is still loading). */
-  endpoint: EndpointDetail | null;
-  /** Sibling endpoints for the switcher (empty until listed). */
-  endpoints: EndpointSummary[];
-  /** Live tunnel-active reflection (endpoint_updated); overrides endpoint.tunnel_active. */
-  tunnelActive?: boolean;
-  /** Right-aligned slot in the sub-header (e.g. the connection pill). */
-  headerExtra?: ReactNode;
-  children: ReactNode;
-}
-
-export function AppShell({
-  token,
-  endpoint,
-  endpoints,
-  tunnelActive,
-  headerExtra,
-  children,
-}: AppShellProps) {
-  const { ownerId } = useSession();
-  const tunnelOn = tunnelActive ?? endpoint?.tunnel_active ?? false;
-  const [shareOpen, setShareOpen] = useState(false);
-  const [signOutOpen, setSignOutOpen] = useState(false);
-  // AC-98: one GET per owner-screen mount for the count badge; any failure
-  // just renders the plain "Share" label, no error surfaced for a glance-only
-  // count.
-  const [shareCount, setShareCount] = useState<number | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .listShares(token)
-      .then((links) => {
-        if (!cancelled) setShareCount(links.length);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+export function AppShell({ children }: { children: ReactNode }) {
+  const { token } = useEndpoints()
+  const [shareOpen, setShareOpen] = useState(false)
+  const [signOutOpen, setSignOutOpen] = useState(false)
+  const shares = useResource((signal) => api.listShares(token, { signal }), [token])
+  // The dialog reports the count after every create/revoke.
+  const [liveShareCount, setLiveShareCount] = useState<number | null>(null)
+  const shareCount = liveShareCount ?? shares.data?.length ?? null
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-canvas">
-      <a
-        href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2"
-      >
-        {t("shell.skipLink")}
-      </a>
-
-      {/* Top bar */}
-      <header className="flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-2">
-        <div className="flex min-w-0 items-center gap-3">
-          <BrandMark />
-          <EndpointSwitcher
-            token={token}
-            endpoint={endpoint}
-            endpoints={endpoints}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-          <AccountMenu
-            token={token}
-            ownerId={ownerId}
-            onSignOut={() => setSignOutOpen(true)}
-          />
-        </div>
-      </header>
-
-      {/* Sub-header — the endpoint subject + actions */}
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border bg-surface px-4 py-2.5">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
-          <UrlChip
-            label={t("dash.mockUrl.label")}
-            url={endpoint?.mock_url}
-            tooltip={t("dash.mockUrl.tooltip")}
-          />
-          {endpoint?.auto_crud && (
-            <Tooltip content={t("dash.autoCrud.tooltip")}>
-              <span className="inline-flex items-center gap-1 rounded-xs bg-surface-subtle px-1.5 py-0.5 text-caption font-medium text-text-secondary">
-                <Database className="h-3 w-3" aria-hidden="true" />
-                {t("dash.autoCrud.label")}
-              </span>
-            </Tooltip>
-          )}
-          {tunnelOn && (
-            <Tooltip content={t("dash.tunnel.active.tooltip")}>
-              <span className="inline-flex items-center gap-1 rounded-pill bg-served-tunnel-bg px-2 py-0.5 text-caption font-medium text-served-tunnel-fg">
-                <RadioTower className="h-3 w-3" aria-hidden="true" />
-                {t("dash.tunnel.active")}
-              </span>
-            </Tooltip>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {/* AC-23: Share is FIRST in the right action cluster, before Rules —
-           * never disabled, including on a zero-traffic endpoint. */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShareOpen(true)}
-            aria-label={
-              shareCount && shareCount > 0
-                ? t("share.action.count.aria", { n: shareCount })
-                : t("share.action.aria")
-            }
-          >
-            <Share2 className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only sm:not-sr-only">{t("share.action")}</span>
-            {!!shareCount && shareCount > 0 && (
-              <span className="tnum ml-0.5 inline-flex min-w-5 justify-center rounded-pill bg-neutral-chip-bg px-1.5 text-caption font-medium text-neutral-chip-fg">
-                {shareCount}
-              </span>
-            )}
-          </Button>
-          {headerExtra}
-          <Button variant="ghost" size="sm" asChild>
-            <Link to={`/d/${token}/rules`}>{t("dash.action.rules")}</Link>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            asChild
-            aria-label={t("dash.action.settings")}
-          >
-            <Link to={`/d/${token}/settings`}>
-              <SettingsIcon className="h-4 w-4" aria-hidden="true" />
-              <span className="sr-only sm:not-sr-only">
-                {t("dash.action.settings")}
-              </span>
-            </Link>
-          </Button>
-          <Button variant="primary" size="sm" asChild>
-            <Link to={`/d/${token}/rules?new=1`}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {t("dash.action.newRule")}
-            </Link>
-          </Button>
-        </div>
-      </div>
-
-      <main id="main" className="min-h-0 flex-1 overflow-hidden">
+    <div className="flex min-h-screen flex-col bg-canvas">
+      <SkipLink />
+      <TopNav shareCount={shareCount} onShare={() => setShareOpen(true)} onSignOut={() => setSignOutOpen(true)} />
+      <main id="main" className="flex min-h-0 flex-1 flex-col">
         {children}
       </main>
-
-      <ShareDialog
-        token={token}
-        open={shareOpen}
-        onOpenChange={setShareOpen}
-        onCountChange={setShareCount}
-      />
+      <ShareDialog token={token} open={shareOpen} onOpenChange={setShareOpen} onCountChange={setLiveShareCount} />
       <SignOutDialog open={signOutOpen} onClose={() => setSignOutOpen(false)} />
     </div>
-  );
-}
-
-function UrlChip({
-  label,
-  url,
-  tooltip,
-}: {
-  label: string;
-  url?: string;
-  /** Optional discoverability hint (e.g. pointing at Settings for the local
-   * path, operator-toolkit AC-86). Wraps the whole chip so Radix's Tooltip
-   * asChild can attach its ref to a plain DOM node. */
-  tooltip?: string;
-}) {
-  const chip = (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <span className="text-caption font-medium uppercase tracking-wide text-text-tertiary">
-        {label}
-      </span>
-      {url ? (
-        <MockUrlChip url={absolutize(url)} />
-      ) : (
-        <span
-          className="h-5 w-40 animate-pulse rounded-xs bg-surface-subtle"
-          aria-hidden="true"
-        />
-      )}
-    </span>
-  );
-  return tooltip ? <Tooltip content={tooltip}>{chip}</Tooltip> : chip;
-}
-
-function EndpointSwitcher({
-  token,
-  endpoint,
-  endpoints,
-}: {
-  token: string;
-  endpoint: EndpointDetail | null;
-  endpoints: EndpointSummary[];
-}) {
-  const navigate = useNavigate();
-  const current = endpoint?.name || endpoint?.token || token;
-
-  return (
-    <Menu>
-      <MenuTrigger asChild>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="max-w-[14rem]"
-          aria-label={t("shell.nav.endpointSwitcher.label")}
-        >
-          <span className="truncate font-mono text-mono-sm">{current}</span>
-        </Button>
-      </MenuTrigger>
-      <MenuContent align="start">
-        {endpoints.map((ep) => (
-          <MenuItem
-            key={ep.token}
-            className={cn(ep.token === token && "text-text-primary")}
-            onSelect={() => {
-              if (ep.token !== token) navigate(`/d/${ep.token}`);
-            }}
-          >
-            <span className="truncate font-mono text-mono-sm">
-              {ep.name || ep.token}
-            </span>
-          </MenuItem>
-        ))}
-        {endpoints.length > 0 && <MenuSeparator />}
-        <MenuItem
-          onSelect={() => navigate("/d/__new__")}
-          aria-label={t("shell.nav.newEndpoint.aria")}
-        >
-          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-          {t("shell.nav.newEndpoint")}
-        </MenuItem>
-      </MenuContent>
-    </Menu>
-  );
-}
-
-/** Anonymous identity: a short owner-id preview (never an email, never the
- * key), a jump to the recovery-key card, and sign out (confirmed). */
-function AccountMenu({
-  token,
-  ownerId,
-  onSignOut,
-}: {
-  token: string;
-  ownerId: string | null;
-  onSignOut: () => void;
-}) {
-  const navigate = useNavigate();
-  return (
-    <Menu>
-      <MenuTrigger asChild>
-        <Button variant="ghost" size="sm" aria-label={t("shell.account.label")}>
-          {t("shell.account.label")}
-        </Button>
-      </MenuTrigger>
-      <MenuContent align="end">
-        {ownerId && (
-          <>
-            <div className="px-2 py-1.5 text-caption text-text-tertiary">
-              {t("shell.account.owner", {
-                id: ownerId.slice(0, OWNER_ID_PREVIEW_LENGTH),
-              })}
-            </div>
-            <MenuSeparator />
-          </>
-        )}
-        <MenuItem
-          onSelect={() =>
-            navigate(`/d/${token}/settings#${RECOVERY_KEY_SECTION_ID}`)
-          }
-        >
-          {t("shell.account.recoveryKey")}
-        </MenuItem>
-        <MenuItem onSelect={onSignOut}>{t("shell.account.signOut")}</MenuItem>
-      </MenuContent>
-    </Menu>
-  );
+  )
 }
