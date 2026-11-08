@@ -498,7 +498,7 @@ function SettingsForm({
       </Section>
 
       {/* Danger zone */}
-      <div className="rounded-md border border-danger-fg/40 bg-danger-bg p-4">
+      <div className="rounded-md border border-danger-border bg-danger-bg p-4">
         <h2 className="text-h4 text-danger-fg">{t("set.danger.title")}</h2>
         <div className="mt-3 flex items-center justify-between gap-4">
           <div>

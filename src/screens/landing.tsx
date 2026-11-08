@@ -131,14 +131,6 @@ export function Landing() {
 
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
-      {/* Decorative teal glow — aria-hidden, reduced-motion-safe (design.md §8). */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-80"
-        style={{
-          background: 'radial-gradient(60% 100% at 50% 0%, var(--accent-subtle-bg), transparent)',
-        }}
-      />
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2">
         {t('shell.skipLink')}
       </a>

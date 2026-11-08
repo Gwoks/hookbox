@@ -1,4 +1,4 @@
-/** Tabs wrapper (design.md §3.10). bg-subtle underline strip; selected tab =
+/** Tabs wrapper (design.md §3.10). bg-surface-subtle underline strip; selected tab =
  * text-primary + 2px accent underline bar (the bar is the non-color selection
  * signal, AC-D14); inactive = text-tertiary. Shared by the rule builder 5 tabs
  * and the inspector 5 tabs. Radix Tabs re-themed by tokens. */
@@ -16,7 +16,7 @@ export const TabsList = forwardRef<
     <TabsPrimitive.List
       ref={ref}
       className={cn(
-        'flex items-stretch gap-1 overflow-x-auto border-b border-border bg-subtle px-1',
+        'flex items-stretch gap-1 overflow-x-auto border-b border-border bg-surface-subtle px-1',
         className,
       )}
       {...props}

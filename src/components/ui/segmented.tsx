@@ -22,7 +22,7 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={rest['aria-label']}
-      className={cn('inline-flex items-center gap-0.5 rounded-sm bg-subtle p-0.5', className)}
+      className={cn('inline-flex items-center gap-0.5 rounded-sm bg-surface-subtle p-0.5', className)}
     >
       {options.map((opt) => {
         const active = opt.value === value
@@ -34,7 +34,7 @@ export function Segmented<T extends string>({
             aria-checked={active}
             onClick={() => onChange(opt.value)}
             className={cn(
-              'rounded-[4px] px-2.5 py-1 text-caption font-medium transition-colors',
+              'rounded-xs px-2.5 py-1 text-caption font-medium transition-colors',
               active
                 ? 'bg-surface text-text-primary shadow-xs'
                 : 'text-text-tertiary hover:text-text-secondary',

@@ -182,19 +182,19 @@ function SharedRequestDetail({ code, id }: { code: string; id: number }) {
         </TabsContent>
         <TabsContent value="response" className="space-y-4">
           <section className="space-y-1.5">
-            <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+            <h3 className="text-overline uppercase text-text-tertiary">
               {t('insp.response.servedByLabel')}
             </h3>
             <ServedByChip servedBy={detail.served_by} />
           </section>
           <section className="space-y-1.5">
-            <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+            <h3 className="text-overline uppercase text-text-tertiary">
               {t('insp.response.headers')}
             </h3>
             <KeyValueRows data={detail.response_headers} emptyLabel={t('insp.headers.empty')} />
           </section>
           <section className="space-y-1.5">
-            <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+            <h3 className="text-overline uppercase text-text-tertiary">
               {t('insp.response.body')}
             </h3>
             {detail.response_body ? (

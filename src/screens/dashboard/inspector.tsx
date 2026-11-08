@@ -225,13 +225,13 @@ function Ready({ detail }: { detail: RequestDetail }) {
 
           <TabsContent value="response" className="space-y-4">
             <section className="space-y-1.5">
-              <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+              <h3 className="text-overline uppercase text-text-tertiary">
                 {t("insp.response.servedByLabel")}
               </h3>
               <ServedByChip servedBy={detail.served_by} />
             </section>
             <section className="space-y-1.5">
-              <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+              <h3 className="text-overline uppercase text-text-tertiary">
                 {t("insp.response.headers")}
               </h3>
               <KeyValueRows
@@ -240,7 +240,7 @@ function Ready({ detail }: { detail: RequestDetail }) {
               />
             </section>
             <section className="space-y-1.5">
-              <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+              <h3 className="text-overline uppercase text-text-tertiary">
                 {t("insp.response.body")}
               </h3>
               {detail.response_body ? (
@@ -255,7 +255,7 @@ function Ready({ detail }: { detail: RequestDetail }) {
 
           <TabsContent value="trace" className="space-y-4">
             <section className="space-y-1.5">
-              <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+              <h3 className="text-overline uppercase text-text-tertiary">
                 {t("insp.trace.title")}
               </h3>
               {detail.trace.length > 0 ? (
@@ -281,7 +281,7 @@ function Ready({ detail }: { detail: RequestDetail }) {
               )}
             </section>
             <section className="space-y-1.5">
-              <h3 className="text-overline uppercase tracking-wide text-text-tertiary">
+              <h3 className="text-overline uppercase text-text-tertiary">
                 {t("insp.trace.stateTitle")}
               </h3>
               <KeyValueRows

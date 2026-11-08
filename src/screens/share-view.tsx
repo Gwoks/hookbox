@@ -181,7 +181,7 @@ export function ShareView() {
           {data && data.requests.length > 0 && (
             <div
               className={cn(
-                "hidden gap-2 border-b border-border bg-surface-subtle px-3 py-2 text-overline uppercase tracking-wide text-text-tertiary sm:grid",
+                "hidden gap-2 border-b border-border bg-surface-subtle px-3 py-2 text-overline uppercase text-text-tertiary sm:grid",
                 COLUMN_GRID,
               )}
             >

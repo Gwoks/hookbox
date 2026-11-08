@@ -362,7 +362,7 @@ export function RulesManager() {
         {state.kind === "ready" && state.rules.length > 0 && (
           <div className="overflow-hidden rounded-md border border-border bg-surface">
             {/* Column header — aligns with each row's grid (AC-D18). */}
-            <div className="grid grid-cols-[4rem_1fr_auto_3rem_2rem] items-center gap-2 border-b border-border bg-surface-subtle px-3 py-2 text-overline uppercase tracking-wide text-text-tertiary">
+            <div className="grid grid-cols-[4rem_1fr_auto_3rem_2rem] items-center gap-2 border-b border-border bg-surface-subtle px-3 py-2 text-overline uppercase text-text-tertiary">
               <span>{t("rules.col.priority")}</span>
               <span>{t("rules.col.name")}</span>
               <span>{t("rules.col.match")}</span>

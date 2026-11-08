@@ -1,4 +1,4 @@
-/** Slider (design.md §3.11). Track bg-active radius-sm, filled portion
+/** Slider (design.md §3.11). Track bg-surface-active radius-sm, filled portion
  * accent-fill, thumb radius-full bg-surface + border-strong (focus ring on
  * thumb). ALWAYS paired with a number input by the caller (latency / chaos /
  * rate). A native range input keeps it keyboard-accessible with no extra dep. */
@@ -27,7 +27,7 @@ export function Slider({ value, min, max, step = 1, onChange, className, id, ...
       value={value}
       aria-label={rest['aria-label']}
       onChange={(e) => onChange(Number(e.target.value))}
-      className={cn('hb-slider h-1.5 w-full cursor-pointer appearance-none rounded-sm bg-active', className)}
+      className={cn('hb-slider h-1.5 w-full cursor-pointer appearance-none rounded-sm bg-surface-active', className)}
       style={{
         background: `linear-gradient(to right, var(--accent-fill) ${pct}%, var(--bg-active) ${pct}%)`,
       }}

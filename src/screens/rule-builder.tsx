@@ -515,7 +515,7 @@ export function RuleBuilder({
                             key={key}
                             type="button"
                             onClick={() => insertTag(tag)}
-                            className="rounded-xs border border-border bg-subtle px-2 py-1 font-mono text-mono-sm text-text-primary hover:bg-hover"
+                            className="rounded-xs border border-border bg-surface-subtle px-2 py-1 font-mono text-mono-sm text-text-primary hover:bg-surface-hover"
                           >
                             {tag}
                           </button>

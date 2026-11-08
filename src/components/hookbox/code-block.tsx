@@ -1,4 +1,4 @@
-/** CodeBlock (design.md §3.7, AC-D19). radius-md, bg-subtle, mono-lg, 1px
+/** CodeBlock (design.md §3.7, AC-D19). radius-md, bg-surface-subtle, mono-lg, 1px
  * border, integrated CopyButton top-right. Mock-URL chips are copy-only and
  * render in text-primary mono — NEVER accent/link color — so users don't expect
  * navigation (AC-D19). */
@@ -19,7 +19,7 @@ export function CodeBlock({
   return (
     <div
       className={cn(
-        'relative flex items-start gap-2 rounded-md border border-border bg-subtle px-3 py-2',
+        'relative flex items-start gap-2 rounded-md border border-border bg-surface-subtle px-3 py-2',
         className,
       )}
     >
@@ -39,7 +39,7 @@ export function MockUrlChip({ url, className }: { url: string; className?: strin
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-xs border border-border bg-subtle px-1.5 py-0.5',
+        'inline-flex items-center gap-1 rounded-xs border border-border bg-surface-subtle px-1.5 py-0.5',
         className,
       )}
     >

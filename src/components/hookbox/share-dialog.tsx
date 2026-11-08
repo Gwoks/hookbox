@@ -356,7 +356,7 @@ function CreatedPanel({
       aria-live="polite"
       className="mt-4 space-y-2 rounded-md border border-border bg-accent-subtle-bg p-3"
     >
-      <p className="text-overline uppercase tracking-wide text-text-tertiary">
+      <p className="text-overline uppercase text-text-tertiary">
         {t('share.created.title')}
       </p>
       <CodeBlock value={url} ariaLabel={t('share.created.title')} className="bg-surface" />

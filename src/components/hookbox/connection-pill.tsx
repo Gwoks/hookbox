@@ -56,7 +56,7 @@ export function ConnectionPill({
       aria-live="polite"
       title={title}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-pill border border-border bg-subtle px-2 py-0.5 text-caption font-medium',
+        'inline-flex items-center gap-1.5 rounded-pill border border-border bg-surface-subtle px-2 py-0.5 text-caption font-medium',
         c.cls,
         className,
       )}
