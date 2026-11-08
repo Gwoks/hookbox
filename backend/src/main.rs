@@ -24,10 +24,17 @@ async fn main() -> anyhow::Result<()> {
     if cfg.path_fallback_only {
         tracing::warn!("MOCK_DOMAIN is unset/misconfigured — serving path-fallback-only mode");
     }
+    if cfg.refuses_insecure_cookie() {
+        anyhow::bail!(
+            "APP_HOST is not localhost but the owner-key cookie would not be Secure. Set an \
+             https:// PUBLIC_BASE_URL (or SESSION_COOKIE_SECURE=true) when serving over TLS, \
+             or SESSION_COOKIE_SECURE=false to knowingly run a plain-http deployment."
+        );
+    }
     if cfg.insecure_cookie_on_public_host() {
         tracing::warn!(
-            "APP_HOST is not localhost but the owner-key cookie is not Secure — set an \
-             https:// PUBLIC_BASE_URL (or SESSION_COOKIE_SECURE=true) when serving over TLS"
+            "SESSION_COOKIE_SECURE=false on a non-localhost APP_HOST — the owner key travels \
+             without Secure; only do this on a trusted plain-http network"
         );
     }
 

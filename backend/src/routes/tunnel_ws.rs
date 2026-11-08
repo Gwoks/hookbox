@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
@@ -34,7 +34,7 @@ use tokio::task::JoinHandle;
 use crate::auth::{key_owns_token, parse_bearer};
 use crate::feed::FeedEvent;
 use crate::net::headers::{is_tunnel_response_stripped, try_header};
-use crate::net::ws::{close_with, WS_CLOSE_REBOUND, WS_CLOSE_UNAUTHORIZED};
+use crate::net::ws::{close_frame, close_with, WS_CLOSE_REBOUND, WS_CLOSE_UNAUTHORIZED};
 use crate::state::AppState;
 use crate::tunnels::TunnelConnection;
 
@@ -107,23 +107,17 @@ pub async fn tunnel_ws_handler(
     let bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(parse_bearer);
-    let authed = key_owns_token(&state.pool, &slug, bearer).await;
+        .and_then(parse_bearer)
+        .map(str::to_string);
+    let authed = key_owns_token(&state.pool, &slug, bearer.as_deref()).await;
 
     ws.on_upgrade(move |socket| async move {
         if !authed {
             close_with(socket, WS_CLOSE_UNAUTHORIZED, "unauthorized").await;
             return;
         }
-        run_tunnel(state, slug, socket).await;
+        run_tunnel(state, slug, bearer, socket).await;
     })
-}
-
-fn close_frame(code: u16, reason: &str) -> Message {
-    Message::Close(Some(CloseFrame {
-        code,
-        reason: reason.to_string().into(),
-    }))
 }
 
 /// Outbound pump: forward queued frames (req / rebound err) to the socket.
@@ -157,10 +151,20 @@ fn spawn_pump(
     })
 }
 
-async fn run_tunnel(state: AppState, slug: String, socket: WebSocket) {
+async fn run_tunnel(state: AppState, slug: String, key: Option<String>, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (out_tx, out_rx) = mpsc::unbounded_channel::<Value>();
     let (conn, generation) = state.tunnels.bind(&slug, out_tx);
+    // Bind-then-verify: rotate commits the new key hash BEFORE revoking
+    // tunnels, so a handshake racing a rotation is either revoked by it or
+    // fails this re-check — an old key can never stay bound.
+    if !key_owns_token(&state.pool, &slug, key.as_deref()).await {
+        state.tunnels.unbind_if(&slug, generation);
+        let _ = sink
+            .send(close_frame(WS_CLOSE_UNAUTHORIZED, "unauthorized"))
+            .await;
+        return;
+    }
     publish_endpoint_updated(&state, &slug);
 
     // Greet the CLI.

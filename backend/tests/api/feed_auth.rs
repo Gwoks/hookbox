@@ -235,3 +235,63 @@ async fn rotating_the_key_closes_a_bound_tunnel_with_4401() {
     expect_close(&mut tunnel, 4401).await;
     assert!(!state.tunnels.is_active(&token));
 }
+
+async fn rotate(app: &Router, key: &str) {
+    let (s, _, _) = call(
+        app,
+        "POST",
+        APP_HOST,
+        "/api/session/rotate",
+        Some(key),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn rotating_the_key_closes_live_ws_feeds_and_the_old_key_cannot_reconnect() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = primary_token(&app, &secret).await;
+    let addr = serve(app.clone()).await;
+    let bearer = format!("Bearer {secret}");
+    let feed = format!("/ws/{token}");
+    let mut ws = ws_connect(addr, &feed, &[("authorization", &bearer)])
+        .await
+        .unwrap();
+    expect_json(&mut ws).await; // hello
+
+    rotate(&app, &secret).await;
+    // 1012 = reconnect: a client holding the current key is readmitted…
+    expect_close(&mut ws, 1012).await;
+    // …but the rotated-out key fails the re-handshake.
+    let mut again = ws_connect(addr, &feed, &[("authorization", &bearer)])
+        .await
+        .unwrap();
+    expect_close(&mut again, 4401).await;
+}
+
+#[tokio::test]
+async fn rotating_the_key_ends_live_sse_streams() {
+    use http_body_util::BodyExt;
+
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = primary_token(&app, &secret).await;
+    let bearer = format!("Bearer {secret}");
+    let req = Request::builder()
+        .uri(format!("/sse/{token}"))
+        .header("host", APP_HOST)
+        .header("authorization", &bearer)
+        .body(Body::empty())
+        .unwrap();
+    let mut body = app.clone().oneshot(req).await.unwrap().into_body();
+    let hello = tokio::time::timeout(WAIT, body.frame()).await.unwrap();
+    assert!(hello.is_some(), "hello event arrives first");
+
+    rotate(&app, &secret).await;
+    let ended = tokio::time::timeout(WAIT, async { while body.frame().await.is_some() {} }).await;
+    assert!(ended.is_ok(), "the SSE stream ends after rotation");
+    let sse = format!("/sse/{token}");
+    let old = [("authorization", bearer.as_str())];
+    assert_eq!(sse_status(&app, &sse, &old).await, StatusCode::UNAUTHORIZED);
+}

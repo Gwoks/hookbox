@@ -129,6 +129,10 @@ pub struct Config {
     /// `__Host-hookbox_key`). `SESSION_COOKIE_SECURE`, else derived from an
     /// `https://` `PUBLIC_BASE_URL`.
     pub session_cookie_secure: bool,
+    /// Whether `SESSION_COOKIE_SECURE` was set explicitly. An insecure cookie
+    /// on a public host is refused at startup unless the operator opted out
+    /// on purpose (see `refuses_insecure_cookie`).
+    pub session_cookie_secure_explicit: bool,
 
     // --- F4 share links (§5.8) ---
     /// CSPRNG bytes per share code -> 32-char base64url -> 192 bits (AC-31).
@@ -227,6 +231,8 @@ impl Config {
 
             session_rate_limit_per_min: int_env(lookup, "SESSION_RATE_LIMIT_PER_MIN", 30),
             session_cookie_secure,
+            session_cookie_secure_explicit: lookup("SESSION_COOKIE_SECURE")
+                .is_some_and(|v| !v.trim().is_empty()),
 
             share_code_bytes: (int_env(lookup, "SHARE_CODE_BYTES", 24).max(16)) as usize,
             share_max_per_endpoint: int_env(lookup, "SHARE_MAX_PER_ENDPOINT", 10),
@@ -241,9 +247,17 @@ impl Config {
 
     /// True when the session cookie is sent without `Secure` while the app
     /// claims a non-loopback host — a deployment that would ship the owner
-    /// key over plain http. `main` warns about it at startup.
+    /// key over plain http.
     pub fn insecure_cookie_on_public_host(&self) -> bool {
         !self.session_cookie_secure && !matches!(self.app_host.as_str(), "localhost" | "127.0.0.1")
+    }
+
+    /// Fail closed: an insecure cookie on a public host is only allowed when
+    /// `SESSION_COOKIE_SECURE=false` was set explicitly (e.g. a plain-http
+    /// intranet). Otherwise a forgotten `PUBLIC_BASE_URL` would silently ship
+    /// the owner key without `Secure`/`__Host-`, so `main` refuses to start.
+    pub fn refuses_insecure_cookie(&self) -> bool {
+        self.insecure_cookie_on_public_host() && !self.session_cookie_secure_explicit
     }
 }
 
@@ -262,6 +276,29 @@ mod tests {
         ]);
         assert!(!forced_off.session_cookie_secure);
         assert!(config_from(&[("SESSION_COOKIE_SECURE", "1")]).session_cookie_secure);
+    }
+
+    #[test]
+    fn insecure_cookie_on_public_host_fails_closed_unless_explicitly_allowed() {
+        // Loopback dev host: never refused.
+        assert!(!config_from(&[]).refuses_insecure_cookie());
+        // Public host, https base URL → Secure cookie → fine.
+        let tls = config_from(&[
+            ("APP_HOST", "hookbox.example.com"),
+            ("PUBLIC_BASE_URL", "https://hookbox.example.com"),
+        ]);
+        assert!(!tls.refuses_insecure_cookie());
+        // Public host, forgotten PUBLIC_BASE_URL → refuse to start.
+        let forgot = config_from(&[("APP_HOST", "hookbox.example.com")]);
+        assert!(forgot.insecure_cookie_on_public_host());
+        assert!(forgot.refuses_insecure_cookie());
+        // Explicit opt-out (plain-http intranet) → allowed, still warned.
+        let opted_out = config_from(&[
+            ("APP_HOST", "hookbox.intranet"),
+            ("SESSION_COOKIE_SECURE", "false"),
+        ]);
+        assert!(opted_out.insecure_cookie_on_public_host());
+        assert!(!opted_out.refuses_insecure_cookie());
     }
 
     #[test]

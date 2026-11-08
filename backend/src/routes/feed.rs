@@ -14,6 +14,13 @@
 //! server_time}`. WS `"ping"` → `"pong"`; SSE `: ping` heartbeat ~25s. A lagged
 //! broadcast receiver drops frames (client reconciles via the management API)
 //! and never errors the socket. The key is never logged.
+//!
+//! Key rotation: `POST /api/session/rotate` revokes the owner's feed channels;
+//! live WS sockets then close with `1012` (reconnect) and SSE streams end, so
+//! every client must re-handshake with its CURRENT key. Each handler also
+//! re-verifies the key right AFTER subscribing (subscribe-then-verify): rotate
+//! commits the new key hash before revoking, so a handshake racing a rotation
+//! is either revoked or fails this second check — never left streaming.
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -30,18 +37,14 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::auth::{feed_key, key_owns_token};
 use crate::error::ApiError;
 use crate::feed::FeedEvent;
-use crate::net::ws::{close_with, WS_CLOSE_TRY_AGAIN_LATER, WS_CLOSE_UNAUTHORIZED};
+use crate::net::ws::{
+    close_frame, close_with, WS_CLOSE_RECONNECT, WS_CLOSE_TRY_AGAIN_LATER, WS_CLOSE_UNAUTHORIZED,
+};
 use crate::session::origin_allowed;
 use crate::state::AppState;
 use crate::util::time::now_iso;
 
 const SSE_HEARTBEAT_S: u64 = 25;
-
-/// Whether the handshake's key owns `token`.
-async fn feed_authed(state: &AppState, headers: &HeaderMap, token: &str) -> bool {
-    let key = feed_key(headers, &state.cfg);
-    key_owns_token(&state.pool, token, key.as_deref()).await
-}
 
 // --- WS ----------------------------------------------------------------------
 
@@ -54,7 +57,8 @@ pub async fn ws_handler(
     if !origin_allowed(&headers, &state.cfg) {
         return ApiError::csrf_rejected().into_response();
     }
-    let authed = feed_authed(&state, &headers, &token).await;
+    let key = feed_key(&headers, &state.cfg);
+    let authed = key_owns_token(&state.pool, &token, key.as_deref()).await;
     let at_cap =
         state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint;
     ws.on_upgrade(move |socket| async move {
@@ -66,13 +70,20 @@ pub async fn ws_handler(
             close_with(socket, WS_CLOSE_TRY_AGAIN_LATER, "too many connections").await;
             return;
         }
-        run_ws(state, token, socket).await;
+        run_ws(state, token, key, socket).await;
     })
 }
 
-async fn run_ws(state: AppState, token: String, socket: WebSocket) {
+async fn run_ws(state: AppState, token: String, key: Option<String>, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let mut sub = state.feed_hub.subscribe(&token);
+    // Subscribe-then-verify: closes the race with a concurrent key rotation.
+    if !key_owns_token(&state.pool, &token, key.as_deref()).await {
+        let _ = sink
+            .send(close_frame(WS_CLOSE_UNAUTHORIZED, "unauthorized"))
+            .await;
+        return;
+    }
 
     // hello first frame.
     let hello = json!({"type":"hello","data":{"token": token, "server_time": now_iso()}});
@@ -110,6 +121,11 @@ async fn run_ws(state: AppState, token: String, socket: WebSocket) {
                     Err(RecvError::Closed) => break,
                 }
             }
+            // Owner key rotated: force a re-handshake with the current key.
+            _ = sub.epoch.changed() => {
+                let _ = sink.send(close_frame(WS_CLOSE_RECONNECT, "owner key rotated")).await;
+                break;
+            }
         }
     }
 }
@@ -124,7 +140,8 @@ pub async fn sse_handler(
     if !origin_allowed(&headers, &state.cfg) {
         return ApiError::csrf_rejected().into_response();
     }
-    if !feed_authed(&state, &headers, &token).await {
+    let key = feed_key(&headers, &state.cfg);
+    if !key_owns_token(&state.pool, &token, key.as_deref()).await {
         return ApiError::unauthorized("Valid owner capability required.").into_response();
     }
     if state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint {
@@ -136,6 +153,10 @@ pub async fn sse_handler(
         .into_response();
     }
     let sub = state.feed_hub.subscribe(&token);
+    // Subscribe-then-verify (see module docs).
+    if !key_owns_token(&state.pool, &token, key.as_deref()).await {
+        return ApiError::unauthorized("Valid owner capability required.").into_response();
+    }
     let token_for_hello = token.clone();
     let stream = sse_stream(sub, token_for_hello);
     Sse::new(stream)
@@ -155,12 +176,15 @@ fn sse_stream(
         // hello first event.
         yield Ok(Event::default().event("hello").data(json!({"token": token, "server_time": now_iso()}).to_string()));
         loop {
-            match sub.rx.recv().await {
-                Ok(event) => {
-                    yield Ok(sse_event(&event));
-                }
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
+            tokio::select! {
+                ev = sub.rx.recv() => match ev {
+                    Ok(event) => yield Ok(sse_event(&event)),
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
+                },
+                // Owner key rotated: end the stream so EventSource reconnects
+                // with the current cookie (the old key then gets a 401).
+                _ = sub.epoch.changed() => break,
             }
         }
     }

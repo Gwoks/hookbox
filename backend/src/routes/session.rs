@@ -205,7 +205,8 @@ pub(super) async fn reveal_key(owner: AuthedOwner) -> Json<KeyResponse> {
 // --- POST /api/session/rotate --------------------------------------------------
 
 /// Replace the owner key. The old key — in other browsers, scripts and the
-/// tunnel CLI — stops working at once, and every bound tunnel is dropped.
+/// tunnel CLI — stops working at once: every bound tunnel is dropped and every
+/// live feed connection is closed so it must re-handshake with the new key.
 pub(super) async fn rotate_key(
     State(state): State<AppState>,
     owner: AuthedOwner,
@@ -216,6 +217,7 @@ pub(super) async fn rotate_key(
     let key = gen_owner_secret(state.cfg.owner_secret_bytes);
     owners::set_key_hash(&state.pool, &owner.owner_id, &hash_secret(&key)).await?;
     for token in &tokens {
+        state.feed_hub.revoke(token);
         if state.tunnels.revoke(token) {
             publish_endpoint_updated(&state, token);
         }
