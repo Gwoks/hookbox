@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // ---- Session / owner ----
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EndpointSummary {
     pub token: String,
     pub name: Option<String>,
@@ -18,12 +18,28 @@ pub struct EndpointSummary {
     pub request_count: i64,
 }
 
+/// `GET|POST /api/session` and `POST /api/session/restore`: who the caller
+/// is plus their live (non-tombstoned) endpoints. Deliberately carries NO
+/// key — the key lives only in the HttpOnly cookie (or is revealed on
+/// explicit request via `POST /api/session/key`).
 #[derive(Debug, Serialize)]
-pub struct SessionResponse {
+pub struct SessionSummary {
     pub owner_id: String,
-    pub owner_secret: String,
     pub endpoints: Vec<EndpointSummary>,
-    pub primary: EndpointSummary,
+    /// The oldest live endpoint; `null` when the owner has none.
+    pub primary: Option<EndpointSummary>,
+}
+
+/// `POST /api/session/restore` body.
+#[derive(Debug, Deserialize)]
+pub struct RestoreBody {
+    pub key: String,
+}
+
+/// `POST /api/session/key` and `POST /api/session/rotate`.
+#[derive(Debug, Serialize)]
+pub struct KeyResponse {
+    pub key: String,
 }
 
 // ---- Endpoint config ----

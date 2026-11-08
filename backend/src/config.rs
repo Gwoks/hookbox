@@ -125,6 +125,10 @@ pub struct Config {
 
     // --- Session anti-enumeration rate limit ---
     pub session_rate_limit_per_min: i64,
+    /// Whether the owner-key cookie is `Secure` (and therefore named
+    /// `__Host-hookbox_key`). `SESSION_COOKIE_SECURE`, else derived from an
+    /// `https://` `PUBLIC_BASE_URL`.
+    pub session_cookie_secure: bool,
 
     // --- F4 share links (§5.8) ---
     /// CSPRNG bytes per share code -> 32-char base64url -> 192 bits (AC-31).
@@ -164,6 +168,11 @@ impl Config {
             .trim()
             .trim_end_matches('/')
             .to_string();
+        let session_cookie_secure = bool_env(
+            lookup,
+            "SESSION_COOKIE_SECURE",
+            public_base_url.to_ascii_lowercase().starts_with("https://"),
+        );
 
         Config {
             mock_domain,
@@ -182,7 +191,8 @@ impl Config {
             static_dir: str_env(lookup, "STATIC_DIR", "dist"),
 
             endpoint_id_length: int_env(lookup, "ENDPOINT_ID_LENGTH", 10) as usize,
-            owner_secret_bytes: int_env(lookup, "OWNER_SECRET_BYTES", 32) as usize,
+            // 256-bit floor: the owner key is the account (no other factor).
+            owner_secret_bytes: int_env(lookup, "OWNER_SECRET_BYTES", 32).max(32) as usize,
 
             trace_cap: int_env(lookup, "TRACE_CAP", 100),
             trace_ttl_hours: int_env(lookup, "TRACE_TTL_HOURS", 24),
@@ -216,6 +226,7 @@ impl Config {
             tunnel_request_timeout_s: int_env(lookup, "TUNNEL_REQUEST_TIMEOUT_S", 30) as u64,
 
             session_rate_limit_per_min: int_env(lookup, "SESSION_RATE_LIMIT_PER_MIN", 30),
+            session_cookie_secure,
 
             share_code_bytes: (int_env(lookup, "SHARE_CODE_BYTES", 24).max(16)) as usize,
             share_max_per_endpoint: int_env(lookup, "SHARE_MAX_PER_ENDPOINT", 10),
@@ -227,11 +238,57 @@ impl Config {
             ),
         }
     }
+
+    /// True when the session cookie is sent without `Secure` while the app
+    /// claims a non-loopback host — a deployment that would ship the owner
+    /// key over plain http. `main` warns about it at startup.
+    pub fn insecure_cookie_on_public_host(&self) -> bool {
+        !self.session_cookie_secure && !matches!(self.app_host.as_str(), "localhost" | "127.0.0.1")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::testing::config_from;
+
+    #[test]
+    fn session_cookie_secure_follows_https_base_url_unless_overridden() {
+        assert!(!config_from(&[]).session_cookie_secure);
+        assert!(!config_from(&[("PUBLIC_BASE_URL", "http://h.example")]).session_cookie_secure);
+        assert!(config_from(&[("PUBLIC_BASE_URL", "HTTPS://h.example")]).session_cookie_secure);
+        let forced_off = config_from(&[
+            ("PUBLIC_BASE_URL", "https://h.example"),
+            ("SESSION_COOKIE_SECURE", "false"),
+        ]);
+        assert!(!forced_off.session_cookie_secure);
+        assert!(config_from(&[("SESSION_COOKIE_SECURE", "1")]).session_cookie_secure);
+    }
+
+    #[test]
+    fn owner_secret_bytes_clamped_to_32_floor() {
+        assert_eq!(
+            config_from(&[("OWNER_SECRET_BYTES", "4")]).owner_secret_bytes,
+            32
+        );
+        assert_eq!(
+            config_from(&[("OWNER_SECRET_BYTES", "48")]).owner_secret_bytes,
+            48
+        );
+    }
+
+    #[test]
+    fn insecure_cookie_warning_only_for_non_loopback_hosts() {
+        assert!(!config_from(&[]).insecure_cookie_on_public_host()); // APP_HOST=localhost
+        assert!(!config_from(&[("APP_HOST", "127.0.0.1")]).insecure_cookie_on_public_host());
+        assert!(
+            config_from(&[("APP_HOST", "hookbox.example.com")]).insecure_cookie_on_public_host()
+        );
+        let secure = config_from(&[
+            ("APP_HOST", "hookbox.example.com"),
+            ("PUBLIC_BASE_URL", "https://hookbox.example.com"),
+        ]);
+        assert!(!secure.insecure_cookie_on_public_host());
+    }
 
     #[test]
     fn defaults_apply_without_env() {

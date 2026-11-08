@@ -3,6 +3,7 @@
 //! `router()` adds the P3 health / live-feed / tunnel / SPA routes on top.
 //! `router::build_app` only layers plane dispatch + panic catching around it.
 
+use axum::middleware::map_response;
 use axum::routing::{delete, get, post};
 use axum::Router;
 
@@ -21,15 +22,32 @@ pub mod tunnel_ws;
 
 pub use health::healthz;
 
-/// Every `/api/**` route. `POST /api/session` and the two public share
-/// routes are unauthenticated; all others use the `OwnerId` extractor (401
-/// on a missing/unknown Bearer). The F4 share routes are merged into this one
-/// router — never layered separately — so no `TraceLayer` or other logging
-/// middleware can end up wrapping only them and start logging a share code
-/// (AC-S6).
+/// The `/api/session*` routes. Their only layer marks every response —
+/// including extractor rejections (401/403/429) — `Cache-Control: no-store`,
+/// since bodies and `Set-Cookie` lines here concern the owner key.
+fn session_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/session",
+            get(session::get_session)
+                .post(session::create_session)
+                .delete(session::sign_out),
+        )
+        .route("/api/session/restore", post(session::restore_session))
+        .route("/api/session/key", post(session::reveal_key))
+        .route("/api/session/rotate", post(session::rotate_key))
+        .route_layer(map_response(session::no_store_response))
+}
+
+/// Every `/api/**` route. Mint/restore/sign-out (`CsrfGuard`) and the two
+/// public share routes are unauthenticated; all others use the `OwnerId` /
+/// `AuthedOwner` extractors (Bearer, or cookie + CSRF guard; 401/403 on
+/// failure). The F4 share routes are merged into this one router — never
+/// layered separately — so no `TraceLayer` or other logging middleware can
+/// end up wrapping only them and start logging a share code (AC-S6).
 pub fn api_routes() -> Router<AppState> {
     Router::new()
-        .route("/api/session", post(session::create_session))
+        .merge(session_routes())
         .route(
             "/api/endpoints",
             get(endpoints::list_endpoints).post(endpoints::create_endpoint),

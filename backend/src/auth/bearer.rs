@@ -1,6 +1,6 @@
-//! `Authorization: Bearer <secret>` parsing, shared by the `OwnerId`
-//! extractor (which maps `None` to 401) and the tunnel bind handshake (which
-//! falls back to `?cap=`).
+//! `Authorization: Bearer <key>` parsing, shared by owner resolution (which
+//! maps `None` to 401), the live-feed handshake and the tunnel bind
+//! handshake (Bearer-only).
 
 /// The raw secret from a `Bearer <secret>` header value: the scheme matches
 /// case-insensitively and the secret is trimmed. `None` for any other scheme

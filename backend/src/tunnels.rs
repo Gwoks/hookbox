@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 
 /// One bound tunnel CLI connection.
 pub struct TunnelConnection {
@@ -25,6 +25,9 @@ pub struct TunnelConnection {
     next_id: AtomicU64,
     /// Bumped each bind; the socket task compares to detect a takeover (4409).
     pub generation: u64,
+    /// Fired by `TunnelRegistry::revoke` (owner key rotated): the socket
+    /// task closes the CLI connection with 4401.
+    pub revoked: Notify,
 }
 
 impl TunnelConnection {
@@ -34,6 +37,7 @@ impl TunnelConnection {
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             generation,
+            revoked: Notify::new(),
         }
     }
 
@@ -119,6 +123,21 @@ impl TunnelRegistry {
     pub fn get(&self, token: &str) -> Option<Arc<TunnelConnection>> {
         self.conns.get(token).map(|c| c.clone())
     }
+
+    /// Drop whatever tunnel is bound for `token` (owner key rotated):
+    /// `is_active` is false immediately and the bound socket is told to
+    /// close. Returns whether a tunnel was bound.
+    pub fn revoke(&self, token: &str) -> bool {
+        match self.conns.remove(token) {
+            Some((_, conn)) => {
+                // `notify_one` stores a permit, so the socket task sees it
+                // even if it is not parked on `notified()` right now.
+                conn.revoked.notify_one();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +157,20 @@ mod tests {
             .await;
         let frame = rx.await.unwrap();
         assert_eq!(frame["status"], json!(200));
+    }
+
+    #[tokio::test]
+    async fn revoke_unbinds_and_signals_the_socket() {
+        let reg = TunnelRegistry::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (conn, _gen) = reg.bind("tok", tx);
+        assert!(reg.revoke("tok"));
+        assert!(!reg.is_active("tok"));
+        // The stored permit resolves immediately.
+        tokio::time::timeout(std::time::Duration::from_secs(1), conn.revoked.notified())
+            .await
+            .expect("revoke notifies the bound connection");
+        assert!(!reg.revoke("tok"), "nothing left to revoke");
     }
 
     #[tokio::test]

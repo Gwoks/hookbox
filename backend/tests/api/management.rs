@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::common::{
-    add_rule, call, create_owner, new_endpoint, patch_endpoint, TestApp, APP_HOST,
+    add_rule, call, create_owner, mint_session, new_endpoint, patch_endpoint, TestApp, APP_HOST,
 };
 
 #[tokio::test]
@@ -16,16 +16,8 @@ async fn mock_url_uses_public_base_url_in_path_fallback_mode() {
     })
     .await;
 
-    let (s, body, _) = call(
-        &app,
-        "POST",
-        "app.local",
-        "/api/session",
-        None,
-        Some(json!({"email":"base@e.com"})),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
+    let (s, body, _) = mint_session(&app).await;
+    assert_eq!(s, StatusCode::CREATED);
     let ep = &body["primary"];
     let token = ep["token"].as_str().unwrap();
     assert_eq!(
@@ -46,16 +38,8 @@ async fn mock_url_stays_relative_in_path_fallback_mode_without_base_url() {
     })
     .await;
 
-    let (s, body, _) = call(
-        &app,
-        "POST",
-        "app.local",
-        "/api/session",
-        None,
-        Some(json!({"email":"rel@e.com"})),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
+    let (s, body, _) = mint_session(&app).await;
+    assert_eq!(s, StatusCode::CREATED);
     let ep = &body["primary"];
     let token = ep["token"].as_str().unwrap();
     assert_eq!(ep["mock_url"], json!(format!("/e/{token}")));
@@ -71,17 +55,11 @@ async fn session_shape_and_flat_error_envelope() {
     assert_eq!(body["error"], json!("unauthorized"));
     assert!(body["detail"].is_string());
     assert_eq!(h.get("www-authenticate").unwrap(), "Bearer");
-    // bad email -> 422.
-    let (s, _b, _) = call(
-        &app,
-        "POST",
-        "app.local",
-        "/api/session",
-        None,
-        Some(json!({"email":"nope"})),
-    )
-    .await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    // A session call without the SPA's CSRF header -> 403 flat envelope.
+    let (s, body, _) = call(&app, "POST", "app.local", "/api/session", None, None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], json!("csrf_rejected"));
+    assert!(body["detail"].is_string());
 }
 
 #[tokio::test]
@@ -214,16 +192,4 @@ async fn foreign_endpoint_is_404_not_403() {
     let (s, body, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], json!("not_found"));
-}
-
-#[tokio::test]
-async fn session_mints_secret_and_primary_endpoint() {
-    let TestApp { app, .. } = TestApp::new().await;
-    let email = json!({"email": "new@user.com"});
-    let (s, body, h) = call(&app, "POST", APP_HOST, "/api/session", None, Some(email)).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(h.get("x-hookbox-plane").unwrap(), "api");
-    assert!(body["owner_secret"].as_str().unwrap().len() >= 40);
-    assert_eq!(body["endpoints"].as_array().unwrap().len(), 1);
-    assert!(body["primary"]["token"].is_string());
 }

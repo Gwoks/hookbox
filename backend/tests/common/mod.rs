@@ -4,8 +4,6 @@
 //! over the management API. Each test binary uses a subset of these.
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
@@ -25,10 +23,11 @@ pub const MOCK_DOMAIN: &str = "mock.local";
 pub type Reply = (StatusCode, Value, HeaderMap);
 
 /// The integration-test `Config`: wildcard mock domain `mock.local`, app host
-/// `app.local`, and a session rate limit high enough never to bind. (The
-/// session limiter is one process-wide bucket keyed by client IP, and the
-/// `oneshot` harness has no `ConnectInfo`, so every test shares the
-/// "unknown" bucket.) Everything else is the production default.
+/// `app.local`, and a session rate limit high enough never to bind (the
+/// `oneshot` harness has no `ConnectInfo`, so every mint in one app shares
+/// the `session:unknown` bucket). No `PUBLIC_BASE_URL`, so the session
+/// cookie is the plain-http `hookbox_key`. Everything else is the
+/// production default.
 pub fn test_config() -> Config {
     Config::from_source(|key| {
         let value = match key {
@@ -41,7 +40,7 @@ pub fn test_config() -> Config {
     })
 }
 
-/// A running app plus one owner's secret.
+/// A running app plus one owner's key (`secret`, used as a Bearer).
 pub struct TestApp {
     pub app: Router,
     pub state: AppState,
@@ -69,26 +68,44 @@ impl TestApp {
     }
 }
 
-static OWNER_SEQ: AtomicU64 = AtomicU64::new(0);
+/// The session cookie name under `test_config()` (plain http, no `__Host-`).
+pub const COOKIE_NAME: &str = "hookbox_key";
 
-/// THE one place integration tests mint an owner: a fresh owner through the
-/// public session API, returning its bearer secret.
+/// The SPA's CSRF header, as the browser client sends it.
+pub const CSRF: (&str, &str) = ("x-hookbox", "1");
+
+/// `POST /api/session` exactly as the SPA sends it (CSRF header, no body).
+pub async fn mint_session(app: &Router) -> Reply {
+    call_with(app, "POST", APP_HOST, "/api/session", &[CSRF], None).await
+}
+
+/// The owner key from a session response's `Set-Cookie`, if it set ours
+/// (either the plain or the `__Host-` secure-mode name).
+pub fn session_cookie_key(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|line| {
+            let pair = line.split(';').next()?.trim();
+            let pair = pair.strip_prefix("__Host-").unwrap_or(pair);
+            let value = pair.strip_prefix(COOKIE_NAME)?.strip_prefix('=')?;
+            Some(value.to_string()).filter(|v| !v.is_empty())
+        })
+}
+
+/// `Cookie: hookbox_key=<key>` as a header pair.
+pub fn cookie_header(key: &str) -> (&'static str, String) {
+    ("cookie", format!("{COOKIE_NAME}={key}"))
+}
+
+/// THE one place integration tests mint an owner: a fresh anonymous owner
+/// through the public session API, returning its owner key (read from the
+/// HttpOnly cookie) for use as a Bearer.
 pub async fn create_owner(app: &Router) -> String {
-    let n = OWNER_SEQ.fetch_add(1, Ordering::Relaxed);
-    let (status, body, _) = call(
-        app,
-        "POST",
-        APP_HOST,
-        "/api/session",
-        None,
-        Some(json!({ "email": format!("owner{n}@e.com") })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "owner creation: {body:?}");
-    body["owner_secret"]
-        .as_str()
-        .expect("session response carries owner_secret")
-        .to_string()
+    let (status, body, headers) = mint_session(app).await;
+    assert_eq!(status, StatusCode::CREATED, "owner creation: {body:?}");
+    session_cookie_key(&headers).expect("mint sets the session cookie")
 }
 
 /// One request through the full app; a JSON body is sent as
@@ -101,13 +118,30 @@ pub async fn call(
     bearer: Option<&str>,
     body: Option<Value>,
 ) -> Reply {
-    let mut b = Request::builder()
-        .method(method)
-        .uri(path)
-        .header("host", host);
-    if let Some(t) = bearer {
-        b = b.header("authorization", format!("Bearer {t}"));
-    }
+    let auth = bearer.map(|t| format!("Bearer {t}"));
+    let headers: Vec<(&str, &str)> = auth
+        .as_deref()
+        .map(|a| vec![("authorization", a)])
+        .unwrap_or_default();
+    call_with(app, method, host, path, &headers, body).await
+}
+
+/// Like `call`, with arbitrary extra request headers (cookies, Origin, …).
+pub async fn call_with(
+    app: &Router,
+    method: &str,
+    host: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<Value>,
+) -> Reply {
+    let b = headers.iter().fold(
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", host),
+        |b, (k, v)| b.header(*k, *v),
+    );
     let req = match body {
         Some(j) => b
             .header("content-type", "application/json")

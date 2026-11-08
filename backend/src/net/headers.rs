@@ -148,6 +148,15 @@ pub(crate) fn try_header(name: &str, value: &str) -> Option<(HeaderName, HeaderV
     Some((name, value))
 }
 
+/// Mark any response (success or error) `Cache-Control: no-store`.
+pub(crate) fn no_store(mut resp: axum::response::Response) -> axum::response::Response {
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    resp
+}
+
 /// Every header as a `(name, value)` string pair, skipping values that are not
 /// visible ASCII. Duplicate names yield one pair per value, in map order.
 pub(crate) fn header_pairs(headers: &HeaderMap) -> impl Iterator<Item = (&str, &str)> {

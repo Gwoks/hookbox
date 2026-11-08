@@ -45,9 +45,6 @@
 //!     receives the code or the full path; log `share_links.id` instead
 //!     (AC-S6, AC-S16).
 
-use axum::http::{header, HeaderValue};
-use axum::response::Response;
-
 mod owner;
 mod projection;
 mod public;
@@ -55,12 +52,8 @@ mod public;
 pub(crate) use owner::{create_share, list_shares, revoke_share};
 pub(crate) use public::{public_get_request, public_list_requests};
 
-/// Wrap any response (success or error) with `Cache-Control: no-store` —
-/// every handler-produced response on the public routes carries it (AC-37),
-/// including a 503 from a bubbled `sqlx::Error`, which is why this wraps the
-/// *outermost* Result rather than being attached per branch.
-fn no_store(mut resp: Response) -> Response {
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    resp
-}
+// Every handler-produced response on the public routes carries
+// `Cache-Control: no-store` (AC-37), including a 503 from a bubbled
+// `sqlx::Error`, which is why it wraps the *outermost* Result rather than
+// being attached per branch.
+use crate::net::headers::no_store;

@@ -1,36 +1,46 @@
 //! Live-feed WS + SSE endpoints — PORT of `app/websocket.py` (§5.4, AC-41..44,
 //! AC-S9/S13/S19).
 //!
-//! `GET /ws/{token}?cap=` and `GET /sse/{token}?cap=`: owner-gated via `?cap=`,
-//! verified BEFORE any frame. On auth failure: WS accept-then-close `4401` (so the
-//! code reaches the client, not a 1006); SSE `401`. Connection cap per endpoint =
-//! `WS_MAX_CONN_PER_ENDPOINT`: WS accept-then-close `1013`; SSE `503`. First frame
-//! is `hello {token, server_time}`. WS `"ping"` → `"pong"`; SSE `: ping` heartbeat
-//! ~25s. A lagged broadcast receiver drops frames (client reconciles via the
-//! management API) and never errors the socket. The `cap` is never logged.
+//! `GET /ws/{token}` and `GET /sse/{token}`: owner-gated by the owner key —
+//! `Authorization: Bearer` (CLI/scripts) or the session cookie (the SPA;
+//! WebSocket/EventSource cannot set headers, so no `x-hookbox` is required).
+//! There is no `?cap=`: a key in the query string lands in proxy access logs.
+//! Order: a foreign `Origin`/`Sec-Fetch-Site` is a plain HTTP `403
+//! csrf_rejected` BEFORE any upgrade (cross-site WebSocket hijacking guard);
+//! then the key is verified BEFORE any frame. On key failure: WS
+//! accept-then-close `4401` (so the code reaches the client, not a 1006); SSE
+//! `401`. Connection cap per endpoint = `WS_MAX_CONN_PER_ENDPOINT`: WS
+//! accept-then-close `1013`; SSE `503`. First frame is `hello {token,
+//! server_time}`. WS `"ping"` → `"pong"`; SSE `: ping` heartbeat ~25s. A lagged
+//! broadcast receiver drops frames (client reconciles via the management API)
+//! and never errors the socket. The key is never logged.
 
 use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, Stream, StreamExt};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::auth::{feed_key, key_owns_token};
 use crate::error::ApiError;
 use crate::feed::FeedEvent;
 use crate::net::ws::{close_with, WS_CLOSE_TRY_AGAIN_LATER, WS_CLOSE_UNAUTHORIZED};
+use crate::session::origin_allowed;
 use crate::state::AppState;
 use crate::util::time::now_iso;
 
 const SSE_HEARTBEAT_S: u64 = 25;
 
-#[derive(serde::Deserialize)]
-pub struct FeedQuery {
-    pub cap: Option<String>,
+/// Whether the handshake's key owns `token`.
+async fn feed_authed(state: &AppState, headers: &HeaderMap, token: &str) -> bool {
+    let key = feed_key(headers, &state.cfg);
+    key_owns_token(&state.pool, token, key.as_deref()).await
 }
 
 // --- WS ----------------------------------------------------------------------
@@ -38,10 +48,13 @@ pub struct FeedQuery {
 pub async fn ws_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    Query(q): Query<FeedQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let authed = crate::auth::verify_cap_owns_token(&state.pool, &token, q.cap.as_deref()).await;
+    if !origin_allowed(&headers, &state.cfg) {
+        return ApiError::csrf_rejected().into_response();
+    }
+    let authed = feed_authed(&state, &headers, &token).await;
     let at_cap =
         state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint;
     ws.on_upgrade(move |socket| async move {
@@ -106,9 +119,12 @@ async fn run_ws(state: AppState, token: String, socket: WebSocket) {
 pub async fn sse_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    Query(q): Query<FeedQuery>,
+    headers: HeaderMap,
 ) -> Response {
-    if !crate::auth::verify_cap_owns_token(&state.pool, &token, q.cap.as_deref()).await {
+    if !origin_allowed(&headers, &state.cfg) {
+        return ApiError::csrf_rejected().into_response();
+    }
+    if !feed_authed(&state, &headers, &token).await {
         return ApiError::unauthorized("Valid owner capability required.").into_response();
     }
     if state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint {

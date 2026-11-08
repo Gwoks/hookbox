@@ -3,7 +3,9 @@
 //! a local server, and returns the response down the socket.
 //!
 //! Flags: `--port <p>` (local target, default 3000), `--endpoint <token>`,
-//! `--secret <owner_secret>`, `--host <ws_base>` (default ws://localhost:8080).
+//! `--key <owner key>` (alias: `--secret`), `--host <ws_base>` (default
+//! ws://localhost:8080). The key is the owner's recovery key, sent as
+//! `Authorization: Bearer`.
 //! Stdout follows the `cli.tty.*` contract (copy.md §5.12): connecting / bound /
 //! per-request / 4401-stop (no retry) / 4409-exit / disconnect-backoff /
 //! reconnected / shutdown.
@@ -36,7 +38,7 @@ fn parse_args() -> Option<Args> {
         match a.as_str() {
             "--port" => port = it.next()?.parse().ok()?,
             "--endpoint" => endpoint = it.next()?,
-            "--secret" => secret = it.next()?,
+            "--key" | "--secret" => secret = it.next()?,
             "--host" => host = it.next()?,
             _ => {}
         }
@@ -57,7 +59,7 @@ async fn main() {
     let args = match parse_args() {
         Some(a) => a,
         None => {
-            eprintln!("usage: tunnel --endpoint <token> --secret <owner_secret> [--port 3000] [--host ws://localhost:8080]");
+            eprintln!("usage: tunnel --endpoint <token> --key <recovery_key> [--port 3000] [--host ws://localhost:8080]");
             std::process::exit(2);
         }
     };
@@ -66,7 +68,7 @@ async fn main() {
     loop {
         match run_once(&args).await {
             Outcome::Unauthorized => {
-                println!("Authentication failed — your secret was rejected. Re-check --secret (it rotates each time you sign in). Stopping.");
+                println!("Authentication failed — your key was rejected (it is invalid, or was rotated). Copy the current recovery key from Settings and re-run with --key. Stopping.");
                 std::process::exit(1);
             }
             Outcome::Rebound => {
