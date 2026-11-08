@@ -1,0 +1,69 @@
+## create item
+status: 201
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 47
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: crud
+body: json-keys [a, id]
+
+## get item
+status: 200
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 47
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: crud
+body: json-keys [a, id]
+
+## get missing item
+status: 404
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 46
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: crud
+body: {"detail":"No such item.","error":"not_found"}
+
+## create invalid json
+status: 400
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 57
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: crud
+body: {"detail":"body is not valid JSON","error":"bad_request"}
+
+## delete item
+status: 204
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 0
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: crud
+body: <empty>
+

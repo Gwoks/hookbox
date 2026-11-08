@@ -3,9 +3,13 @@
  * AC-D16/D17/D18). The resilience-critical real-time layer; the no-Redis
  * at-most-once reconciliation lives here.
  *
- * Transport: WebSocket `/ws/{token}?cap=` first; after MAX_WS_FAILS_BEFORE_SSE
- * (6) failures fall back to SSE `/sse/{token}?cap=` (AC-J5). The cap is the
- * ?cap= query param (NEVER a cookie — §5.1/AC-S14).
+ * Transport: WebSocket `/ws/{token}` first; after MAX_WS_FAILS_BEFORE_SSE
+ * (6) failures fall back to SSE `/sse/{token}` (AC-J5). The credential is
+ * the owner's HttpOnly session cookie, which the browser attaches to these
+ * same-origin requests itself — nothing in the URL (hookbox-a73.3). The feed
+ * only connects while the session status is `signed-in`. ./transport.ts
+ * builds both URLs. Backoff comes from lib/backoff, lifecycle listeners from
+ * lib/hooks/use-lifecycle-events (shared with the public viewer's poll).
  *
  * Contract handling:
  * - `new_request` (RequestSummary in the {type,data} envelope) prepends live,
@@ -21,7 +25,7 @@
  *   the TEXT label carries state (AC-D17).
  * - WS 1013 / SSE 503 → distinct "busy" state, NOT endless reconnect / no
  *   gate-hammer (AC-J6).
- * - WS 4401 (close) / SSE 401 → "unauthorized" (rotated cap, AC-J5).
+ * - WS 4401 (close) / SSE 401 → "unauthorized" (key rotated elsewhere, AC-J5).
  * - reconnection paused while the tab is hidden, resumed with a back-fill on
  *   focus (AC-J5/J13).
  * - while PAUSED (by the user) buffered new_request count is exposed as
@@ -30,22 +34,22 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ConnState } from '@/components/hookbox/connection-pill'
-import { api, type RequestSummary } from '@/api'
-import { session } from '@/api/session'
+import { api, useSession, type RequestSummary } from '@/api'
+import { backoffDelay, type BackoffPolicy } from '@/lib/backoff'
+import { subscribeLifecycle } from '@/lib/hooks/use-lifecycle-events'
 import { decodeSseEvent, decodeWsFrame, type FeedEvent } from './events'
+import { feedEventSourceUrl, feedSocketUrl } from './transport'
 
-const BACKOFF_MIN = 250
-const BACKOFF_MAX = 8000
+// 250ms doubling to 8s (exponent capped at 5) plus up to 30% jitter (AC-J5).
+const RECONNECT_BACKOFF: BackoffPolicy = { base: 250, max: 8000, jitter: 0.3, maxExponent: 5 }
 const MAX_WS_FAILS_BEFORE_SSE = 6
 const HEARTBEAT_INTERVAL_MS = 20000
 const PONG_GRACE_MS = 5000
 const FEED_CAP = 100
 
 export interface UseFeedOptions {
-  /** Endpoint token; the feed only flows once a session secret exists. */
+  /** Endpoint token; the feed only flows while the tab is signed in. */
   token: string | null
-  /** Connection cap to request (?cap is the secret; this is the conn-cap hint). */
-  cap?: number
   /** User-controlled pause; while paused, arrivals buffer into newCount. */
   paused?: boolean
   onStateChanged?: (key: string, value: string) => void
@@ -70,7 +74,8 @@ export interface UseFeedResult {
 }
 
 export function useFeed(opts: UseFeedOptions): UseFeedResult {
-  const { token, cap = 50, paused = false, onStateChanged, onEndpointUpdated } = opts
+  const { token, paused = false, onStateChanged, onEndpointUpdated } = opts
+  const signedIn = useSession().status === 'signed-in'
 
   const [rows, setRows] = useState<RequestSummary[]>([])
   const [connState, setConnState] = useState<ConnState>('connecting')
@@ -175,9 +180,7 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
       attemptRef.current += 1
       setAttempt(attemptRef.current)
       setConnState('reconnecting')
-      const base = Math.min(BACKOFF_MAX, BACKOFF_MIN * 2 ** Math.min(attemptRef.current, 5))
-      const jitter = Math.random() * base * 0.3
-      const delay = Math.min(BACKOFF_MAX, base + jitter)
+      const delay = backoffDelay(attemptRef.current, RECONNECT_BACKOFF)
       backoffTimer.current = setTimeout(() => {
         if (document.visibilityState === 'hidden') return // paused while hidden (AC-J5)
         connect()
@@ -196,12 +199,10 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
     useSse.current = false
     setAttempt(0)
 
-    if (!token || !session.getSecret()) {
+    if (!token || !signedIn) {
       setConnState('connecting')
       return
     }
-
-    const secret = session.getSecret() as string
 
     const startHeartbeat = (socket: WebSocket) => {
       heartbeat.current = setInterval(() => {
@@ -228,8 +229,7 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
       const gen = generation.current
       useSse.current = true
       setConnState('connecting')
-      const url = `/sse/${encodeURIComponent(token)}?cap=${encodeURIComponent(secret)}`
-      const es = new EventSource(url)
+      const es = new EventSource(feedEventSourceUrl(token))
       sse.current = es
       es.onopen = () => {
         if (gen !== generation.current) return
@@ -265,9 +265,7 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
       teardown()
       const gen = generation.current
       setConnState(attemptRef.current > 0 ? 'reconnecting' : 'connecting')
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const url = `${proto}://${window.location.host}/ws/${encodeURIComponent(token)}?cap=${encodeURIComponent(secret)}`
-      const socket = new WebSocket(url)
+      const socket = new WebSocket(feedSocketUrl(token))
       ws.current = socket
 
       socket.onopen = () => {
@@ -292,7 +290,7 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
         if (gen !== generation.current) return
         clearTimers()
         ws.current = null
-        // 4401 = unauthorized bind (rotated cap). Stop; do not hammer (AC-J5).
+        // 4401 = unauthorized bind (key rotated elsewhere). Stop; do not hammer (AC-J5).
         if (e.code === 4401) {
           stopped.current = true
           setConnState('unauthorized')
@@ -325,34 +323,28 @@ export function useFeed(opts: UseFeedOptions): UseFeedResult {
     connectRef.current = () => (useSse.current ? connectSse() : connectWs())
     connectWs()
 
-    // Tab-visibility: pause reconnection while hidden, back-fill on focus (AC-J5/J13).
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible' && !stopped.current) {
+    const unsubscribeLifecycle = subscribeLifecycle({
+      // Tab-visibility: pause reconnection while hidden, back-fill on focus (AC-J5/J13).
+      onVisibilityChange: (visible) => {
+        if (!visible || stopped.current) return
         // Reconnect + reconcile to back-fill anything missed while hidden.
         if (!ws.current && !sse.current) connectRef.current()
         else void reconcile(token, generation.current)
-      }
-    }
-    const onOnline = () => {
-      if (!stopped.current) {
+      },
+      onOnline: () => {
+        if (stopped.current) return
         attemptRef.current = 0
         connectRef.current()
-      }
-    }
-    const onOffline = () => setConnState('offline')
-
-    document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('online', onOnline)
-    window.addEventListener('offline', onOffline)
+      },
+      onOffline: () => setConnState('offline'),
+    })
 
     return () => {
-      document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('online', onOnline)
-      window.removeEventListener('offline', onOffline)
+      unsubscribeLifecycle()
       teardown()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token])
+  }, [token, signedIn])
 
   const flushBuffered = useCallback(() => {
     if (buffer.current.length === 0) {

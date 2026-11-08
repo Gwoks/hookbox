@@ -7,7 +7,9 @@
  */
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 4173;
+// E2E_PORT lets parallel worktrees run the suite without sharing (and
+// silently reusing) one preview server.
+const PORT = Number(process.env.E2E_PORT ?? 4173);
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({

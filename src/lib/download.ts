@@ -3,8 +3,13 @@
  * config export and F5's CSV export can't drift into two implementations of
  * the same three steps. */
 
+/** How long the object URL outlives the click. Chromium copes with an
+ * immediate revoke, but Firefox/Safari can start the download after the
+ * click returns and would then fetch a dead URL. */
+const REVOKE_DELAY_MS = 30_000
+
 /** Trigger a browser download of `bytes` as `filename`, with no server
- * round-trip. Revokes the object URL even if the click handler throws. */
+ * round-trip. Revokes the object URL (deferred) even if the click throws. */
 export function downloadBlob(filename: string, mime: string, bytes: BlobPart): void {
   const blob = new Blob([bytes], { type: mime })
   const url = URL.createObjectURL(blob)
@@ -17,6 +22,6 @@ export function downloadBlob(filename: string, mime: string, bytes: BlobPart): v
     a.click()
     a.remove()
   } finally {
-    URL.revokeObjectURL(url)
+    setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
   }
 }

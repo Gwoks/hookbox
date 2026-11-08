@@ -316,6 +316,7 @@ the **explicit "re-proven on Rust"** obligation.
   `Authorization`/`Cookie`/`X-Owner-Id` headers are redacted in stored traces and
   in feed payloads; the cap never appears in `tracing` logs (incl. the `?cap=`
   query string of `/ws|/sse`) nor in any error body.
+- *(Superseded 2026-11-08 by AC-S14a–d in `../anonymous-cookie-identity/decision.md`.)*
 - **AC-S14 — Cap accepted only via Bearer / `?cap=`, never a cookie.** The API
   never reads the capability from a cookie; the SPA does not store it in a cookie
   (closes CSRF without tokens).

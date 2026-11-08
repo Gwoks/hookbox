@@ -11,6 +11,7 @@
 use rand::Rng;
 
 use crate::config::Config;
+use crate::models::ChaosMode;
 
 /// Chaos failure statuses (§5.5 / OQ-2 default = random 5xx).
 pub const CHAOS_STATUSES: [i64; 3] = [502, 503, 504];
@@ -72,16 +73,16 @@ pub fn chaos_outcome(pct: i64, dropout: bool, roll: u8, pick: usize) -> Chaos {
 }
 
 /// Roll chaos for an endpoint using the thread RNG. `chaos_pct` already clamped
-/// by the caller (or clamp here defensively). `chaos_mode == "dropout"` opts into
+/// by the caller (or clamp here defensively). `ChaosMode::Dropout` opts into
 /// the connection-drop variant.
-pub fn roll_chaos(chaos_pct: i64, chaos_mode: &str) -> Chaos {
+pub fn roll_chaos(chaos_pct: i64, chaos_mode: ChaosMode) -> Chaos {
     if chaos_pct <= 0 {
         return Chaos::None;
     }
     let mut rng = rand::thread_rng();
     let roll: u8 = rng.gen_range(1..=100);
     let pick: usize = rng.gen_range(0..CHAOS_STATUSES.len());
-    let dropout = chaos_mode.eq_ignore_ascii_case("dropout");
+    let dropout = chaos_mode == ChaosMode::Dropout;
     chaos_outcome(chaos_pct, dropout, roll, pick)
 }
 
@@ -90,11 +91,7 @@ mod tests {
     use super::*;
 
     fn cfg() -> Config {
-        let _guard = crate::testutil::env_lock();
-        for k in ["LATENCY_MAX_MS", "RATE_LIMIT_MAX_PER_MIN"] {
-            std::env::remove_var(k);
-        }
-        Config::from_env()
+        crate::testing::test_config()
     }
 
     #[test]

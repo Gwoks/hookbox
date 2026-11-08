@@ -17,6 +17,7 @@ pub mod cors;
 pub mod crud;
 pub mod engine;
 pub mod matcher;
+pub(crate) mod mock_error;
 pub mod proxy;
 pub mod ssrf;
 pub mod templating;

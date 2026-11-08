@@ -1,0 +1,195 @@
+//! §5.2 management surface: session shape, endpoint/rule CRUD, request
+//! paging, state + collection peeks, owner scoping, and the flat error envelope.
+
+use axum::http::StatusCode;
+use serde_json::json;
+
+use crate::common::{
+    add_rule, call, create_owner, mint_session, new_endpoint, patch_endpoint, TestApp, APP_HOST,
+};
+
+#[tokio::test]
+async fn mock_url_uses_public_base_url_in_path_fallback_mode() {
+    let TestApp { app, .. } = TestApp::with_config(|cfg| {
+        cfg.path_fallback_only = true;
+        cfg.public_base_url = "https://hookbox.example.com".to_string();
+    })
+    .await;
+
+    let (s, body, _) = mint_session(&app).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let ep = &body["primary"];
+    let token = ep["token"].as_str().unwrap();
+    assert_eq!(
+        ep["mock_url"],
+        json!(format!("https://hookbox.example.com/e/{token}"))
+    );
+    assert_eq!(
+        ep["path_url"],
+        json!(format!("https://hookbox.example.com/e/{token}"))
+    );
+}
+
+#[tokio::test]
+async fn mock_url_stays_relative_in_path_fallback_mode_without_base_url() {
+    let TestApp { app, .. } = TestApp::with_config(|cfg| {
+        cfg.path_fallback_only = true;
+        cfg.public_base_url = String::new();
+    })
+    .await;
+
+    let (s, body, _) = mint_session(&app).await;
+    assert_eq!(s, StatusCode::CREATED);
+    let ep = &body["primary"];
+    let token = ep["token"].as_str().unwrap();
+    assert_eq!(ep["mock_url"], json!(format!("/e/{token}")));
+    assert_eq!(ep["path_url"], json!(format!("/e/{token}")));
+}
+
+#[tokio::test]
+async fn session_shape_and_flat_error_envelope() {
+    let TestApp { app, .. } = TestApp::new().await;
+    // Unauthed /api -> 401 flat envelope + WWW-Authenticate.
+    let (s, body, h) = call(&app, "GET", "app.local", "/api/endpoints", None, None).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], json!("unauthorized"));
+    assert!(body["detail"].is_string());
+    assert_eq!(h.get("www-authenticate").unwrap(), "Bearer");
+    // A session call without the SPA's CSRF header -> 403 flat envelope.
+    let (s, body, _) = call(&app, "POST", "app.local", "/api/session", None, None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], json!("csrf_rejected"));
+    assert!(body["detail"].is_string());
+}
+
+#[tokio::test]
+async fn rules_ordered_and_204_delete() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    let r1 = add_rule(
+        &app,
+        &secret,
+        &token,
+        json!({"priority": 50, "match": {"method":"GET"}}),
+    )
+    .await;
+    add_rule(&app, &secret, &token, json!({"priority": 10})).await;
+    let (s, list, _) = call(
+        &app,
+        "GET",
+        "app.local",
+        &format!("/api/endpoints/{token}/rules"),
+        Some(&secret),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let arr = list.as_array().unwrap();
+    assert_eq!(arr[0]["priority"], json!(10)); // priority,id order
+                                               // DELETE -> 204 no body.
+    let (s, body, _) = call(
+        &app,
+        "DELETE",
+        "app.local",
+        &format!("/api/endpoints/{token}/rules/{r1}"),
+        Some(&secret),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert!(body.is_null());
+}
+
+// --- moved from router.rs unit tests (unique assertions only) ---
+
+#[tokio::test]
+async fn endpoint_crud_round_trip() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let create = json!({"name": "demo"});
+    let (s, body, _) = call(
+        &app,
+        "POST",
+        APP_HOST,
+        "/api/endpoints",
+        Some(&secret),
+        Some(create),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let token = body["token"].as_str().unwrap().to_string();
+    assert_eq!(body["chaos_mode"], json!("error")); // OQ-2 default present
+    assert_eq!(body["default_mode"], json!("mock_404"));
+    assert!(body.as_object().unwrap().contains_key("last_hit")); // null key present
+
+    // List: the session's primary endpoint plus this one.
+    let (s, body, h) = call(&app, "GET", APP_HOST, "/api/endpoints", Some(&secret), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h.get("x-hookbox-plane").unwrap(), "api");
+    let listed = body.as_array().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().any(|e| e["token"] == json!(token)));
+
+    // PATCH clamps latency and validates target_url.
+    let patch = json!({"latency_ms": 999999, "chaos_mode": "dropout", "target_url": "https://up.example.com"});
+    let (s, body, _) = patch_endpoint(&app, &secret, &token, patch).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["latency_ms"], json!(10000)); // clamped
+    assert_eq!(body["chaos_mode"], json!("dropout"));
+    assert_eq!(body["target_url"], json!("https://up.example.com"));
+    let (s, _b, _) =
+        patch_endpoint(&app, &secret, &token, json!({"target_url": "ftp://bad"})).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // DELETE tombstones and answers with the 200 Message envelope.
+    let path = format!("/api/endpoints/{token}");
+    let (s, body, _) = call(&app, "DELETE", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["success"], json!(true));
+}
+
+#[tokio::test]
+async fn rule_create_shape_and_get_after_delete_is_404() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    let rules = format!("/api/endpoints/{token}/rules");
+    let rule = json!({"priority": 50, "match": {"method": "GET"}});
+    let (s, created, _) = call(&app, "POST", APP_HOST, &rules, Some(&secret), Some(rule)).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(created["match"]["method"], json!("GET"));
+    assert!(created.as_object().unwrap().contains_key("webhook_action"));
+    let path = format!("{rules}/{}", created["id"]);
+    let (s, _b, _) = call(&app, "DELETE", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _b, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn fresh_endpoint_requests_state_and_collections_are_empty() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    let base = format!("/api/endpoints/{token}");
+    let path = format!("{base}/requests?limit=10");
+    let (s, body, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, json!([]));
+    let path = format!("{base}/state");
+    let (s, body, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, json!({"state": {}}));
+    let path = format!("{base}/collections/widgets");
+    let (s, body, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, json!({"items": []}));
+}
+
+#[tokio::test]
+async fn foreign_endpoint_is_404_not_403() {
+    let TestApp { app, secret, .. } = TestApp::new().await;
+    let stranger = create_owner(&app).await;
+    let foreign = new_endpoint(&app, &stranger).await;
+    let path = format!("/api/endpoints/{foreign}");
+    let (s, body, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], json!("not_found"));
+}

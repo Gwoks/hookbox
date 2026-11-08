@@ -7,7 +7,7 @@
 //!   (b) deletes expired `endpoint_state` / `crud_collections` rows,
 //!   (c) hard-deletes endpoint tombstones older than `GONE_TTL_HOURS`,
 //!   (d) evicts idle rate-limit buckets so the in-memory map stays bounded.
-//! The 100-cap is also held at write time (db::insert_trace) so it never drifts.
+//! The 100-cap is also held at write time (repo::requests::insert_trace) so it never drifts.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +16,7 @@ use sqlx::SqlitePool;
 
 use crate::config::Config;
 use crate::limiter::Limiter;
+use crate::repo::retention;
 
 /// Run one sweep pass. Returned tuple is `(traces_pruned, state_reaped,
 /// crud_reaped, tombstones_reaped)` for observability/tests.
@@ -23,50 +24,14 @@ pub async fn sweep_once(
     pool: &SqlitePool,
     cfg: &Config,
 ) -> Result<(u64, u64, u64, u64), sqlx::Error> {
-    // (a) TTL prune of traces past TRACE_TTL_HOURS.
-    let ttl = format!("-{} hours", cfg.trace_ttl_hours);
-    let traces_ttl = sqlx::query("DELETE FROM request_logs WHERE created_at < datetime('now', ?)")
-        .bind(&ttl)
-        .execute(pool)
-        .await?
-        .rows_affected();
-
-    // (a) per-token cap prune (newest TRACE_CAP per token).
-    let cap_pruned = sqlx::query(
-        "DELETE FROM request_logs
-         WHERE id NOT IN (
-             SELECT id FROM (
-                 SELECT id, ROW_NUMBER() OVER (PARTITION BY token ORDER BY id DESC) AS rn
-                 FROM request_logs
-             ) WHERE rn <= ?
-         )",
-    )
-    .bind(cfg.trace_cap)
-    .execute(pool)
-    .await?
-    .rows_affected();
-
+    // (a) TTL prune of traces past TRACE_TTL_HOURS, then the per-token cap.
+    let traces_ttl = retention::prune_traces_older_than(pool, cfg.trace_ttl_hours).await?;
+    let cap_pruned = retention::cap_traces_per_token(pool, cfg.trace_cap).await?;
     // (b) expired state + crud.
-    let state_reaped =
-        sqlx::query("DELETE FROM endpoint_state WHERE expires_at <= datetime('now')")
-            .execute(pool)
-            .await?
-            .rows_affected();
-    let crud_reaped =
-        sqlx::query("DELETE FROM crud_collections WHERE expires_at <= datetime('now')")
-            .execute(pool)
-            .await?
-            .rows_affected();
-
+    let state_reaped = retention::reap_expired_state(pool).await?;
+    let crud_reaped = retention::reap_expired_crud(pool).await?;
     // (c) tombstones older than GONE_TTL_HOURS -> hard delete (token degrades to 404).
-    let gone_ttl = format!("-{} hours", cfg.gone_ttl_hours);
-    let tombstones = sqlx::query(
-        "DELETE FROM endpoints WHERE gone_at IS NOT NULL AND gone_at < datetime('now', ?)",
-    )
-    .bind(&gone_ttl)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let tombstones = retention::reap_tombstones_older_than(pool, cfg.gone_ttl_hours).await?;
 
     Ok((
         traces_ttl + cap_pruned,
@@ -101,43 +66,23 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-
-    async fn pool_ep() -> SqlitePool {
-        let p = db::pool(":memory:").await.unwrap();
-        db::migrate(&p).await.unwrap();
-        sqlx::query("INSERT INTO owners (owner_id, email, secret_hash) VALUES ('o','e','h')")
-            .execute(&p)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO endpoints (token, owner_id) VALUES ('tok','o')")
-            .execute(&p)
-            .await
-            .unwrap();
-        p
-    }
-
-    fn cfg() -> Config {
-        let _guard = crate::testutil::env_lock();
-        for k in ["TRACE_CAP", "TRACE_TTL_HOURS", "GONE_TTL_HOURS"] {
-            std::env::remove_var(k);
-        }
-        Config::from_env()
-    }
+    use crate::testing::{pool_with_endpoint, test_config};
 
     #[tokio::test]
     async fn reaps_expired_state_crud_and_tombstones() {
-        let p = pool_ep().await;
+        let (p, owner) = pool_with_endpoint("tok").await;
         // already-expired state + crud
         sqlx::query("INSERT INTO endpoint_state (token,key,value,expires_at) VALUES ('tok','k','v',datetime('now','-1 hour'))")
             .execute(&p).await.unwrap();
         sqlx::query("INSERT INTO crud_collections (token,name,expires_at) VALUES ('tok','c',datetime('now','-1 hour'))")
             .execute(&p).await.unwrap();
         // old tombstone
-        sqlx::query("INSERT INTO endpoints (token,owner_id,gone_at) VALUES ('gone','o',datetime('now','-200 hours'))")
+        sqlx::query("INSERT INTO endpoints (token,owner_id,gone_at) VALUES ('gone',?,datetime('now','-200 hours'))")
+            .bind(&owner.owner_id)
             .execute(&p).await.unwrap();
 
-        let (_t, state_reaped, crud_reaped, tombstones) = sweep_once(&p, &cfg()).await.unwrap();
+        let (_t, state_reaped, crud_reaped, tombstones) =
+            sweep_once(&p, &test_config()).await.unwrap();
         assert_eq!(state_reaped, 1);
         assert_eq!(crud_reaped, 1);
         assert_eq!(tombstones, 1);
@@ -150,13 +95,10 @@ mod tests {
 
     #[tokio::test]
     async fn caps_traces_per_token() {
-        let p = pool_ep().await;
-        let c = {
-            let _guard = crate::testutil::env_lock();
-            std::env::set_var("TRACE_CAP", "5");
-            let c = Config::from_env();
-            std::env::remove_var("TRACE_CAP");
-            c
+        let (p, _owner) = pool_with_endpoint("tok").await;
+        let c = Config {
+            trace_cap: 5,
+            ..test_config()
         };
         for i in 0..12 {
             sqlx::query("INSERT INTO request_logs (token,method,path,status_code,served_by) VALUES ('tok','GET',?,200,'default')")

@@ -109,6 +109,18 @@ pub fn subdomain_of(host: &str, mock_domain: &str) -> Option<String> {
     Some(label.to_string())
 }
 
+/// The endpoint token iff `host` is a wildcard mock host `<token>.<MOCK_DOMAIN>`
+/// whose label is not itself an app host (a token==app-host probe stays UI).
+/// `None` means a mock request on this host is the path-fallback `/e/<token>`
+/// served from the app origin.
+pub fn mock_host_token(
+    host: &str,
+    mock_domain: &str,
+    app_hosts: &HashSet<String>,
+) -> Option<String> {
+    subdomain_of(host, mock_domain).filter(|sub| !app_hosts.contains(sub))
+}
+
 /// Parse `/e/<token>/<rest>` -> `(token, mock_path="/<rest>")`.
 /// `/e/<token>` -> `(token, "/")`. `/e` alone -> no token.
 fn path_fallback_token(path: &str) -> (Option<String>, Option<String>) {
@@ -135,16 +147,13 @@ pub fn resolve_plane(
     app_hosts: &HashSet<String>,
 ) -> PlaneResult {
     // P1a — wildcard mock host: EVERYTHING here is the mock's own path.
-    if let Some(sub) = subdomain_of(host, mock_domain) {
-        // A subdomain that collides with an app host stays UI (token==app host probe).
-        if !app_hosts.contains(&sub) {
-            let mock_path = if path.is_empty() {
-                "/".to_string()
-            } else {
-                path.to_string()
-            };
-            return PlaneResult::mock(sub, mock_path);
-        }
+    if let Some(sub) = mock_host_token(host, mock_domain, app_hosts) {
+        let mock_path = if path.is_empty() {
+            "/".to_string()
+        } else {
+            path.to_string()
+        };
+        return PlaneResult::mock(sub, mock_path);
     }
 
     // P1b — path-fallback /e/<token>/<rest> (any host).

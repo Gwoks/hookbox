@@ -1,128 +1,128 @@
 /**
- * Owner-capability session store (PRD §5.1, AC-S14, AC-J7, AC-60).
+ * Owner session STATUS store (hookbox-a73.3, S2 identity).
  *
- * The capability ("your secret") is held in memory + localStorage, NEVER a
- * cookie — this closes CSRF without tokens (AC-S14): the cap is attached as an
- * `Authorization: Bearer <owner_secret>` header by the API client, and is the
- * `?cap=` query param for the WS/SSE feed (handled by the feed hook). A request
- * forged cross-site can't read localStorage, so it cannot attach the header.
+ * The credential itself is an anonymous recovery key held in an HttpOnly,
+ * SameSite=Strict cookie that this script can never read. This module holds
+ * only what the UI needs to route: whether the tab is signed in, and as which
+ * anonymous owner. It stores no key, touches no localStorage and makes no
+ * network calls — `bootstrap.ts` asks the server and reports back here.
  *
- * Rotation (AC-J7): re-submitting an email overwrites the stored secret. Tabs
- * subscribe to changes; the ACTIVE tab that performed the rotation keeps its
- * secret and survives. A STALE tab still holding the OLD secret bounces on its
- * next /api 401 and only retries once the STORED secret actually changes (a
- * `storage` event from another tab, or an explicit re-auth in this tab).
+ * Cross-tab sync rides `BroadcastChannel('hookbox-session')`, and only for
+ * explicit user actions (`{ broadcast: true }`): a sign-out in one tab signs
+ * the others out; a sign-in as a DIFFERENT owner (restore / mint) makes the
+ * others `invalidate()` so their gate re-asks the server which owner the
+ * shared cookie now belongs to. Incoming messages are applied locally and
+ * never re-broadcast, so tabs cannot ping-pong.
  */
-const KEY_SECRET = 'hookbox-owner-secret'
-const KEY_OWNER = 'hookbox-owner-id'
-const KEY_EMAIL = 'hookbox-owner-email'
 
-type Listener = () => void
+export type SessionStatus = 'unknown' | 'signed-in' | 'signed-out'
 
-interface SessionState {
-  ownerSecret: string | null
-  ownerId: string | null
-  email: string | null
-  /** True when localStorage is unavailable (private mode / blocked). The cap
-   * then lives in memory only for this tab (landing.warn.storage). */
-  storageAvailable: boolean
+export interface SessionState {
+  readonly status: SessionStatus
+  readonly ownerId: string | null
 }
 
-function readStorage(): { secret: string | null; owner: string | null; email: string | null; ok: boolean } {
-  try {
-    return {
-      secret: localStorage.getItem(KEY_SECRET),
-      owner: localStorage.getItem(KEY_OWNER),
-      email: localStorage.getItem(KEY_EMAIL),
-      ok: true,
+export interface BroadcastOptions {
+  /** Tell the other tabs of this browser (an explicit user action). */
+  broadcast?: boolean
+}
+
+/** The slice of `BroadcastChannel` the store uses (injectable for tests). */
+export interface SessionChannel {
+  postMessage(message: unknown): void
+  onmessage: ((event: MessageEvent) => void) | null
+}
+
+export interface SessionStore {
+  getSnapshot(): SessionState
+  subscribe(listener: () => void): () => void
+  markSignedIn(ownerId: string, options?: BroadcastOptions): void
+  markSignedOut(options?: BroadcastOptions): void
+  /** Forget what we know; the next gate render re-bootstraps. */
+  invalidate(): void
+}
+
+export const SESSION_CHANNEL_NAME = 'hookbox-session'
+
+type SessionMessage = { type: 'signed-out' } | { type: 'signed-in'; ownerId: string }
+
+const UNKNOWN: SessionState = Object.freeze({ status: 'unknown', ownerId: null })
+const SIGNED_OUT: SessionState = Object.freeze({ status: 'signed-out', ownerId: null })
+
+function parseMessage(data: unknown): SessionMessage | null {
+  if (typeof data !== 'object' || data === null) return null
+  const message = data as { type?: unknown; ownerId?: unknown }
+  if (message.type === 'signed-out') return { type: 'signed-out' }
+  if (message.type === 'signed-in' && typeof message.ownerId === 'string' && message.ownerId) {
+    return { type: 'signed-in', ownerId: message.ownerId }
+  }
+  return null
+}
+
+export function createSessionStore(channel: SessionChannel | null): SessionStore {
+  let state: SessionState = UNKNOWN
+  const listeners = new Set<() => void>()
+
+  function setState(next: SessionState): void {
+    if (next.status === state.status && next.ownerId === state.ownerId) return
+    state = next
+    for (const listener of [...listeners]) listener()
+  }
+
+  function post(message: SessionMessage, options?: BroadcastOptions): void {
+    if (!options?.broadcast || !channel) return
+    try {
+      channel.postMessage(message)
+    } catch {
+      /* a closed channel only costs cross-tab sync; this tab is still right */
     }
+  }
+
+  const store: SessionStore = {
+    getSnapshot: () => state,
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    markSignedIn(ownerId, options) {
+      setState(Object.freeze({ status: 'signed-in', ownerId }))
+      post({ type: 'signed-in', ownerId }, options)
+    },
+    markSignedOut(options) {
+      setState(SIGNED_OUT)
+      post({ type: 'signed-out' }, options)
+    },
+    invalidate() {
+      setState(UNKNOWN)
+    },
+  }
+
+  if (channel) {
+    channel.onmessage = (event) => {
+      const message = parseMessage(event.data)
+      if (!message) return
+      if (message.type === 'signed-out') store.markSignedOut()
+      else if (message.ownerId !== state.ownerId) store.invalidate()
+    }
+  }
+
+  return store
+}
+
+function openChannel(): SessionChannel | null {
+  if (typeof BroadcastChannel === 'undefined') return null
+  try {
+    const channel = new BroadcastChannel(SESSION_CHANNEL_NAME)
+    // Node (vitest) keeps the event loop alive for an open channel; browsers
+    // have no `unref`, so this is a no-op there.
+    ;(channel as BroadcastChannel & { unref?: () => void }).unref?.()
+    return channel
   } catch {
-    return { secret: null, owner: null, email: null, ok: false }
+    return null
   }
 }
 
-const init = readStorage()
-const state: SessionState = {
-  ownerSecret: init.secret,
-  ownerId: init.owner,
-  email: init.email,
-  storageAvailable: init.ok,
-}
-
-const listeners = new Set<Listener>()
-function emit() {
-  for (const l of listeners) l()
-}
-
-/** Subscribe to session changes (rotation, sign-out, cross-tab storage event). */
-export function subscribe(l: Listener): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-export const session = {
-  getSecret(): string | null {
-    return state.ownerSecret
-  },
-  getOwnerId(): string | null {
-    return state.ownerId
-  },
-  getEmail(): string | null {
-    return state.email
-  },
-  isStorageAvailable(): boolean {
-    return state.storageAvailable
-  },
-  hasSession(): boolean {
-    return !!state.ownerSecret
-  },
-
-  /** Persist a freshly issued capability (rotate-overwrite, AC-J7). The active
-   * tab that calls this keeps the new secret and continues. */
-  set(secret: string, ownerId: string, email?: string) {
-    state.ownerSecret = secret
-    state.ownerId = ownerId
-    if (email !== undefined) state.email = email
-    try {
-      localStorage.setItem(KEY_SECRET, secret)
-      localStorage.setItem(KEY_OWNER, ownerId)
-      if (email !== undefined) localStorage.setItem(KEY_EMAIL, email)
-      state.storageAvailable = true
-    } catch {
-      state.storageAvailable = false
-    }
-    emit()
-  },
-
-  /** Clear the capability from this browser (sign-out). */
-  clear() {
-    state.ownerSecret = null
-    state.ownerId = null
-    state.email = null
-    try {
-      localStorage.removeItem(KEY_SECRET)
-      localStorage.removeItem(KEY_OWNER)
-      localStorage.removeItem(KEY_EMAIL)
-    } catch {
-      /* ignore */
-    }
-    emit()
-  },
-}
-
-// Cross-tab sync: when another tab rotates/clears the secret, mirror it here so
-// a stale tab can pick up the NEW secret and stop bouncing (AC-J7).
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (e) => {
-    if (e.key === KEY_SECRET) {
-      state.ownerSecret = e.newValue
-      try {
-        state.ownerId = localStorage.getItem(KEY_OWNER)
-        state.email = localStorage.getItem(KEY_EMAIL)
-      } catch {
-        /* ignore */
-      }
-      emit()
-    }
-  })
-}
+/** The app-wide store every owner screen shares. */
+export const session: SessionStore = createSessionStore(openChannel())

@@ -1,0 +1,87 @@
+## create name too long
+status: 422
+headers:
+  content-length: 76
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"name must be at most 120 characters.","error":"validation_error"}
+
+## create bad priority
+status: 422
+headers:
+  content-length: 78
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"priority must be between 0 and 100000.","error":"validation_error"}
+
+## create bad status
+status: 422
+headers:
+  content-length: 78
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"response.status_code must be 100..599.","error":"validation_error"}
+
+## create bad chaos
+status: 422
+headers:
+  content-length: 80
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"chaos_mode must be 'error' or 'dropout'.","error":"validation_error"}
+
+## create malformed json shape
+status: 422
+headers:
+  content-length: 171
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"Failed to deserialize the JSON body into the target type: priority: invalid type: string \"high\", expected i64 at line 1 column 18","error":"validation_error"}
+
+## create ok
+status: 201
+headers:
+  content-length: 411
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [chaos_mode, created_at, enabled, id, latency_ms, match, name, priority, rate_limit_per_min, response, state_writes, token, webhook_action]
+
+## patch bad priority
+status: 422
+headers:
+  content-length: 78
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"priority must be between 0 and 100000.","error":"validation_error"}
+
+## patch bad status
+status: 422
+headers:
+  content-length: 78
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"response.status_code must be 100..599.","error":"validation_error"}
+
+## patch bad chaos
+status: 422
+headers:
+  content-length: 80
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"chaos_mode must be 'error' or 'dropout'.","error":"validation_error"}
+
+## get missing rule
+status: 404
+headers:
+  content-length: 48
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"Rule not found.","error":"not_found"}
+
+## delete rule
+status: 204
+headers:
+  content-length: 0
+  x-hookbox-plane: api
+body: <empty>
+

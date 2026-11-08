@@ -18,11 +18,17 @@ async fn main() -> anyhow::Result<()> {
     }
     let pool = db::pool(&cfg.sqlite_path).await?;
     db::migrate(&pool).await?;
+    // stderr only, printed once: the recovery key is a live credential.
     match seed::seed_if_empty(&pool, cfg.endpoint_id_length).await? {
-        Some((email, secret, token)) => {
+        Some(seed::SeededOwner {
+            owner_id,
+            key,
+            token,
+        }) => {
             eprintln!("hookbox seed — planted demo data:");
-            eprintln!("  owner email : {email}");
-            eprintln!("  owner secret: {secret}");
+            eprintln!("  owner id     : {owner_id}");
+            eprintln!("  recovery key : {key}");
+            eprintln!("                 (open the app at / and choose \"I have a recovery key\")");
             eprintln!("  primary token: {token}");
         }
         None => eprintln!("hookbox seed — data already present; nothing to do"),

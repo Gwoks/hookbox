@@ -8,6 +8,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { t } from '@/lib/copy'
 
 const STORAGE_KEY = 'hookbox-theme'
 type Theme = 'light' | 'dark'
@@ -54,21 +55,22 @@ export function useTheme(): ThemeCtx {
   return useContext(Ctx)
 }
 
-export function ThemeToggle({ className }: { className?: string }) {
+/** The theme switch. Icon-only by default (its aria-label names the target
+ * theme); `showLabel` renders that name visibly, for full-width menus. */
+export function ThemeToggle({ className, showLabel = false }: { className?: string; showLabel?: boolean }) {
   const { theme, toggle } = useTheme()
+  const label = theme === 'dark' ? t('theme.toggle.toLight') : t('theme.toggle.toDark')
+  const Icon = theme === 'dark' ? Sun : Moon
   return (
     <Button
       variant="ghost"
-      size="icon"
+      size={showLabel ? 'md' : 'icon'}
       className={className}
       onClick={toggle}
-      aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      aria-label={showLabel ? undefined : label}
     >
-      {theme === 'dark' ? (
-        <Sun className="h-4 w-4" aria-hidden="true" />
-      ) : (
-        <Moon className="h-4 w-4" aria-hidden="true" />
-      )}
+      <Icon className="h-4 w-4" aria-hidden="true" />
+      {showLabel && label}
     </Button>
   )
 }

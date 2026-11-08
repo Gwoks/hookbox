@@ -9,7 +9,7 @@
  * batch (F1's Clear all, F3's import-failure recovery, F4's revoke) is meant
  * to share this instead of re-implementing it. */
 import { useState } from 'react'
-import { ApiError } from '@/api'
+import { errorMessage } from '@/lib/api-errors'
 import { t } from '@/lib/copy'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,11 +20,6 @@ import {
   DialogHeader,
 } from '@/components/ui/dialog'
 import { InlineAlert } from './inline-alert'
-
-function messageFor(err: unknown, fallback?: string): string {
-  if (err instanceof ApiError && err.message) return err.message
-  return fallback ?? t('common.error.generic')
-}
 
 export function ConfirmDialog({
   open,
@@ -69,7 +64,7 @@ export function ConfirmDialog({
       onClose()
     } catch (err) {
       setBusy(false)
-      setError(messageFor(err, errorFallback))
+      setError(errorMessage(err, errorFallback ?? t('common.error.generic')))
     }
   }
 

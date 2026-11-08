@@ -12,13 +12,21 @@
  *   (e) resumes on `visibilitychange -> visible` and on `online`.
  *   (f) every in-flight fetch is aborted on unmount.
  *   (g) (NOT this hook — a DETAIL 404 is handled per-row, never terminal.)
+ *
+ * Backoff comes from lib/backoff and the visibility/online listeners from
+ * lib/hooks/use-lifecycle-events — the same helpers the owner feed uses.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError, type PublicRequestSummary, type PublicShareFeed } from '@/api/public-client'
+import { backoffDelay, type BackoffPolicy } from '@/lib/backoff'
+import { useDocumentVisible } from '@/lib/hooks/use-document-visible'
+import { isDocumentVisible, subscribeLifecycle } from '@/lib/hooks/use-lifecycle-events'
+import { useOnline } from '@/lib/hooks/use-online'
 
 const POLL_INTERVAL_MS = 5000
-const BACKOFF_CEILING_MS = 60_000
 const SHARE_FEED_LIMIT = 100
+// (c) doubles from the poll interval: 10s, 20s, 40s, then the 60s ceiling.
+const ERROR_BACKOFF: BackoffPolicy = { base: POLL_INTERVAL_MS, max: 60_000 }
 
 export type SharedFeedStatus = 'loading' | 'unavailable' | 'ready' | 'error' | 'rateLimited'
 
@@ -38,6 +46,8 @@ export interface UseSharedFeedResult {
   /** True once the tab is hidden or the browser is offline — polling is
    * suspended, not stopped; it resumes on its own. */
   paused: boolean
+  isHidden: boolean
+  isOffline: boolean
   refresh: () => void
 }
 
@@ -45,24 +55,18 @@ export function useSharedFeed(code: string): UseSharedFeedResult {
   const [status, setStatus] = useState<SharedFeedStatus>('loading')
   const [data, setData] = useState<SharedFeedData | null>(null)
   const [retryInSeconds, setRetryInSeconds] = useState<number | null>(null)
-  const [paused, setPaused] = useState(
-    () => document.visibilityState === 'hidden' || !navigator.onLine,
-  )
+  const isHidden = !useDocumentVisible()
+  const isOffline = !useOnline()
 
   const stoppedRef = useRef(false) // (a) terminal — never poll again
   const inFlightRef = useRef(false) // (d)
-  const backoffRef = useRef(POLL_INTERVAL_MS)
+  const failuresRef = useRef(0) // consecutive (c) failures
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const controllerRef = useRef<AbortController | null>(null)
   const generationRef = useRef(0) // bumped on unmount to invalidate late callbacks
 
   const poll = useCallback(async () => {
-    if (
-      stoppedRef.current ||
-      inFlightRef.current ||
-      document.visibilityState === 'hidden' ||
-      !navigator.onLine
-    ) {
+    if (stoppedRef.current || inFlightRef.current || !isDocumentVisible() || !navigator.onLine) {
       return
     }
     inFlightRef.current = true
@@ -81,7 +85,7 @@ export function useSharedFeed(code: string): UseSharedFeedResult {
         signal: controller.signal,
       })
       if (gen !== generationRef.current) return
-      backoffRef.current = POLL_INTERVAL_MS
+      failuresRef.current = 0
       setRetryInSeconds(null)
       setData({ endpoint: feed.endpoint, requests: feed.requests, updatedAt: Date.now() })
       setStatus('ready')
@@ -101,11 +105,13 @@ export function useSharedFeed(code: string): UseSharedFeedResult {
         return
       }
       // (c) 5xx / network / contract_mismatch — exponential backoff, ceiling 60s.
-      backoffRef.current = Math.min(BACKOFF_CEILING_MS, backoffRef.current * 2)
+      failuresRef.current += 1
       setStatus('error')
-      scheduleNext(backoffRef.current)
+      scheduleNext(backoffDelay(failuresRef.current, ERROR_BACKOFF))
     } finally {
-      inFlightRef.current = false
+      // A stale call (its effect was torn down) must not clear the flag the
+      // current generation's poll now owns.
+      if (gen === generationRef.current) inFlightRef.current = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code])
@@ -113,38 +119,35 @@ export function useSharedFeed(code: string): UseSharedFeedResult {
   const refresh = useCallback(() => {
     if (stoppedRef.current) return
     if (timerRef.current) clearTimeout(timerRef.current)
-    backoffRef.current = POLL_INTERVAL_MS
+    failuresRef.current = 0
     void poll()
   }, [poll])
 
   useEffect(() => {
+    // A fresh code (or a re-run effect) starts clean: the previous
+    // generation's in-flight request was aborted in cleanup and a terminal
+    // 404 belonged to the previous code.
+    inFlightRef.current = false
+    stoppedRef.current = false
+    failuresRef.current = 0
     void poll()
 
-    const onVisibility = () => {
-      const hidden = document.visibilityState === 'hidden'
-      setPaused(hidden || !navigator.onLine)
-      if (!hidden && navigator.onLine) refresh() // (e)
-    }
-    const onOnline = () => {
-      setPaused(document.visibilityState === 'hidden')
-      refresh() // (e)
-    }
-    const onOffline = () => setPaused(true)
-
-    document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('online', onOnline)
-    window.addEventListener('offline', onOffline)
+    // (e) resume on visible / online; isHidden/isOffline above re-render.
+    const unsubscribeLifecycle = subscribeLifecycle({
+      onVisibilityChange: (visible) => {
+        if (visible && navigator.onLine) refresh()
+      },
+      onOnline: refresh,
+    })
 
     return () => {
       generationRef.current += 1 // (f) invalidate any in-flight callback
       controllerRef.current?.abort()
       if (timerRef.current) clearTimeout(timerRef.current)
-      document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('online', onOnline)
-      window.removeEventListener('offline', onOffline)
+      unsubscribeLifecycle()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code])
 
-  return { status, data, retryInSeconds, paused, refresh }
+  return { status, data, retryInSeconds, paused: isHidden || isOffline, isHidden, isOffline, refresh }
 }

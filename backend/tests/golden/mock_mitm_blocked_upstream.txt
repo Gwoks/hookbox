@@ -1,0 +1,22 @@
+## patch loopback target
+status: 200
+headers:
+  content-length: 371
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [auto_crud, chaos_mode, chaos_pct, cors_enabled, created_at, default_mode, last_hit, latency_ms, mock_url, name, path_url, rate_limit_per_min, request_count, target_url, token, tunnel_active]
+
+## proxied request
+status: 502
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 80
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: mitm
+body: {"detail":"Could not reach the upstream target.","error":"upstream_unreachable"}
+

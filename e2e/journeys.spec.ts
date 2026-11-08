@@ -8,7 +8,12 @@
  * wired to the Landing screen (issue .29).
  */
 import { expect, test } from "@playwright/test";
-import { installMockBackend, pushNewRequest, TOKEN } from "./mock-backend";
+import {
+  installMockBackend,
+  NEW_TOKEN,
+  pushNewRequest,
+  TOKEN,
+} from "./mock-backend";
 
 const CLEAR_ALL_MENUITEM = { name: "Clear all captured requests" };
 
@@ -96,8 +101,10 @@ test.describe("dashboard journey", () => {
     await page.getByPlaceholder(TOKEN).fill(TOKEN);
     await expect(confirmBtn).toBeEnabled();
     await confirmBtn.click();
-    // Routed back to / (landing). URL no longer points at the deleted endpoint.
-    await expect(page).toHaveURL(/\/$/);
+    // Routed back to / — and since the still-signed-in owner has no endpoint
+    // left, the landing provisions a fresh one instead of showing a form.
+    // The URL never points back at the deleted endpoint.
+    await expect(page).toHaveURL(new RegExp(`/d/${NEW_TOKEN}$`));
   });
 
   test("J9b: settings → clear-history confirm shows a server failure inline and stays open (ConfirmDialog, AC-83)", async ({

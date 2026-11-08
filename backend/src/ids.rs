@@ -1,12 +1,13 @@
-//! Identity / token helpers — PORT of `app/database.py` (hash_email,
-//! gen_owner_secret, hash_secret) and `app/utils/helpers.py::generate_endpoint_id`.
+//! Identity / token helpers — PORT of `app/database.py` (gen_owner_secret,
+//! hash_secret) and `app/utils/helpers.py::generate_endpoint_id`.
 //!
 //! - `gen_token`: ambiguity-stripped alphabet (no `0 O 1 l I`), default len 10,
 //!   case-sensitive, independent of owner id (AC-6a, AC-S5).
-//! - `gen_owner_secret`: 256-bit CSPRNG, base64url (matches Python
-//!   `secrets.token_urlsafe(32)`), returned once on `/api/session`, stored hashed.
-//! - `hash_email`: non-secret owner id = `sha256(lower(trim(email)))[:16]`.
-//! - `hash_secret`: `sha256(owner_secret)` for at-rest storage / lookup (§5.1).
+//! - `gen_owner_id`: non-secret anonymous owner id = 64 random bits as hex.
+//! - `gen_owner_secret`: the owner key — 256-bit CSPRNG, base64url (matches
+//!   Python `secrets.token_urlsafe(32)`); lives in the session cookie, stored
+//!   hashed.
+//! - `hash_secret`: `sha256(owner key)` for at-rest storage / lookup (§5.1).
 
 use base64::Engine;
 use rand::RngCore;
@@ -36,20 +37,30 @@ pub fn gen_token(length: usize) -> String {
         .collect()
 }
 
-/// CSPRNG bearer capability: `n_bytes` of entropy, base64url no-pad
-/// (mirrors Python `secrets.token_urlsafe(n_bytes)`). Default 32 ⇒ 256-bit.
-pub fn gen_owner_secret(n_bytes: usize) -> String {
+/// `n_bytes` of CSPRNG output, base64url no-pad (mirrors Python
+/// `secrets.token_urlsafe(n_bytes)`). The one generator behind every random
+/// secret/code below.
+fn random_b64url(n_bytes: usize) -> String {
     let mut buf = vec![0u8; n_bytes];
     rand::thread_rng().fill_bytes(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
-/// Non-secret owner id derived from email: `sha256(lower(trim(email)))` truncated
-/// to the first 16 hex chars (PORT of `hash_email`).
-pub fn hash_email(email: &str) -> String {
-    let normalized = email.trim().to_lowercase();
-    let digest = Sha256::digest(normalized.as_bytes());
-    hex::encode(digest)[..16].to_string()
+/// CSPRNG bearer capability: `n_bytes` of entropy, base64url no-pad.
+/// Default 32 ⇒ 256-bit.
+pub fn gen_owner_secret(n_bytes: usize) -> String {
+    random_b64url(n_bytes)
+}
+
+/// Bytes of randomness in an anonymous owner id (16 hex chars).
+const OWNER_ID_BYTES: usize = 8;
+
+/// A fresh non-secret anonymous owner id: 64 CSPRNG bits as 16 lowercase hex
+/// chars. Derived from nothing, so it reveals nothing about the owner or key.
+pub fn gen_owner_id() -> String {
+    let mut buf = [0u8; OWNER_ID_BYTES];
+    rand::thread_rng().fill_bytes(&mut buf);
+    hex::encode(buf)
 }
 
 /// `sha256(secret)` hex — the at-rest secret hash looked up on every `/api/**`
@@ -64,9 +75,7 @@ pub fn hash_secret(secret: &str) -> String {
 /// owner id, owner secret, endpoint name and the clock (AC-32) — it is pure
 /// randomness with no derivation. Stored only as `hash_secret(code)` (F4).
 pub fn gen_share_code(n_bytes: usize) -> String {
-    let mut buf = vec![0u8; n_bytes.max(16)]; // 128-bit floor
-    rand::thread_rng().fill_bytes(&mut buf);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    random_b64url(n_bytes.max(16)) // 128-bit floor
 }
 
 #[cfg(test)]
@@ -107,11 +116,13 @@ mod tests {
     }
 
     #[test]
-    fn hash_email_matches_python_oracle() {
-        // sha256("a@b.com")[:16] computed against the Python definition.
-        // Normalization: trim + lowercase.
-        assert_eq!(hash_email("  A@B.com  "), hash_email("a@b.com"));
-        assert_eq!(hash_email("a@b.com").len(), 16);
+    fn owner_id_is_16_lowercase_hex_and_random() {
+        let id = gen_owner_id();
+        assert_eq!(id.len(), 16);
+        assert!(id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        assert_ne!(gen_owner_id(), gen_owner_id());
     }
 
     #[test]

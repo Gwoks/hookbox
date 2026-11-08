@@ -1,14 +1,113 @@
-//! Route module tree + router builders for the management (P2) and health (P3)
-//! surfaces. The interceptor (P1), feed/SPA (P3) routers are added by their own
-//! tasks and merged in `router::build_app`.
+//! The single route table. `api_routes()` holds every `/api/**` management
+//! route (owner-authenticated, plus the session and public share resolvers);
+//! `router()` adds the P3 health / live-feed / tunnel / SPA routes on top.
+//! `router::build_app` only layers plane dispatch + panic catching around it.
 
-pub mod api;
+use axum::middleware::map_response;
+use axum::routing::{delete, get, post};
+use axum::Router;
+
+use crate::state::AppState;
+
+mod endpoints;
 pub mod feed;
 pub mod health;
-pub mod share;
+mod requests;
+mod rules;
+mod session;
+mod share;
 pub mod spa;
+mod state;
 pub mod tunnel_ws;
 
-pub use api::api_router;
 pub use health::healthz;
-pub use share::share_router;
+
+/// The `/api/session*` routes. Their only layer marks every response —
+/// including extractor rejections (401/403/429) — `Cache-Control: no-store`,
+/// since bodies and `Set-Cookie` lines here concern the owner key.
+fn session_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/session",
+            get(session::get_session)
+                .post(session::create_session)
+                .delete(session::sign_out),
+        )
+        .route("/api/session/restore", post(session::restore_session))
+        .route("/api/session/key", post(session::reveal_key))
+        .route("/api/session/rotate", post(session::rotate_key))
+        .route_layer(map_response(session::no_store_response))
+}
+
+/// Every `/api/**` route. Mint/restore/sign-out (`CsrfGuard`) and the two
+/// public share routes are unauthenticated; all others use the `OwnerId` /
+/// `AuthedOwner` extractors (Bearer, or cookie + CSRF guard; 401/403 on
+/// failure). The F4 share routes are merged into this one router — never
+/// layered separately — so no `TraceLayer` or other logging middleware can
+/// end up wrapping only them and start logging a share code (AC-S6).
+pub fn api_routes() -> Router<AppState> {
+    Router::new()
+        .merge(session_routes())
+        .route(
+            "/api/endpoints",
+            get(endpoints::list_endpoints).post(endpoints::create_endpoint),
+        )
+        .route(
+            "/api/endpoints/:token",
+            get(endpoints::get_endpoint)
+                .patch(endpoints::patch_endpoint)
+                .delete(endpoints::delete_endpoint),
+        )
+        .route(
+            "/api/endpoints/:token/rules",
+            get(rules::list_rules).post(rules::create_rule),
+        )
+        .route(
+            "/api/endpoints/:token/rules/:id",
+            get(rules::get_rule)
+                .patch(rules::patch_rule)
+                .delete(rules::delete_rule),
+        )
+        .route(
+            "/api/endpoints/:token/requests",
+            get(requests::list_requests).delete(requests::clear_requests),
+        )
+        .route("/api/requests/:id", get(requests::get_request))
+        .route(
+            "/api/endpoints/:token/state",
+            get(state::get_state).delete(state::clear_state),
+        )
+        .route(
+            "/api/endpoints/:token/collections/:name",
+            get(state::peek_collection).delete(state::clear_collection),
+        )
+        .route(
+            "/api/endpoints/:token/shares",
+            get(share::list_shares).post(share::create_share),
+        )
+        .route(
+            "/api/endpoints/:token/shares/:id",
+            delete(share::revoke_share),
+        )
+        .route(
+            "/api/share/:code/requests",
+            get(share::public_list_requests),
+        )
+        .route(
+            "/api/share/:code/requests/:id",
+            get(share::public_get_request),
+        )
+}
+
+/// The full inner router: `/api/**`, `/healthz`, the owner-gated live feed
+/// (WS + SSE), the tunnel control channel, and the SPA fallback (R6 — the
+/// fallback never shadows P1/P2, which plane dispatch resolves first).
+pub(crate) fn router() -> Router<AppState> {
+    Router::new()
+        .merge(api_routes())
+        .route("/healthz", get(healthz))
+        .route("/ws/:token", get(feed::ws_handler))
+        .route("/sse/:token", get(feed::sse_handler))
+        .route("/ws/tunnel/:slug", get(tunnel_ws::tunnel_ws_handler))
+        .fallback(spa::serve_spa)
+}

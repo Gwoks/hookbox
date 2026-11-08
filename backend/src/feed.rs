@@ -6,13 +6,19 @@
 //! feed never affects the mock path (best-effort/at-most-once; the management API
 //! is the source of truth). On a lagged receiver the subscriber drops frames and
 //! reconciles via the API rather than erroring the socket.
+//!
+//! Revocation: each channel also carries a `watch` epoch. `revoke(token)` bumps
+//! it (owner key rotated), and every live subscription observes the change via
+//! `Subscription::epoch` — a `watch` never loses the latest value, so unlike a
+//! broadcast frame a lagged subscriber cannot miss it. Feed handlers then close
+//! the connection so the client must re-authenticate with its current key.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use serde_json::Value;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 /// A feed event in the §5.4 `{type, data}` envelope. `kind` is the event name
 /// (`new_request` / `state_changed` / `endpoint_updated`); `data` is the payload.
@@ -42,6 +48,7 @@ const CHANNEL_CAP: usize = 256;
 struct Channel {
     tx: broadcast::Sender<FeedEvent>,
     subscribers: AtomicUsize,
+    epoch: watch::Sender<u64>,
 }
 
 pub struct FeedHub {
@@ -90,20 +97,33 @@ impl FeedHub {
         let ch = {
             let entry = self.channels.entry(token.to_string()).or_insert_with(|| {
                 let (tx, _rx) = broadcast::channel(CHANNEL_CAP);
+                let (epoch, _epoch_rx) = watch::channel(0u64);
                 Arc::new(Channel {
                     tx,
                     subscribers: AtomicUsize::new(0),
+                    epoch,
                 })
             });
             entry.value().subscribers.fetch_add(1, Ordering::SeqCst);
             entry.value().clone()
         };
         let rx = ch.tx.subscribe();
+        let epoch = ch.epoch.subscribe();
         Subscription {
             channels: self.channels.clone(),
             token: token.to_string(),
             ch,
             rx,
+            epoch,
+        }
+    }
+
+    /// Revoke every live subscription on `token` (the owner key was rotated):
+    /// bumps the channel epoch so each subscriber's `epoch.changed()` resolves.
+    /// A no-op when nobody is subscribed.
+    pub fn revoke(&self, token: &str) {
+        if let Some(ch) = self.channels.get(token) {
+            ch.epoch.send_modify(|epoch| *epoch += 1);
         }
     }
 
@@ -124,6 +144,8 @@ pub struct Subscription {
     token: String,
     ch: Arc<Channel>,
     pub rx: broadcast::Receiver<FeedEvent>,
+    /// Resolves `changed()` when the channel is revoked (see `FeedHub::revoke`).
+    pub epoch: watch::Receiver<u64>,
 }
 
 impl Drop for Subscription {
@@ -143,6 +165,27 @@ impl Drop for Subscription {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn revoke_signals_live_subscribers_of_that_token_only() {
+        let hub = FeedHub::new();
+        let mut sub_a = hub.subscribe("tokA");
+        let sub_b = hub.subscribe("tokB");
+        hub.revoke("tokA");
+        assert!(
+            sub_a.epoch.has_changed().unwrap(),
+            "revoked token observes the epoch bump"
+        );
+        assert!(
+            !sub_b.epoch.has_changed().unwrap(),
+            "other tokens are untouched"
+        );
+        sub_a.epoch.changed().await.unwrap();
+        // A subscription opened after the revoke starts clean.
+        let late = hub.subscribe("tokA");
+        assert!(!late.epoch.has_changed().unwrap());
+        hub.revoke("never-subscribed"); // no channel → no-op, no panic
+    }
 
     #[tokio::test]
     async fn publish_reaches_subscribers_and_isolates_tokens() {

@@ -1,8 +1,14 @@
 /**
- * Button (design.md §3.0). Variants primary/secondary/ghost/danger/link.
- * primary = bg-accent-fill text-on-accent (teal); the single accent button per
- * surface (+ New Rule / Save). Loading preserves width + sets aria-busy. Mirrors
- * the reference button.tsx CVA pattern; only token classes differ.
+ * Button (DESIGN.md "Components"). Variants:
+ *  - primary      the ONE filled blue action per screen (bg-accent-fill)
+ *  - tint         DESIGN's "Ghost CTA": sky-tint fill, AA-strong blue text
+ *  - ghost        no fill, no border — tertiary actions
+ *  - outline      compact 4px-radius bordered action
+ *  - danger       SOFT red (never a filled red button)
+ *  - danger-ghost red text only
+ *  - nav          muted nav link; `aria-current="page"` marks the active one
+ *  - link         inline text link, no box
+ * Loading preserves width, disables and sets aria-busy.
  */
 import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'
@@ -10,18 +16,23 @@ import { forwardRef } from 'react'
 import { cn } from '@/lib/cn'
 import { Spinner } from './spinner'
 
+const OUTLINE =
+  'rounded-xs border border-border-strong bg-transparent text-text-primary hover:bg-surface-hover'
+
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-sm font-medium transition-colors duration-fast ease-standard disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:text-text-tertiary disabled:shadow-none',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-sm font-medium transition-colors duration-base ease-standard disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:text-text-tertiary disabled:shadow-none',
   {
     variants: {
       variant: {
-        primary: 'bg-accent-fill text-text-on-accent hover:opacity-90',
-        secondary: 'border border-border-strong bg-surface text-text-primary hover:bg-surface-hover',
+        primary: 'bg-accent-fill text-text-on-accent hover:bg-accent-hover',
+        tint: 'bg-accent-subtle-bg text-accent-strong hover:bg-accent-subtle-hover',
         ghost: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
-        // text-text-on-accent, not text-white: white on --red-400-dark is
-        // ~1.7:1 in dark theme, an AA failure (design.md §8 finding 1, AC-129).
-        danger: 'bg-danger-fg text-text-on-accent hover:opacity-90',
-        link: 'h-auto p-0 text-accent underline-offset-4 hover:underline',
+        outline: OUTLINE,
+        /** @deprecated use `outline` */
+        danger: 'border border-danger-border bg-danger-bg text-danger-fg hover:border-danger-fg',
+        'danger-ghost': 'text-danger-fg hover:bg-danger-bg',
+        nav: 'text-text-secondary hover:text-text-primary aria-[current=page]:bg-surface-hover aria-[current=page]:text-text-primary',
+        link: 'text-accent-strong underline-offset-4 hover:underline',
       },
       size: {
         sm: 'h-7 px-3 text-body-sm',
@@ -31,6 +42,12 @@ const buttonVariants = cva(
         'icon-sm': 'h-7 w-7 p-0',
       },
     },
+    compoundVariants: [
+      // DESIGN.md "Outlined Text Button": compact 5px/10px padding.
+      { variant: 'outline', size: 'md', class: 'h-8 px-2.5' },
+      // A link is text, not a box: no fixed height or padding at any size.
+      { variant: 'link', class: 'h-auto px-0 py-0' },
+    ],
     defaultVariants: { variant: 'primary', size: 'md' },
   },
 )

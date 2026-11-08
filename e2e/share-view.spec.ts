@@ -34,30 +34,41 @@ const OWNER_NAMES = [
 ];
 
 test.describe("F4 public viewer /s/:code", () => {
-  test("AC-41: never redirects to / and creates no session", async ({ page }) => {
-    await installMockBackend(page, { authed: false });
-    await page.goto(SHARE_URL);
-    await expect(page).toHaveURL(new RegExp(SHARE_URL.replace(/\//g, "\\/") + "$"));
-    const hasSecret = await page.evaluate(() =>
-      localStorage.getItem("hookbox-owner-secret"),
-    );
-    expect(hasSecret).toBeNull();
-  });
-
-  test("AC-42/AC-S13: zero requests carry an Authorization header or a cookie", async ({
+  test("AC-41: never redirects to /, makes no /api/session* call and holds no cookie", async ({
     page,
   }) => {
-    const authHeaders: string[] = [];
+    const sessionCalls: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/session")) {
+        sessionCalls.push(`${request.method()} ${request.url()}`);
+      }
+    });
+    await installMockBackend(page, { authed: false });
+    await page.goto(SHARE_URL);
+    await expect(page.getByText("Shared requests", { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(SHARE_URL.replace(/\//g, "\\/") + "$"));
+    // Give any stray bootstrap a moment to fire before asserting it didn't.
+    await page.waitForTimeout(300);
+    expect(sessionCalls).toEqual([]);
+    expect(await page.context().cookies()).toHaveLength(0);
+  });
+
+  test("AC-42/AC-S13: zero requests carry an Authorization, cookie or X-HookBox header", async ({
+    page,
+  }) => {
+    const credentialHeaders: string[] = [];
     await installMockBackend(page, { authed: false });
     await page.route("**/api/**", async (route) => {
-      const headers = route.request().headers();
-      if (headers["authorization"]) authHeaders.push(headers["authorization"]);
+      const headers = await route.request().allHeaders();
+      for (const name of ["authorization", "cookie", "x-hookbox"]) {
+        if (headers[name]) credentialHeaders.push(`${name}: ${headers[name]}`);
+      }
       await route.fallback();
     });
     await page.goto(SHARE_URL);
     await expect(page.getByText("Shared requests", { exact: true })).toBeVisible();
     const cookies = await page.context().cookies();
-    expect(authHeaders).toHaveLength(0);
+    expect(credentialHeaders).toEqual([]);
     expect(cookies).toHaveLength(0);
   });
 

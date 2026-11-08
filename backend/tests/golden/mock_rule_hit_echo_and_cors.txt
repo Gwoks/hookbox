@@ -1,0 +1,46 @@
+## rule hit
+status: 202
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 6
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: text/plain
+  vary: Origin
+  x-custom: 1
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-rule-id: 1
+  x-hookbox-served-by: rule
+body: hi GET
+
+## echo
+status: 200
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 138
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: default
+body: json-keys [body, headers, method, path, query]
+
+## cors preflight
+status: 204
+headers:
+  access-control-allow-headers: *
+  access-control-allow-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD
+  access-control-allow-origin: https://client.example
+  access-control-expose-headers: *
+  access-control-max-age: 600
+  content-length: 0
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: cors
+body: <empty>
+

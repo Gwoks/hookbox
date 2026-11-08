@@ -2,17 +2,22 @@
 
 HookBox is a self-hosted, Beeceptor-class API mocking & HTTP interception
 platform. It covers the full mock/intercept/virtualize workflow behind a
-no-password, email-keyed session.
+no-password, anonymous session.
 
 ---
 
-## 1. Email-keyed access (no password)
+## 1. Anonymous access (no email, no password)
 
-Enter an email on the landing page to instantly generate or resume an endpoint
-session. The email maps to a non-secret `owner_id`; the server also issues a
-secret **owner capability** (256-bit) that backs every management call and the
-real-time feed. No registration, no password, no email verification. The
-capability rotates on each email submit (an old leaked secret stops working).
+Click **Get my endpoint** to mint an anonymous owner with a primary endpoint. The
+server issues a random 256-bit **owner key** (stored only as its SHA-256) in an
+`HttpOnly`, `SameSite=Strict` cookie (`__Host-` prefixed and `Secure` behind
+https); cookie-authenticated API calls must also send `X-HookBox: 1` and pass a
+same-origin check, which blocks cross-site request forgery. The key is the only
+credential: copy it from **Settings → Recovery key** to restore the same
+endpoints in another browser or to authenticate the tunnel CLI (`Bearer`).
+**Rotate key** replaces it everywhere — other browsers, scripts, live feeds and
+bound tunnels are cut off at once. Browsers from the earlier email-based version
+are migrated to the cookie automatically on their next visit.
 
 ## 2. Wildcard mock surface + path fallback
 

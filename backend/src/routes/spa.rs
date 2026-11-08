@@ -118,14 +118,14 @@ fn not_found() -> Response {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::db;
+    use crate::testing::{memory_pool, test_config};
 
     async fn state_with_static_dir(dir: &str) -> AppState {
-        let pool = db::pool(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        let mut cfg = Config::from_env();
-        cfg.static_dir = dir.to_string();
-        AppState::new(pool, cfg)
+        let cfg = Config {
+            static_dir: dir.to_string(),
+            ..test_config()
+        };
+        AppState::new(memory_pool().await, cfg)
     }
 
     // hookbox-mun.40: a live GET /s/<CODE> served by the backend's OWN SPA

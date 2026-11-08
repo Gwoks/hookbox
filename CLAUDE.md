@@ -53,17 +53,41 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+# Frontend (repo root) — Vite + React SPA in src/
+pnpm install
+pnpm typecheck            # tsc --noEmit
+pnpm test                 # vitest (unit + component), jsdom
+pnpm coverage             # vitest with v8 coverage
+pnpm build                # dist/ (served by the Rust binary)
+pnpm e2e                  # Playwright over `vite preview` + e2e/mock-backend.ts
+E2E_PORT=4591 pnpm e2e    # parallel worktrees: give each its own preview port
+
+# Backend — Rust crate in backend/
+cd backend
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --release      # unit + tests/api + tests/wire_contract (golden bytes)
+UPDATE_GOLDEN=1 cargo test --test wire_contract   # ONLY for an intentional wire change
 ```
+
+`tests/wire_contract.rs` pins exact status/header/body bytes in
+`backend/tests/golden/*.txt`; a refactor must pass it with zero golden edits.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+- **backend/** — one Rust (Axum + SQLite/sqlx) binary: the mock plane
+  (`<token>.<MOCK_DOMAIN>/…` and `/e/<token>/…`, `src/interceptor/`), the
+  management API (`/api/**`, route table in `src/routes/mod.rs`), the live feed
+  (`/ws`, `/sse`) and the tunnel control channel. Data access lives in
+  `src/repo/`, shared validation in `src/validate.rs`, header/WS helpers in
+  `src/net/`, identity in `src/auth/` + `src/session/`.
+- **Identity** — anonymous owner key in an HttpOnly `SameSite=Strict` cookie
+  (Bearer still accepted for scripts/CLI); cookie calls need `X-HookBox: 1` +
+  same-origin. See `docs/features/anonymous-cookie-identity/decision.md`.
+- **src/** — Vite + React SPA. `src/api/` (owner client, public client,
+  zod schemas, session store/bootstrap), `src/feed/` (live feed), `src/app/`
+  (layouts), `src/screens/<feature>/` (one folder per screen).
 
 ## Conventions & Patterns
 
@@ -84,22 +108,46 @@ styling:
 
 - `src/globals.css` — the ONLY file where raw hex/rgba may appear. Defines
   the DESIGN.md primitive palette, then maps it to theme-aware semantic CSS
-  custom properties (`--bg-canvas`, `--text-primary`, `--accent`, etc.) for
-  `:root` (light) and `.dark` (dark — DESIGN.md is light-only; dark is an
-  original complement using the same warm undertone and blue accent).
-- `tailwind.config.ts` — surfaces those CSS vars as Tailwind utilities
-  (`bg-canvas`, `text-text-primary`, `rounded-md`, …) plus the type scale,
-  radius scale, and motion tokens.
+  custom properties (`--bg-canvas`, `--text-primary`, `--accent`,
+  `--card-<tone>`, `--shadow-nav`, …) for `:root` (light) and `.dark` (dark —
+  DESIGN.md is light-only; dark is an original complement using the same warm
+  undertone and blue accent). `src/design/contrast.test.ts` asserts WCAG AA
+  for the key pairs in both themes.
+- `src/design/tokens.ts` — the single source for the type scale, radii,
+  shadows, widths, spacing and motion. `tailwind.config.ts` AND `src/lib/cn.ts`
+  (tailwind-merge config) both import it, so custom classes like
+  `text-body-sm` merge correctly and the two can't drift.
 - Components and screens consume semantic Tailwind classes ONLY — never a
-  raw hex, inline color, or one-off shadow/radius value. `e2e/no-hex.spec.ts`
-  enforces this for `src/components/**`.
+  raw hex, inline color, alpha-modified color var, arbitrary radius, or
+  gradient. `e2e/no-hex.spec.ts` and `e2e/token-classes.spec.ts` enforce this.
 - Functional status/semantic hues (success/info/warning/danger) and the
   method/served-by color-coding (GET/POST/…, rule/crud/mitm/…) are
   intentionally unchanged from DESIGN.md — that doc doesn't address them, and
   they carry previously-verified AA contrast that a repaint would need to
   re-verify.
 
+Use the primitives instead of re-styling per screen:
+
+| Need | Use |
+|---|---|
+| Buttons | `Button` variants: `primary` (**one per screen**), `tint` (DESIGN "ghost CTA"), `ghost`, `outline` (compact), `danger` (soft red — never filled), `danger-ghost`, `nav` (muted, `aria-current`), `link` |
+| Content surfaces | `Card` (`tone`: surface / marigold / coral / sky / tint / peach / midnight; `padding`), `CardHeader` |
+| Labels & status | `Pill` (tones, `sm`/`md`/`hero`), `Overline` |
+| Page structure | `PageHeader`, `SettingsSection` / `MarketingSection`, `PublicPage` + `PublicHeader`, `FullPageMessage`, `SkipLink` |
+| Forms | `Field` / `TextField` / `SelectField` / `SwitchField` / `Fieldset` (FieldContext wires id, description, invalid), `Select`, `NumberSlider`, `ListEditor` |
+| States | `EmptyState`, `LoadingBlock`, `RetryAlert`, `InlineAlert` |
+| Requests | `RequestCells` (feed rows, viewer rows, landing mockup), `RequestDetailTabs`, `RequestSubject` |
+| Data & effects | `useResource`, `useAsyncAction`, `useDraft`, `useLifecycleEvents`, `useMediaQuery`, `apiPath()` |
+
+Import boundaries (`e2e/import-boundaries.spec.ts`): `components/ui`,
+`components/hookbox` and `components/layout` must stay safe for the
+credential-free `/s/:code` viewer — no `@/api` barrel, owner client, session
+store or feed imports (types come from `@/api/schemas`). Owner-only chrome
+lives in `components/owner/`.
+
 When adding or restyling UI: change tokens in `src/globals.css` /
-`tailwind.config.ts`, not component-local styles; re-run `pnpm e2e` (covers
-`no-hex` and `reduced-motion`) and eyeball `/_gallery` (dev-only primitives
-page) in both themes before calling a visual change done.
+`src/design/tokens.ts`, not component-local styles; add or extend a primitive
+rather than copying class strings; re-run `pnpm test` and `pnpm e2e` (covers
+`no-hex`, `token-classes`, `import-boundaries`, `reduced-motion`) and eyeball
+`/_gallery` (dev-only primitives page) in both themes and at 360px before
+calling a visual change done.

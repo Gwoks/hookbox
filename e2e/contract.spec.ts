@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import { endpointDetailSchema, mockRuleCreateSchema } from "../src/api/schemas";
-import { DEFAULT_CATCH_ALL_RULE } from "../src/screens/rules-manager";
+import { DEFAULT_CATCH_ALL_RULE } from "../src/screens/rules/default-rule";
 
 function validDetail(): Record<string, unknown> {
   return {
@@ -81,14 +81,22 @@ test("AC-59: F6's default catch-all payload matches the frozen §5.5.7 bytes exa
 });
 
 test("AC-42/AC-S13: the /s/:code viewer's module graph never reaches src/api/session.ts", () => {
-  // A static source check, not a bundler trace: the owner secret lives in
-  // localStorage (src/api/session.ts), and this page is same-origin with the
-  // dashboard, so any accidental import here would be owner takeover on XSS.
+  // A static source check, not a bundler trace: the owner identity layer
+  // (src/api/session.ts + bootstrap.ts + client.ts, which can reveal or
+  // rotate the recovery key) is same-origin with this page, so any
+  // accidental import here widens what an XSS in the viewer could reach.
+  // Every runtime file of the viewer (unit tests excluded): the entry plus
+  // all of src/screens/share-view/**.
+  const viewerDir = path.join(process.cwd(), "src/screens/share-view");
   const files = [
     "src/screens/share-view.tsx",
-    "src/screens/share-view/use-shared-feed.ts",
-    "src/screens/share-view/row.tsx",
+    ...fs
+      .readdirSync(viewerDir, { recursive: true })
+      .map(String)
+      .filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file))
+      .map((file) => path.join("src/screens/share-view", file)),
   ];
+  expect(files.length).toBeGreaterThan(3);
   for (const relPath of files) {
     const text = fs.readFileSync(path.join(process.cwd(), relPath), "utf-8");
     // Strip line/block comments before scanning for real code references —
