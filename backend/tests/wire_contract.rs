@@ -19,11 +19,10 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use hookbox::config::Config;
-use hookbox::db;
-use hookbox::router::build_app;
-use hookbox::state::AppState;
 
-const APP_HOST: &str = "app.local";
+mod common;
+use common::{TestApp, APP_HOST};
+
 const VOLATILE_HEADERS: [&str; 3] = ["date", "retry-after", "x-ratelimit-reset"];
 
 // --- harness ------------------------------------------------------------------
@@ -38,19 +37,7 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with(tweak: impl FnOnce(&mut Config)) -> Harness {
-    std::env::set_var("MOCK_DOMAIN", "mock.local");
-    std::env::set_var("SESSION_RATE_LIMIT_PER_MIN", "1000000");
-    std::env::set_var("APP_HOST", APP_HOST);
-    let pool = db::pool(":memory:").await.unwrap();
-    db::migrate(&pool).await.unwrap();
-    let mut cfg = Config::from_env();
-    tweak(&mut cfg);
-    let app = build_app(AppState::new(pool, cfg));
-    let session = Req::post("/api/session")
-        .json(json!({"email": "golden@e.com"}))
-        .send(&app)
-        .await;
-    let secret = session.json()["owner_secret"].as_str().unwrap().to_string();
+    let TestApp { app, secret, .. } = TestApp::with_config(tweak).await;
     Harness { app, secret }
 }
 
