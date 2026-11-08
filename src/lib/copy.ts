@@ -346,6 +346,8 @@ export const copy = {
 
   // ── 5.8 Rules manager ──
   'rules.title': 'Rules',
+  'rules.description':
+    'Every request is checked against your enabled rules in priority order, lowest number first. The first match answers it.',
   'rules.newRule': 'New rule',
   'rules.loading.aria': 'Loading rules',
   'rules.col.priority': 'Priority',
@@ -358,6 +360,7 @@ export const copy = {
   'rules.error.title': "Couldn't load rules",
   'rules.error.retry': 'Retry',
   'rules.row.menu.aria': 'Rule actions',
+  'rules.row.toggle.aria': 'Enabled: {name}',
   'rules.row.edit': 'Edit',
   'rules.row.duplicate': 'Duplicate',
   'rules.row.delete': 'Delete',

@@ -11,7 +11,7 @@ import { PrimitivesGallery } from "@/components/dev/primitives-gallery";
 import { RequireSession } from "@/components/owner/require-session";
 import { Landing } from "@/screens/landing";
 import { Dashboard } from "@/screens/dashboard";
-import { RulesManager } from "@/screens/rules-manager";
+import { RulesManager } from "@/screens/rules";
 import { Settings } from "@/screens/settings";
 import { Cli } from "@/screens/cli";
 import { ShareView } from "@/screens/share-view";

@@ -52,7 +52,7 @@ export function PageHeader({
         </Link>
       )}
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0 space-y-1.5">
+        <div className="min-w-0 flex-1 basis-72 space-y-1.5">
           {eyebrow && <Overline>{eyebrow}</Overline>}
           <h1 className={cn(TITLE_CLASSES[size], 'text-text-primary')}>{title}</h1>
           {description && (

@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import { endpointDetailSchema, mockRuleCreateSchema } from "../src/api/schemas";
-import { DEFAULT_CATCH_ALL_RULE } from "../src/screens/rules-manager";
+import { DEFAULT_CATCH_ALL_RULE } from "../src/screens/rules/default-rule";
 
 function validDetail(): Record<string, unknown> {
   return {
