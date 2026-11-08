@@ -744,6 +744,7 @@ export const copy = {
 
   // ── 5.11 Tunnel / CLI page ──
   'cli.title': 'Tunnel from your machine',
+  'cli.nav.dashboard': 'Back to dashboard',
   'cli.intro':
     'The tunnel forwards public traffic for an endpoint to a server on your localhost — so you can test webhooks and integrations against code you\'re running right now. Tunneled requests show up in the feed labeled tunnel.',
   'cli.command.label': 'Run this',
