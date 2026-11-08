@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use sqlx::SqlitePool;
 
 use crate::interceptor::matcher::CompiledRule;
+use crate::models::{ChaosMode, DefaultMode};
 use crate::repo::endpoints::{self, EndpointRow};
 use crate::repo::rules::{self, RuleRow};
 
@@ -22,11 +23,11 @@ pub struct CompiledEndpoint {
     pub token: String,
     pub auto_crud: bool,
     pub target_url: Option<String>,
-    pub default_mode: String, // "mock_404" | "echo"
+    pub default_mode: DefaultMode,
     pub latency_ms: i64,
     pub rate_limit_per_min: i64,
     pub chaos_pct: i64,
-    pub chaos_mode: String, // "error" | "dropout"
+    pub chaos_mode: ChaosMode,
     pub cors_enabled: bool,
     pub rules: Arc<Vec<CompiledRule>>,
     pub any_rule_gates_on_state: bool,
@@ -96,11 +97,11 @@ impl CompiledEndpoint {
             token: row.token.clone(),
             auto_crud: row.auto_crud,
             target_url: row.target_url.clone(),
-            default_mode: row.default_mode.clone(),
+            default_mode: DefaultMode::from_db(&row.default_mode),
             latency_ms: row.latency_ms,
             rate_limit_per_min: row.rate_limit_per_min,
             chaos_pct: row.chaos_pct,
-            chaos_mode: row.chaos_mode.clone(),
+            chaos_mode: ChaosMode::from_db(&row.chaos_mode),
             cors_enabled: row.cors_enabled,
             any_rule_gates_on_state: rules.iter().any(CompiledRule::gates_on_state),
             rules: Arc::new(rules),

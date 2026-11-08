@@ -24,6 +24,7 @@ use crate::error::ApiError;
 use crate::feed::FeedEvent;
 use crate::interceptor::mock_error::MockError;
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
+use crate::models::{ChaosMode, DefaultMode, ServedBy};
 use crate::net::headers::{
     contains_ci, header_pairs, redact, response_headers_for_trace, try_header, REDACTED,
     TOKEN_BEARING_REQUEST_HEADERS,
@@ -72,7 +73,7 @@ pub async fn handle_mock(
     // we reject oversize here as a backstop; the router enforces the limit too).
     if body.len() > state.cfg.max_ingest_body_bytes {
         let resp = MockError::PayloadTooLarge.into_response();
-        return identified(resp, token, "default", None, &ep, &headers_lower);
+        return identified(resp, token, ServedBy::Default, None, &ep, &headers_lower);
     }
     let body_text = String::from_utf8_lossy(&body).to_string();
 
@@ -85,7 +86,7 @@ pub async fn handle_mock(
         for (k, v) in cors::preflight_headers(&headers_lower, ep.cors_enabled) {
             insert_header(resp.headers_mut(), &k, &v);
         }
-        let resp = identified(resp, token, "cors", None, &ep, &headers_lower);
+        let resp = identified(resp, token, ServedBy::Cors, None, &ep, &headers_lower);
         let (resp, rb) = capture_response_body(resp).await;
         spawn_trace(
             state,
@@ -93,7 +94,7 @@ pub async fn handle_mock(
             &method,
             mock_path,
             204,
-            "cors",
+            ServedBy::Cors,
             None,
             t0,
             0,
@@ -127,11 +128,11 @@ pub async fn handle_mock(
     }
 
     // 3. Match a rule.
-    let served_by;
+    let served_by: ServedBy;
     let mut matched_rule_id: Option<i64> = None;
     let mut rule_latency_override: Option<i64> = None;
     let mut rule_rate_override: Option<i64> = None;
-    let mut rule_chaos_override: Option<String> = None;
+    let mut rule_chaos_override: Option<ChaosMode> = None;
     let mut resp: Response;
 
     let selection = matcher::select(
@@ -147,10 +148,10 @@ pub async fn handle_mock(
     if let Some(m) = selection {
         let rule = m.rule;
         matched_rule_id = Some(rule.id);
-        served_by = "rule".into();
+        served_by = ServedBy::Rule;
         rule_latency_override = rule.latency_ms;
         rule_rate_override = rule.rate_limit_per_min;
-        rule_chaos_override = rule.chaos_mode.clone();
+        rule_chaos_override = rule.chaos_mode;
         trace.push(step(
             "match",
             &format!("rule {} (priority {})", rule.id, rule.priority),
@@ -253,9 +254,7 @@ pub async fn handle_mock(
     // 5. Conditions: rate-limit -> chaos -> latency.
     let eff_rate = rule_rate_override.unwrap_or(ep.rate_limit_per_min);
     let eff_latency = rule_latency_override.unwrap_or(ep.latency_ms);
-    let eff_chaos_mode = rule_chaos_override
-        .clone()
-        .unwrap_or_else(|| ep.chaos_mode.clone());
+    let eff_chaos_mode = rule_chaos_override.unwrap_or(ep.chaos_mode);
 
     let eff_rate = conditions::clamp_rate(Some(eff_rate), &state.cfg);
     if eff_rate > 0 {
@@ -270,7 +269,14 @@ pub async fn handle_mock(
                 .with_header("x-ratelimit-limit", rl.limit.to_string())
                 .with_header("x-ratelimit-remaining", rl.remaining.to_string())
                 .into_response();
-            let r = identified(r, token, "ratelimit", matched_rule_id, &ep, &headers_lower);
+            let r = identified(
+                r,
+                token,
+                ServedBy::RateLimit,
+                matched_rule_id,
+                &ep,
+                &headers_lower,
+            );
             let (r, rb) = capture_response_body(r).await;
             spawn_trace(
                 state,
@@ -278,7 +284,7 @@ pub async fn handle_mock(
                 &method,
                 mock_path,
                 429,
-                "ratelimit",
+                ServedBy::RateLimit,
                 matched_rule_id,
                 t0,
                 0,
@@ -295,7 +301,7 @@ pub async fn handle_mock(
     }
 
     let chaos_pct = conditions::clamp_chaos(Some(ep.chaos_pct), &state.cfg);
-    match conditions::roll_chaos(chaos_pct, &eff_chaos_mode) {
+    match conditions::roll_chaos(chaos_pct, eff_chaos_mode) {
         conditions::Chaos::Drop => {
             trace.push(step("chaos", "dropout (connection closed)"));
             // D5 / R-DROPOUT: the client never gets a real response (a 499 +
@@ -310,7 +316,7 @@ pub async fn handle_mock(
                 &method,
                 mock_path,
                 0,
-                "chaos",
+                ServedBy::Chaos,
                 matched_rule_id,
                 t0,
                 0,
@@ -330,7 +336,14 @@ pub async fn handle_mock(
         conditions::Chaos::Status(code) => {
             trace.push(step("chaos", &code.to_string()));
             let r = MockError::Chaos(code as u16).into_response();
-            let r = identified(r, token, "chaos", matched_rule_id, &ep, &headers_lower);
+            let r = identified(
+                r,
+                token,
+                ServedBy::Chaos,
+                matched_rule_id,
+                &ep,
+                &headers_lower,
+            );
             let (r, rb) = capture_response_body(r).await;
             spawn_trace(
                 state,
@@ -338,7 +351,7 @@ pub async fn handle_mock(
                 &method,
                 mock_path,
                 code,
-                "chaos",
+                ServedBy::Chaos,
                 matched_rule_id,
                 t0,
                 0,
@@ -362,14 +375,7 @@ pub async fn handle_mock(
 
     // 6. Identifying + CORS headers.
     let status = resp.status().as_u16() as i64;
-    let resp = identified(
-        resp,
-        token,
-        &served_by,
-        matched_rule_id,
-        &ep,
-        &headers_lower,
-    );
+    let resp = identified(resp, token, served_by, matched_rule_id, &ep, &headers_lower);
 
     // 6a. F7: buffer the finished body AFTER `identified()` (safe — that only
     // ever calls `insert_header`) so the trace can persist the exact bytes
@@ -387,7 +393,7 @@ pub async fn handle_mock(
     // `routes::share::mask_token_in_value`; hookbox-mun.38: that comparison
     // is case-insensitive — see that function's doc comment).
     let persisted_body: std::borrow::Cow<'_, [u8]> =
-        if served_by == "default" && ep.default_mode == "echo" {
+        if served_by == ServedBy::Default && ep.default_mode == DefaultMode::Echo {
             let redacted = echo_payload(
                 &method,
                 mock_path,
@@ -407,7 +413,7 @@ pub async fn handle_mock(
         &method,
         mock_path,
         status,
-        &served_by,
+        served_by,
         matched_rule_id,
         t0,
         applied_latency_ms,
@@ -434,7 +440,7 @@ async fn resolve_unmatched(
     body_text: &str,
     body: &[u8],
     trace: &mut Vec<Step>,
-) -> (Response, String) {
+) -> (Response, ServedBy) {
     // 4a. Auto-CRUD.
     if ep.auto_crud && crud::matches(mock_path) {
         match crud::handle(state, token, method, mock_path, body_text).await {
@@ -447,14 +453,14 @@ async fn resolve_unmatched(
                         .body(Body::empty())
                         .unwrap(),
                 };
-                return (resp, "crud".into());
+                return (resp, ServedBy::Crud);
             }
             Err(e) => {
                 tracing::warn!("auto-crud store error: {e}");
                 trace.push(step("crud", "store error -> 503"));
                 return (
                     MockError::CrudStoreUnavailable.into_response(),
-                    "crud".into(),
+                    ServedBy::Crud,
                 );
             }
         }
@@ -473,12 +479,12 @@ async fn resolve_unmatched(
         match state.tunnels.forward(token, &req, timeout).await {
             Ok(resp) => {
                 trace.push(step("tunnel", "forwarded to bound CLI"));
-                return (resp, "tunnel".into());
+                return (resp, ServedBy::Tunnel);
             }
             Err(e) => {
                 tracing::debug!("tunnel forward failed: {e}");
                 trace.push(step("tunnel", "no_tunnel"));
-                return (MockError::NoTunnel.into_response(), "tunnel".into());
+                return (MockError::NoTunnel.into_response(), ServedBy::Tunnel);
             }
         }
     }
@@ -506,17 +512,17 @@ async fn resolve_unmatched(
                     for (k, v) in &pr.headers {
                         insert_header(resp.headers_mut(), k, v);
                     }
-                    return (resp, "mitm".into());
+                    return (resp, ServedBy::Mitm);
                 }
                 Err(proxy::ProxyError::Timeout) => {
                     trace.push(step("forward", "MITM timeout -> 504"));
-                    return (MockError::UpstreamTimeout.into_response(), "mitm".into());
+                    return (MockError::UpstreamTimeout.into_response(), ServedBy::Mitm);
                 }
                 Err(proxy::ProxyError::Unreachable(_)) => {
                     trace.push(step("forward", "MITM unreachable -> 502"));
                     return (
                         MockError::UpstreamUnreachable.into_response(),
-                        "mitm".into(),
+                        ServedBy::Mitm,
                     );
                 }
             }
@@ -524,16 +530,16 @@ async fn resolve_unmatched(
     }
 
     // 4d. Default mode.
-    if ep.default_mode == "echo" {
+    if ep.default_mode == DefaultMode::Echo {
         trace.push(step("default", "echo"));
         let payload = echo_payload(method, mock_path, query, headers_lower, body_text);
         return (
             json_response(200, &payload, "application/json"),
-            "default".into(),
+            ServedBy::Default,
         );
     }
     trace.push(step("default", "mock_404"));
-    (MockError::NoMatch.into_response(), "default".into())
+    (MockError::NoMatch.into_response(), ServedBy::Default)
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -673,13 +679,17 @@ async fn capture_response_body(resp: Response) -> (Response, Bytes) {
 fn identified(
     mut resp: Response,
     token: &str,
-    served_by: &str,
+    served_by: ServedBy,
     rule_id: Option<i64>,
     ep: &CompiledEndpoint,
     headers_lower: &BTreeMap<String, String>,
 ) -> Response {
     insert_header(resp.headers_mut(), "x-hookbox-endpoint", token);
-    insert_header(resp.headers_mut(), "x-hookbox-served-by", served_by);
+    insert_header(
+        resp.headers_mut(),
+        "x-hookbox-served-by",
+        served_by.as_str(),
+    );
     if let Some(id) = rule_id {
         insert_header(resp.headers_mut(), "x-hookbox-rule-id", &id.to_string());
     }
@@ -707,7 +717,7 @@ fn spawn_trace(
     method: &str,
     path: &str,
     status_code: i64,
-    served_by: &str,
+    served_by: ServedBy,
     matched_rule_id: Option<i64>,
     t0: Instant,
     applied_latency_ms: i64,
@@ -741,7 +751,7 @@ fn spawn_trace(
         method: method.to_string(),
         path: path.to_string(),
         status_code,
-        served_by: served_by.to_string(),
+        served_by: served_by.as_str().to_string(),
         matched_rule_id,
         duration_ms,
         overhead_ms,
@@ -764,7 +774,7 @@ fn spawn_trace(
     let token_s = token.to_string();
     let summary_base = json!({
         "token": token, "method": method, "path": path, "status_code": status_code,
-        "served_by": served_by, "matched_rule_id": matched_rule_id,
+        "served_by": served_by.as_str(), "matched_rule_id": matched_rule_id,
         "duration_ms": duration_ms, "overhead_ms": overhead_ms,
         "timestamp": now_iso(),
     });

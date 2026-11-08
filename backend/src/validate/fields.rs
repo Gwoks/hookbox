@@ -5,7 +5,7 @@
 use std::ops::RangeInclusive;
 
 use crate::error::ApiError;
-use crate::models::ResponseSpec;
+use crate::models::{ChaosMode, DefaultMode, ResponseSpec};
 
 /// Longest endpoint name (characters).
 const ENDPOINT_NAME_MAX_CHARS: usize = 100;
@@ -61,18 +61,18 @@ pub(crate) fn response_spec(spec: &ResponseSpec, template_max_size: usize) -> Re
     Ok(())
 }
 
+/// Exactly one of the `ChaosMode` wire strings (case-sensitive).
 pub(crate) fn chaos_mode(mode: &str) -> Result<(), ApiError> {
-    match mode {
-        "error" | "dropout" => Ok(()),
-        _ => Err(ApiError::validation(CHAOS_MODE_MSG)),
-    }
+    mode.parse::<ChaosMode>()
+        .map(drop)
+        .map_err(|_| ApiError::validation(CHAOS_MODE_MSG))
 }
 
+/// Exactly one of the `DefaultMode` wire strings (case-sensitive).
 pub(crate) fn default_mode(mode: &str) -> Result<(), ApiError> {
-    match mode {
-        "mock_404" | "echo" => Ok(()),
-        _ => Err(ApiError::validation(DEFAULT_MODE_MSG)),
-    }
+    mode.parse::<DefaultMode>()
+        .map(drop)
+        .map_err(|_| ApiError::validation(DEFAULT_MODE_MSG))
 }
 
 /// Clamp an optional integer knob into `[0, max]`.

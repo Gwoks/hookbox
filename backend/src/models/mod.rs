@@ -12,6 +12,7 @@
 
 mod common;
 mod endpoint;
+mod enums;
 mod patch;
 mod rule;
 mod share;
@@ -19,6 +20,7 @@ mod trace;
 
 pub use common::*;
 pub use endpoint::*;
+pub use enums::*;
 pub use rule::*;
 pub use share::*;
 pub use trace::*;
