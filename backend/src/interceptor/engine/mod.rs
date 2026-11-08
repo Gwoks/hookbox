@@ -56,7 +56,14 @@ pub async fn handle_mock(
     let ep = match state.rule_cache.get(&state.pool, token).await {
         Ok(Some(Resolved::Live(ep))) => ep,
         Ok(Some(Resolved::Gone)) => return unknown_or_gone(token, true),
-        Ok(None) | Err(_) => return unknown_or_gone(token, false),
+        Ok(None) => return unknown_or_gone(token, false),
+        // Wire contract unchanged (404), but a store/decode failure must not
+        // masquerade silently as a missing endpoint: log it like the
+        // management plane does for its 503s. The token is not secret.
+        Err(e) => {
+            tracing::error!(token = %token, error = %e, "mock plane: endpoint lookup failed");
+            return unknown_or_gone(token, false);
+        }
     };
     // 0a. Ingest cap backstop (the router enforces it before buffering too).
     if body.len() > state.cfg.max_ingest_body_bytes {

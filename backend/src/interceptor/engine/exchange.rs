@@ -120,7 +120,10 @@ impl<'s> Exchange<'s> {
                 self.step("state_read", format!("{} key(s)", s.len()));
                 self.endpoint_state = s;
             }
-            Err(_) => self.step("state_read", "store error -> state empty (fail-closed)"),
+            Err(e) => {
+                tracing::warn!(error = %e, "mock plane: endpoint state read failed");
+                self.step("state_read", "store error -> state empty (fail-closed)");
+            }
         }
     }
 
