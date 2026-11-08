@@ -12,7 +12,8 @@ import { setUnauthorizedHandler } from '@/api'
 import '@fontsource-variable/inter/wght.css'
 import './globals.css'
 
-// A /api 401 (rotated/stale secret) bounces to the landing gate (§5.1, AC-J7).
+// A /api 401 (session cookie gone, or its key rotated elsewhere) bounces to
+// the landing gate (§5.1, AC-J7).
 // The reason string is carried in router state so the gate can surface the
 // common.error.401 banner.
 setUnauthorizedHandler((reason) => {

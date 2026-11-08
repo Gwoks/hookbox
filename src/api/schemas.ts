@@ -24,8 +24,6 @@ export const servedBySchema = z.enum([
 ])
 
 // ── Session / endpoints ──
-export const sessionCreateSchema = z.object({ email: z.string() })
-
 export const endpointSummarySchema = z.object({
   token: z.string(),
   name: z.string().nullable(),
@@ -36,12 +34,19 @@ export const endpointSummarySchema = z.object({
   request_count: z.number().int(),
 })
 
-export const sessionResponseSchema = z.object({
+// Anonymous-key identity (hookbox-a73.3). The key itself lives in an HttpOnly
+// cookie; these shapes never carry it except the explicit reveal/rotate reply.
+export const sessionSummarySchema = z.object({
   owner_id: z.string(),
-  owner_secret: z.string(),
   endpoints: z.array(endpointSummarySchema),
-  primary: endpointSummarySchema,
+  primary: endpointSummarySchema.nullable(),
 })
+
+/** POST /api/session/restore body. */
+export const restoreSessionSchema = z.object({ key: z.string().min(1) })
+
+/** POST /api/session/key (reveal) and /api/session/rotate replies. */
+export const keyResponseSchema = z.object({ key: z.string().min(1) })
 
 export const endpointCreateSchema = z.object({ name: z.string().nullable().optional() })
 
@@ -240,9 +245,10 @@ export const errorEnvelopeSchema = z.object({
 })
 
 // ── Inferred TS types (the TS half of the §5.3 contract) ──
-export type SessionCreate = z.infer<typeof sessionCreateSchema>
 export type EndpointSummary = z.infer<typeof endpointSummarySchema>
-export type SessionResponse = z.infer<typeof sessionResponseSchema>
+export type SessionSummary = z.infer<typeof sessionSummarySchema>
+export type RestoreSession = z.infer<typeof restoreSessionSchema>
+export type KeyResponse = z.infer<typeof keyResponseSchema>
 export type EndpointCreate = z.infer<typeof endpointCreateSchema>
 export type EndpointConfigPatch = z.infer<typeof endpointConfigPatchSchema>
 export type EndpointDetail = z.infer<typeof endpointDetailSchema>

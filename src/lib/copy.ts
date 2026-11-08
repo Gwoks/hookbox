@@ -13,13 +13,12 @@ export const copy = {
   'landing.brand.markAlt': 'HookBox',
   'landing.hero.headline': 'Mock, intercept, and watch HTTP — live.',
   'landing.hero.subhead':
-    'Self-hosted API mocking and request interception with a real-time inspector. One email in, one endpoint out. No password, no setup.',
-  'landing.email.label': 'Email address',
-  'landing.email.placeholder': 'you@company.com',
-  'landing.email.submit': 'Get my endpoint',
-  'landing.email.submitting': 'Setting up…',
-  'landing.email.helper':
-    'Your email is the recovery key — no password. Re-enter it any time to pick up where you left off.',
+    'Self-hosted API mocking and request interception with a real-time inspector. One click, one endpoint. No email, no password, no setup.',
+  'landing.start.submit': 'Get my endpoint',
+  'landing.start.submitting': 'Setting up…',
+  'landing.start.helper':
+    'You get an anonymous recovery key instead of an account. Save it from Settings to come back from any browser.',
+  'landing.restore.toggle': 'I have a recovery key',
   'landing.strip.mock.title': 'Mock',
   'landing.strip.mock.body':
     'Spin up a mock URL instantly. Define rules by method, path, headers, and body — return exactly the response you want.',
@@ -33,14 +32,25 @@ export const copy = {
   'landing.footer.tagline':
     "Self-hosted · Single binary · No tracking — built for developers who'd rather run it themselves.",
   // ── 4.2 Landing states ──
-  'landing.error.email.invalid': 'Enter a valid email address.',
   'landing.error.rateLimit': 'Too many attempts. Try again in {seconds}s.',
   'landing.error.network': "Couldn't reach the server. Check your connection and try again.",
-  'landing.error.noEndpoint':
-    'Session created, but no endpoint came back. Try again — if it persists, restart the server.',
-  'landing.warn.storage':
-    "This browser won't remember your session (private mode or storage blocked). You can still continue — keep your email to return.",
+  'landing.warn.cookies':
+    "This browser is blocking cookies, so HookBox can't keep you signed in. Allow cookies for this site, then reload.",
   'landing.error.generic': "Something didn't go through. Try again.",
+
+  // ── Recovery key restore form (landing + Settings) ──
+  'recovery.restore.label': 'Recovery key',
+  'recovery.restore.helper': 'Paste the key you saved. Restoring signs this browser in; it does not change the key.',
+  'recovery.restore.submit': 'Restore access',
+  'recovery.restore.submitting': 'Restoring…',
+  'recovery.restore.error.empty': 'Paste your recovery key.',
+  'recovery.restore.error.invalid': "That recovery key didn't work. Check it and try again.",
+
+  // ── Session gate (owner screens) ──
+  'session.loading.aria': 'Checking your session',
+  'session.error.title': "Couldn't reach HookBox",
+  'session.error.body':
+    "We couldn't check whether this browser is signed in. Check your connection and try again.",
 
   // ── 5.1 App shell & nav ──
   'shell.skipLink': 'Skip to content',
@@ -51,12 +61,16 @@ export const copy = {
   'shell.nav.newEndpoint.aria': 'Create a new endpoint',
   'shell.nav.theme.aria': 'Toggle theme',
   'shell.account.label': 'Account',
-  'shell.account.signedInAs': 'Signed in as {email}',
+  'shell.account.owner': 'Anonymous owner · {id}',
+  'shell.account.recoveryKey': 'Recovery key',
   'shell.account.signOut': 'Sign out',
   'shell.account.signOut.confirmTitle': 'Sign out?',
   'shell.account.signOut.confirmBody':
-    'This clears your secret from this browser. Re-enter your email to return.',
+    "Save your recovery key first — it's the only way back to these endpoints after you sign out. Signing out deletes nothing.",
+  'shell.account.signOut.copyKey': 'Copy recovery key',
+  'shell.account.signOut.copyKey.fallback': 'Copying is blocked here. Select the key and copy it:',
   'shell.account.signOut.confirm': 'Sign out',
+  'shell.account.signOut.error': "Couldn't sign out. Try again.",
   'shell.mobileNav.open.aria': 'Open menu',
   'shell.mobileNav.title': 'Menu',
 
@@ -76,6 +90,10 @@ export const copy = {
   'dash.action.settings': 'Settings',
   'dash.tunnel.active': 'Tunnel connected',
   'dash.tunnel.active.tooltip': 'A tunnel is forwarding this endpoint to a local machine.',
+  'dash.saveKey.title': 'Save your recovery key',
+  'dash.saveKey.body':
+    "HookBox doesn't use email. Your recovery key is the only way back to this endpoint from another browser, or from this one after you sign out.",
+  'dash.saveKey.action': 'Go to recovery key',
 
   // ── 5.3 Feed ──
   'feed.header.title': 'Live feed',
@@ -141,7 +159,7 @@ export const copy = {
   'feed.conn.offline.tooltip': 'Lost connection to the feed. Showing the last requests received.',
   'feed.conn.unauthorized': 'Not authorized for this feed',
   'feed.conn.unauthorized.tooltip':
-    'Your secret no longer authorizes this feed. It may have been rotated elsewhere.',
+    'Your recovery key no longer authorizes this feed. It may have been rotated elsewhere.',
   'feed.conn.busy': 'Feed busy',
   'feed.conn.busy.tooltip':
     "Too many connections to this endpoint's feed ({max} max). Close another tab and it'll reconnect.",
@@ -158,7 +176,7 @@ export const copy = {
   'insp.error.retry': 'Retry',
   'insp.unauthorized.title': 'Not authorized',
   'insp.unauthorized.body':
-    "Your secret doesn't authorize this request. Re-enter your email to continue.",
+    "This browser's recovery key doesn't authorize this request. Restore access with your key to continue.",
   'insp.tab.headers': 'Headers',
   'insp.tab.query': 'Query',
   'insp.tab.body': 'Body',
@@ -168,7 +186,7 @@ export const copy = {
   'insp.headers.none': 'None',
   'insp.headers.redacted': 'redacted',
   'insp.headers.redacted.tooltip':
-    'Sensitive headers (your secret, Cookie, Authorization) are never stored.',
+    'Sensitive headers (your recovery key, Cookie, Authorization) are never stored.',
   'insp.query.empty': 'No query parameters.',
   'insp.body.empty': 'No request body.',
   'insp.body.binary': 'Binary body — not shown.',
@@ -606,6 +624,30 @@ export const copy = {
   'set.retention.clearHistory': 'Clear request history',
   'set.retention.clearState': 'Clear state',
   'set.retention.stateNote': 'State is per-endpoint and shared across all callers.',
+
+  // ── Recovery key (anonymous identity, hookbox-a73.3) ──
+  'set.recovery.title': 'Recovery key',
+  'set.recovery.description':
+    "Your anonymous key to every endpoint you own. Save it somewhere safe — there's no email to fall back on.",
+  'set.recovery.hidden.aria': 'Recovery key hidden',
+  'set.recovery.reveal': 'Reveal key',
+  'set.recovery.hide': 'Hide key',
+  'set.recovery.copy': 'Copy key',
+  'set.recovery.warning':
+    "Anyone with this key controls your endpoints. Don't paste it into shared terminals, screenshots, or issues.",
+  'set.recovery.error.reveal': "Couldn't load your recovery key. Try again.",
+  'set.recovery.rotate': 'Rotate key',
+  'set.recovery.rotate.helper': 'Replace the key if it may have leaked.',
+  'set.recovery.rotate.confirmTitle': 'Rotate your recovery key?',
+  'set.recovery.rotate.confirmBody':
+    'Your current key stops working right away. Other browsers signed in with it are signed out, and a running tunnel CLI disconnects until you restart it with the new key. This browser stays signed in.',
+  'set.recovery.rotate.confirm': 'Rotate key',
+  'set.recovery.rotate.error': "Couldn't rotate the key. Your current key still works.",
+  'set.recovery.rotate.done': 'New key ready. Save it now — the old one no longer works.',
+  'set.recovery.restore.toggle': 'Use a different recovery key',
+  'set.recovery.restore.helper':
+    "Switches this browser to another key's endpoints. Save your current key first if you'll need it again.",
+
   'set.danger.title': 'Danger zone',
   'set.danger.delete.label': 'Delete endpoint',
   'set.danger.delete.helper': 'Permanently delete this endpoint, its rules, state, and history.',
@@ -655,13 +697,15 @@ export const copy = {
     'The tunnel forwards public traffic for an endpoint to a server on your localhost — so you can test webhooks and integrations against code you\'re running right now. Tunneled requests show up in the feed labeled tunnel.',
   'cli.command.label': 'Run this',
   'cli.command.template':
-    'tunnel --port {port} --endpoint {token} --secret {secret} --host {host}',
+    'tunnel --port {port} --endpoint {token} --key {key} --host {host}',
   'cli.command.portDefault': '3000',
   'cli.command.copy.aria': 'Copy tunnel command',
-  'cli.secret.reveal': 'Reveal secret',
-  'cli.secret.hide': 'Hide secret',
-  'cli.secret.warning':
-    "This is your owner capability — your secret. Anyone who has it controls this endpoint. Don't paste it into shared terminals, screenshots, or issues.",
+  'cli.key.placeholder': '<recovery-key>',
+  'cli.key.reveal': 'Reveal key',
+  'cli.key.hide': 'Hide key',
+  'cli.key.warning':
+    "This is your recovery key. Anyone who has it controls your endpoints. Don't paste it into shared terminals, screenshots, or issues.",
+  'cli.key.error': "Couldn't load your recovery key. Try again.",
   'cli.behavior.title': 'What to expect',
   'cli.behavior.order':
     'In the resolution order, the tunnel is tried after Auto-CRUD and before your proxy target.',
@@ -685,7 +729,7 @@ export const copy = {
   'common.close.aria': 'Close',
   'common.dismiss': 'Dismiss',
   'common.error.401':
-    'Your session ended — your secret was rotated somewhere else. Enter your email to continue.',
+    "You're signed out. Restore access with your recovery key, or get a new endpoint.",
   'common.error.network': 'Network error. Check your connection and try again.',
   'common.error.generic': 'Something went wrong. Try again.',
   // Shared 404/410 mid-session mapping (operator-toolkit AC-81) — the

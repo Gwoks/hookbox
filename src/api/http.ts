@@ -4,10 +4,12 @@
  * fetch call + abort passthrough, the flat `{error, detail}` envelope
  * (AC-60), and zod response validation.
  *
- * Attaching the owner's `Authorization` header and the /api 401 session-
- * bounce are OWNER-ONLY concerns and stay in client.ts. This module — and
+ * Sending the owner's session cookie + `X-HookBox` header and the /api 401
+ * session-bounce are OWNER-ONLY concerns and stay in client.ts, which
+ * overrides the `credentials: 'omit'` default below. This module — and
  * everything it imports — must never import session.ts (AC-S13): the public
- * viewer's module graph roots here via public-client.ts.
+ * viewer's module graph roots here via public-client.ts, so the viewer sends
+ * zero cookies.
  */
 import { z } from 'zod'
 import { ApiError } from './errors'

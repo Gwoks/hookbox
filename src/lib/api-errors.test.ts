@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/api/errors'
-import { errorMessage, isEndpointGone, remapEndpointGone } from './api-errors'
+import { errorMessage, isEndpointGone, remapEndpointGone, signInErrorMessage } from './api-errors'
 import { t } from './copy'
 
 const GONE = t('common.error.endpointGone')
@@ -52,5 +52,28 @@ describe('remapEndpointGone', () => {
     expect(() => remapEndpointGone(original)).toThrow(original)
     const plain = new Error('x')
     expect(() => remapEndpointGone(plain)).toThrow(plain)
+  })
+})
+
+describe('signInErrorMessage', () => {
+  it('turns a 429 into the rate-limit copy with Retry-After', () => {
+    expect(signInErrorMessage(new ApiError('rate_limited', 'Slow down', 429, 12))).toBe(
+      t('landing.error.rateLimit', { seconds: 12 }),
+    )
+  })
+
+  it('defaults the wait to 60 seconds when Retry-After is missing', () => {
+    expect(signInErrorMessage(new ApiError('rate_limited', 'Slow down', 429))).toBe(
+      t('landing.error.rateLimit', { seconds: 60 }),
+    )
+  })
+
+  it('uses the network copy for a network failure', () => {
+    expect(signInErrorMessage(new ApiError('network', 'Network error.', 0))).toBe(t('landing.error.network'))
+  })
+
+  it("falls back to the server's detail, then the generic copy", () => {
+    expect(signInErrorMessage(new ApiError('csrf_rejected', 'Missing header.', 403))).toBe('Missing header.')
+    expect(signInErrorMessage(new Error('boom'))).toBe(t('landing.error.generic'))
   })
 })

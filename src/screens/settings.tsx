@@ -14,7 +14,9 @@
  *
  * States: loading · error+Retry · ready. Save is explicit (a single primary
  * Save); destructive ops each sit behind their own confirm dialog. All strings
- * from copy.md set.* via t().
+ * from copy.md set.* via t(). The owner-level Recovery key card
+ * (`#recovery-key`) sits above the endpoint form. The router's RequireSession
+ * gate mounts this screen only once the tab is signed in.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -24,7 +26,6 @@ import {
   api,
   ApiError,
   mockRuleSchema,
-  session,
   type EndpointConfigPatch,
   type EndpointDetail,
   type EndpointSummary,
@@ -45,6 +46,7 @@ import {
   type ConfigDiffRow,
 } from "@/lib/config-bundle";
 import { AppShell } from "@/components/owner/app-shell";
+import { RecoveryKeySection } from "@/components/owner/recovery-key-section";
 import { CodeBlock } from "@/components/hookbox/code-block";
 import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
@@ -73,9 +75,6 @@ const COLLECTION_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function Settings() {
   const { token = "" } = useParams();
-  const navigate = useNavigate();
-  const { toast } = useToast();
-  const hasSession = !!session.getSecret();
 
   const [load, setLoad] = useState<LoadState>({ kind: "loading" });
   const [endpoints, setEndpoints] = useState<EndpointSummary[]>([]);
@@ -99,18 +98,12 @@ export function Settings() {
   }, [token]);
 
   useEffect(() => {
-    if (!hasSession) return;
     void fetchAll();
     api
       .listEndpoints()
       .then(setEndpoints)
       .catch(() => {});
-  }, [hasSession, fetchAll]);
-
-  if (!hasSession) {
-    navigate("/", { replace: true, state: { reason: t("common.error.401") } });
-    return null;
-  }
+  }, [fetchAll]);
 
   const endpoint = load.kind === "ready" ? load.endpoint : null;
 
@@ -129,6 +122,12 @@ export function Settings() {
             </Link>
           </Button>
           <h1 className="text-h2 text-text-primary">{t("set.title")}</h1>
+        </div>
+
+        {/* Owner-level, independent of this endpoint's load state, so the
+         * `#recovery-key` anchor is stable while the form below loads. */}
+        <div className="mb-8">
+          <RecoveryKeySection />
         </div>
 
         {load.kind === "loading" && (

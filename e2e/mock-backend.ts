@@ -9,12 +9,24 @@
  * at-most-once contract means it RECONCILES authoritative rows via GET
  * /api/endpoints/{token}/requests, which this mock serves — so feed content is
  * driven by mutating `store.requests` then letting the reconcile fetch run.
+ *
+ * Identity (hookbox-a73.3): the real server keeps the anonymous recovery key
+ * in an HttpOnly cookie. The mock models that cookie as the server-side
+ * `store.authed` flag (the browser never sees a key), implements the six
+ * /api/session* routes, answers every owner route without `x-hookbox: 1`
+ * with 403 csrf_rejected and without a session with 401 unauthorized. The
+ * public /api/share/* routes need neither.
  */
 import type { Page, Route } from "@playwright/test";
 
 export interface MockOptions {
-  /** Seed an authenticated session in localStorage before the app boots. */
+  /** Start signed in: the server treats this browser's session cookie as
+   * valid (no localStorage involved). */
   authed?: boolean;
+  /** Seed the PRE-cookie localStorage identity (secret + owner id + email)
+   * once, to exercise the silent legacy migration. The restore succeeds
+   * only when this equals the current key (`SECRET`). */
+  legacySecret?: string;
   /** Override the endpoint detail returned by GET /api/endpoints/{token}. */
   endpoint?: Partial<EndpointDetail>;
   /** Seed the request feed list. */
@@ -112,7 +124,19 @@ interface MockRule {
 }
 
 export const TOKEN = "ab12cd34";
+/** The owner's current recovery key (what restore accepts until a rotate). */
 export const SECRET = "owner_secret_testvalue_0123456789";
+/** Anonymous owner id (16 hex chars, like the server's gen_owner_id). */
+export const OWNER_ID = "a1b2c3d4e5f60718";
+/** Rotation N returns `${ROTATED_KEY_PREFIX}N`. */
+export const ROTATED_KEY_PREFIX = "rotated_key_value_";
+/** Token POST /api/endpoints hands out (e.g. after the last one is deleted). */
+export const NEW_TOKEN = "ef56gh78";
+export const LEGACY_STORAGE_KEYS = [
+  "hookbox-owner-secret",
+  "hookbox-owner-id",
+  "hookbox-owner-email",
+] as const;
 const NOW = "2026-06-21T12:00:00Z";
 
 export function makeEndpoint(
@@ -213,20 +237,38 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
     shares: opts.shares ?? ([] as ShareLinkStub[]),
     nextShareId: 500,
     shareCode: opts.shareCode ?? DEFAULT_SHARE_CODE,
+    /** The modelled HttpOnly session cookie: true = this browser is signed in. */
+    authed: opts.authed ?? false,
+    /** The current recovery key; a rotate replaces it (the old one dies). */
+    key: SECRET,
+    rotations: 0,
+    /** Endpoints minted by POST /api/endpoints. */
+    created: [] as EndpointDetail[],
   };
 
-  // Seed an authed session + light theme BEFORE the app boots.
-  if (opts.authed) {
+  // Seed the legacy localStorage identity ONCE per tab (sessionStorage
+  // guard), so a reload after the migration doesn't re-plant it.
+  if (opts.legacySecret) {
     await page.addInitScript(
-      ([secret, token]) => {
-        localStorage.setItem("hookbox-owner-secret", secret);
-        localStorage.setItem("hookbox-owner-id", "owner_1");
-        localStorage.setItem("hookbox-owner-email", "dev@example.com");
-        void token;
+      ([secret, keys]) => {
+        if (sessionStorage.getItem("__hookboxLegacySeeded")) return;
+        sessionStorage.setItem("__hookboxLegacySeeded", "1");
+        localStorage.setItem(keys[0], secret);
+        localStorage.setItem(keys[1], "legacy_owner");
+        localStorage.setItem(keys[2], "dev@example.com");
       },
-      [SECRET, TOKEN],
+      [opts.legacySecret, LEGACY_STORAGE_KEYS] as const,
     );
   }
+
+  const liveEndpoints = (): EndpointDetail[] => [
+    ...(store.deleted ? [] : [store.endpoint]),
+    ...store.created,
+  ];
+  const sessionSummary = () => {
+    const live = liveEndpoints().map(summary);
+    return { owner_id: OWNER_ID, endpoints: live, primary: live[0] ?? null };
+  };
 
   // Stub WebSocket + EventSource to inert objects: the SPA reconciles via the
   // mocked GET routes (the §5.4 at-most-once contract), so no live frames needed
@@ -291,23 +333,70 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
     const path = url.pathname;
     const method = req.method();
 
-    // #1 POST /api/session — mints a cap (no auth).
-    if (path === "/api/session" && method === "POST") {
-      const ep = { ...store.endpoint };
-      return json(route, 200, {
-        owner_id: "owner_1",
-        owner_secret: SECRET,
-        endpoints: [summary(ep)],
-        primary: summary(ep),
-      });
+    // Owner routes: CSRF header first, then the session routes (some of
+    // which work signed out), then the signed-in requirement. The public
+    // /api/share/* routes skip all three.
+    if (!path.startsWith("/api/share/")) {
+      if (req.headers()["x-hookbox"] !== "1") {
+        return err(route, 403, "csrf_rejected", "Missing X-HookBox header.");
+      }
+
+      // POST /api/session — mint (201) or return the current owner (200).
+      if (path === "/api/session" && method === "POST") {
+        const existed = store.authed;
+        store.authed = true;
+        return json(route, existed ? 200 : 201, sessionSummary());
+      }
+      // POST /api/session/restore {key} — sets the cookie, never rotates.
+      if (path === "/api/session/restore" && method === "POST") {
+        const body = (req.postDataJSON() ?? {}) as { key?: unknown };
+        if (body.key !== store.key) {
+          return err(route, 401, "invalid_key", "Unknown recovery key.");
+        }
+        store.authed = true;
+        return json(route, 200, sessionSummary());
+      }
+      // DELETE /api/session — clears the cookie; the key stays valid.
+      if (path === "/api/session" && method === "DELETE") {
+        store.authed = false;
+        return route.fulfill({ status: 204, body: "" });
+      }
+
+      if (!store.authed) {
+        return err(route, 401, "unauthorized", "Not signed in.");
+      }
+
+      if (path === "/api/session" && method === "GET") {
+        return json(route, 200, sessionSummary());
+      }
+      if (path === "/api/session/key" && method === "POST") {
+        return json(route, 200, { key: store.key });
+      }
+      if (path === "/api/session/rotate" && method === "POST") {
+        store.rotations += 1;
+        store.key = `${ROTATED_KEY_PREFIX}${store.rotations}`;
+        return json(route, 200, { key: store.key });
+      }
     }
 
     // #2 GET /api/endpoints — a deleted endpoint is tombstoned, so it drops
-    // out of the list (mirrors the real backend; also what stops Landing's
-    // auto-resume from redirecting straight back to the endpoint the caller
-    // just deleted, journey.md J9).
+    // out of the list (mirrors the real backend).
     if (path === "/api/endpoints" && method === "GET") {
-      return json(route, 200, store.deleted ? [] : [summary(store.endpoint)]);
+      return json(route, 200, liveEndpoints().map(summary));
+    }
+
+    // #3 POST /api/endpoints — the landing creates one when a signed-in
+    // owner has none left (e.g. right after deleting their last one, J9).
+    if (path === "/api/endpoints" && method === "POST") {
+      const created = makeEndpoint({
+        token: NEW_TOKEN,
+        name: null,
+        mock_url: `https://${NEW_TOKEN}.hookbox.test`,
+        path_url: `http://localhost:8080/m/${NEW_TOKEN}`,
+        request_count: 0,
+      });
+      store.created = [...store.created, created];
+      return json(route, 201, created);
     }
 
     // #4/#5/#6 GET/PATCH/DELETE /api/endpoints/{token}
@@ -469,6 +558,17 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
       }
       store.shares.splice(idx, 1);
       return route.fulfill({ status: 204, body: "" });
+    }
+
+    // Endpoints minted by POST /api/endpoints: a fresh, empty endpoint.
+    const createdMatch = path.match(
+      /^\/api\/endpoints\/([^/]+)(?:\/(requests|rules|shares))?$/,
+    );
+    const createdEndpoint = createdMatch
+      ? store.created.find((e) => e.token === createdMatch[1])
+      : undefined;
+    if (createdMatch && createdEndpoint && method === "GET") {
+      return json(route, 200, createdMatch[2] ? [] : createdEndpoint);
     }
 
     // #22/#23 PUBLIC GET /api/share/{code}/requests[/{id}] — no credential.
