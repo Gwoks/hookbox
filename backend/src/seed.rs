@@ -1,19 +1,32 @@
 //! First-run demo-data seeding — PORT of the intent of the Python seed (AC-53/54,
-//! AC-J12). Plants a demo owner + a primary endpoint with >=1 rule + sample
-//! traces so a fresh dashboard lands populated. Idempotent: a no-op when any
-//! endpoint already exists.
+//! AC-J12). Plants an anonymous demo owner + a primary endpoint with >=1 rule +
+//! sample traces so a fresh dashboard lands populated. Idempotent: a no-op when
+//! any endpoint already exists.
 
 use serde_json::json;
 use sqlx::SqlitePool;
 
-use crate::ids::{gen_owner_secret, gen_token, hash_email, hash_secret};
+use crate::ids::{gen_owner_id, gen_owner_secret, gen_token, hash_secret};
+use crate::repo::owners;
 
-/// Seed demo data if the DB is empty. Returns `Some((email, secret, token))` when
-/// it seeded (first run), `None` when data already existed.
+/// Entropy of the demo owner's key (the `OWNER_SECRET_BYTES` floor).
+const DEMO_KEY_BYTES: usize = 32;
+
+/// What a first-run seed planted. `key` is the demo owner's recovery key —
+/// a live credential, so callers must only ever show it to the operator
+/// (the `seed` bin prints it to stderr once; the server never logs it).
+pub struct SeededOwner {
+    pub owner_id: String,
+    pub key: String,
+    pub token: String,
+}
+
+/// Seed demo data if the DB is empty. Returns the planted owner on the
+/// first run, `None` when data already existed.
 pub async fn seed_if_empty(
     pool: &SqlitePool,
     id_len: usize,
-) -> Result<Option<(String, String, String)>, sqlx::Error> {
+) -> Result<Option<SeededOwner>, sqlx::Error> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM endpoints")
         .fetch_one(pool)
         .await?;
@@ -21,19 +34,9 @@ pub async fn seed_if_empty(
         return Ok(None);
     }
 
-    let email = "demo@hookbox.local".to_string();
-    let owner_id = hash_email(&email);
-    let secret = gen_owner_secret(32);
-    sqlx::query(
-        "INSERT INTO owners (owner_id, email, secret_hash, last_seen)
-         VALUES (?, ?, ?, datetime('now'))
-         ON CONFLICT(owner_id) DO UPDATE SET secret_hash = excluded.secret_hash",
-    )
-    .bind(&owner_id)
-    .bind(&email)
-    .bind(hash_secret(&secret))
-    .execute(pool)
-    .await?;
+    let owner_id = gen_owner_id();
+    let key = gen_owner_secret(DEMO_KEY_BYTES);
+    owners::insert(pool, &owner_id, &hash_secret(&key)).await?;
 
     let token = gen_token(id_len);
     sqlx::query(
@@ -82,7 +85,11 @@ pub async fn seed_if_empty(
         .await?;
     }
 
-    Ok(Some((email, secret, token)))
+    Ok(Some(SeededOwner {
+        owner_id,
+        key,
+        token,
+    }))
 }
 
 #[cfg(test)]
@@ -93,9 +100,19 @@ mod tests {
     #[tokio::test]
     async fn seeds_once_then_idempotent() {
         let pool = memory_pool().await;
-        let first = seed_if_empty(&pool, 10).await.unwrap();
-        assert!(first.is_some());
-        let (_e, _s, token) = first.unwrap();
+        let SeededOwner {
+            owner_id,
+            key,
+            token,
+        } = seed_if_empty(&pool, 10)
+            .await
+            .unwrap()
+            .expect("first run seeds");
+        // The printed key really is the demo owner's credential.
+        let resolved = owners::find_by_secret_hash(&pool, &hash_secret(&key))
+            .await
+            .unwrap();
+        assert_eq!(resolved, Some(owner_id));
         let rules: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mock_rules WHERE token = ?")
             .bind(&token)
             .fetch_one(&pool)

@@ -24,11 +24,21 @@ headers:
   x-hookbox-plane: api
 body: {"detail":"Endpoint not found.","error":"not_found"}
 
-## session invalid email
-status: 422
+## session mint without csrf header
+status: 403
 headers:
+  cache-control: no-store
+  content-length: 81
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"This request must come from the HookBox app.","error":"csrf_rejected"}
+
+## session restore malformed key
+status: 401
+headers:
+  cache-control: no-store
   content-length: 66
   content-type: application/json
   x-hookbox-plane: api
-body: {"detail":"A valid email is required.","error":"validation_error"}
+body: {"detail":"That recovery key is not valid.","error":"invalid_key"}
 

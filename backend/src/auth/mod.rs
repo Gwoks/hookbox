@@ -1,51 +1,152 @@
-//! Owner-capability auth (§5.1) — PORT of `app/auth.py`.
+//! Owner-key auth (§5.1, AC-S14a–b).
 //!
-//! A non-secret `owner_id` (= `hash_email`) plus a **secret** bearer
-//! `owner_secret` (256-bit CSPRNG, stored sha256-hashed). Every `/api/**` route
-//! except `POST /api/session` requires `Authorization: Bearer <owner_secret>`:
-//!   * missing / malformed / unknown secret      → 401 + `WWW-Authenticate: Bearer`
-//!   * valid secret that does not own `{token}`   → 404 (never 403 — a non-owner
-//!     cannot distinguish "exists but not mine" from "does not exist")
+//! An owner is a non-secret random `owner_id` plus a **secret** owner key
+//! (256-bit CSPRNG, stored only as sha256). The key arrives one of two ways:
+//!   * `Authorization: Bearer <key>` — the tunnel CLI, curl scripting, tests.
+//!     A browser never attaches it on its own, so no CSRF check applies.
+//!   * the HttpOnly session cookie — the SPA. Browsers attach it
+//!     automatically, so it is honored only after `session::csrf_guard`
+//!     (`x-hookbox: 1` + a same-origin request).
 //!
-//! The public `owner_id` is **never** accepted as a credential — only
-//! `sha256(secret)` is looked up. The secret is compared by hash (a constant
-//! indexed lookup), never by a raw early-return string compare (AC-S6/S7/S8).
+//! Precedence is strict: when an `Authorization` header is present it is the
+//! ONLY credential considered (an invalid Bearer is 401, never a silent
+//! fallback to the cookie). Outcomes:
+//!   * missing / malformed / unknown key        → 401 + `WWW-Authenticate: Bearer`
+//!   * cookie without the CSRF header / foreign origin → 403 `csrf_rejected`
+//!   * valid key that does not own `{token}`   → 404 (never 403)
+//!
+//! The public `owner_id` is **never** a credential — only `sha256(key)` is
+//! looked up, via the unique `owners.secret_hash` index.
 
 use axum::extract::FromRequestParts;
+use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
+use axum::http::HeaderMap;
 use sqlx::SqlitePool;
 
+use crate::config::Config;
 use crate::error::ApiError;
 use crate::ids::hash_secret;
+use crate::repo::owners;
+use crate::session::{csrf_guard, read_session_cookie};
 use crate::state::AppState;
 
 mod bearer;
 mod ownership;
 
 pub(crate) use bearer::parse_bearer;
-pub use ownership::{assert_owns_endpoint, verify_cap_owns_token};
+pub use ownership::{assert_owns_endpoint, key_owns_token};
 
-/// Resolve the authenticated `owner_id` from the bearer secret (PORT of
-/// `require_owner`). Looks up `sha256(secret)`; missing/malformed/unknown → 401.
-pub async fn require_owner(
-    pool: &SqlitePool,
-    authorization: Option<&str>,
-) -> Result<String, ApiError> {
-    let secret = authorization
-        .and_then(parse_bearer)
-        .ok_or_else(|| ApiError::unauthorized("Valid owner capability required."))?;
-    let secret_hash = hash_secret(secret);
-    let owner_id: Option<String> =
-        sqlx::query_scalar("SELECT owner_id FROM owners WHERE secret_hash = ?")
-            .bind(&secret_hash)
-            .fetch_optional(pool)
-            .await?;
-    owner_id.ok_or_else(|| ApiError::unauthorized("Valid owner capability required."))
+/// How the caller presented its owner key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    Bearer(String),
+    Cookie(String),
 }
 
-/// Axum extractor: an authenticated owner id resolved from the `Authorization`
-/// header against `AppState`. Yields `ApiError` (401) on failure — the flat
-/// envelope reaches the client unchanged.
+impl Credential {
+    /// The raw owner key.
+    pub fn key(&self) -> &str {
+        match self {
+            Credential::Bearer(k) | Credential::Cookie(k) => k,
+        }
+    }
+
+    pub fn is_cookie(&self) -> bool {
+        matches!(self, Credential::Cookie(_))
+    }
+}
+
+/// An authenticated owner plus the credential that proved it.
+#[derive(Debug, Clone)]
+pub struct AuthedOwner {
+    pub owner_id: String,
+    pub credential: Credential,
+}
+
+impl AuthedOwner {
+    /// The raw owner key the caller presented.
+    pub fn key(&self) -> &str {
+        self.credential.key()
+    }
+}
+
+fn unauthorized() -> ApiError {
+    ApiError::unauthorized("Valid owner capability required.")
+}
+
+/// The owner holding `key`, if any (looked up by `sha256(key)`).
+pub(crate) async fn owner_for_key(
+    pool: &SqlitePool,
+    key: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    owners::find_by_secret_hash(pool, &hash_secret(key)).await
+}
+
+/// The credential a request presents, applying Bearer-over-cookie
+/// precedence. A present-but-malformed `Authorization` header yields 401;
+/// a cookie is only returned after the CSRF guard passes.
+fn presented_credential(headers: &HeaderMap, cfg: &Config) -> Result<Credential, ApiError> {
+    if let Some(auth) = headers.get(AUTHORIZATION) {
+        let key = auth
+            .to_str()
+            .ok()
+            .and_then(parse_bearer)
+            .ok_or_else(unauthorized)?;
+        return Ok(Credential::Bearer(key.to_string()));
+    }
+    let key = read_session_cookie(headers, cfg).ok_or_else(unauthorized)?;
+    csrf_guard(headers, cfg)?;
+    Ok(Credential::Cookie(key))
+}
+
+/// Resolve the authenticated owner from a request's headers (see the module
+/// docs for precedence and outcomes).
+pub async fn resolve_owner(
+    pool: &SqlitePool,
+    cfg: &Config,
+    headers: &HeaderMap,
+) -> Result<AuthedOwner, ApiError> {
+    let credential = presented_credential(headers, cfg)?;
+    let owner_id = owner_for_key(pool, credential.key())
+        .await?
+        .ok_or_else(unauthorized)?;
+    Ok(AuthedOwner {
+        owner_id,
+        credential,
+    })
+}
+
+/// The owner key a live-feed handshake presents: the Bearer when an
+/// `Authorization` header is present, else the session cookie. No custom
+/// header is required — WebSocket and EventSource cannot set one; the feed
+/// routes check `origin_allowed` instead.
+pub fn feed_key(headers: &HeaderMap, cfg: &Config) -> Option<String> {
+    match headers.get(AUTHORIZATION) {
+        Some(auth) => auth
+            .to_str()
+            .ok()
+            .and_then(parse_bearer)
+            .map(str::to_string),
+        None => read_session_cookie(headers, cfg),
+    }
+}
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for AuthedOwner {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        resolve_owner(&state.pool, &state.cfg, &parts.headers).await
+    }
+}
+
+/// Axum extractor: just the authenticated owner id (Bearer or cookie+CSRF).
+/// Yields `ApiError` (401/403) on failure — the flat envelope reaches the
+/// client unchanged.
 pub struct OwnerId(pub String);
 
 #[axum::async_trait]
@@ -56,130 +157,28 @@ impl FromRequestParts<AppState> for OwnerId {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let auth = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        let owner_id = require_owner(&state.pool, auth).await?;
-        Ok(OwnerId(owner_id))
+        let owner = AuthedOwner::from_request_parts(parts, state).await?;
+        Ok(OwnerId(owner.owner_id))
+    }
+}
+
+/// Axum extractor for the unauthenticated routes that set or clear the
+/// session cookie (mint / restore / sign-out): passes only when
+/// `session::csrf_guard` does, so a foreign page can neither plant its own
+/// key in the owner's browser nor sign them out.
+pub struct CsrfGuard;
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for CsrfGuard {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        csrf_guard(&parts.headers, &state.cfg).map(|()| CsrfGuard)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ids::gen_owner_secret;
-    use crate::testing::{memory_pool, seed_endpoint, seed_owner, SeededOwner};
-
-    async fn setup() -> (SqlitePool, String, String) {
-        let pool = memory_pool().await;
-        let SeededOwner { owner_id, secret } = seed_owner(&pool).await;
-        (pool, owner_id, secret)
-    }
-
-    #[tokio::test]
-    async fn bearer_resolves_owner_and_unknown_is_401() {
-        let (pool, owner_id, secret) = setup().await;
-        let header = format!("Bearer {secret}");
-        let resolved = require_owner(&pool, Some(&header)).await.unwrap();
-        assert_eq!(resolved, owner_id);
-
-        // Missing / malformed / unknown all 401.
-        assert_eq!(
-            require_owner(&pool, None).await.unwrap_err().status,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            require_owner(&pool, Some("Basic xyz"))
-                .await
-                .unwrap_err()
-                .status,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            require_owner(&pool, Some("Bearer not-a-real-secret"))
-                .await
-                .unwrap_err()
-                .status,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-    }
-
-    #[tokio::test]
-    async fn owner_id_is_never_a_credential() {
-        let (pool, owner_id, _secret) = setup().await;
-        // Presenting the public owner_id as the bearer must 401 (it is not a secret).
-        let header = format!("Bearer {owner_id}");
-        assert_eq!(
-            require_owner(&pool, Some(&header))
-                .await
-                .unwrap_err()
-                .status,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-    }
-
-    #[tokio::test]
-    async fn rotation_invalidates_old_secret() {
-        let (pool, owner_id, old_secret) = setup().await;
-        let old_header = format!("Bearer {old_secret}");
-        assert!(require_owner(&pool, Some(&old_header)).await.is_ok());
-
-        // Rotate (re-submit email overwrites secret_hash).
-        let new_secret = gen_owner_secret(32);
-        sqlx::query("UPDATE owners SET secret_hash = ? WHERE owner_id = ?")
-            .bind(hash_secret(&new_secret))
-            .bind(&owner_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        // Old secret now 401s; new secret works.
-        assert_eq!(
-            require_owner(&pool, Some(&old_header))
-                .await
-                .unwrap_err()
-                .status,
-            axum::http::StatusCode::UNAUTHORIZED
-        );
-        let new_header = format!("Bearer {new_secret}");
-        assert_eq!(
-            require_owner(&pool, Some(&new_header)).await.unwrap(),
-            owner_id
-        );
-    }
-
-    #[tokio::test]
-    async fn non_owner_of_token_is_404_not_403() {
-        let (pool, owner_id, secret) = setup().await;
-        // Owner A's endpoint.
-        seed_endpoint(&pool, &owner_id, "tokAAAAAAA").await;
-        // Owner B.
-        let SeededOwner {
-            owner_id: b_id,
-            secret: b_secret,
-        } = seed_owner(&pool).await;
-
-        // Owner A owns it.
-        assert!(assert_owns_endpoint(&pool, "tokAAAAAAA", &owner_id)
-            .await
-            .is_ok());
-        // Owner B sees 404 (never 403) for a token that exists but is not theirs.
-        let err = assert_owns_endpoint(&pool, "tokAAAAAAA", &b_id)
-            .await
-            .unwrap_err();
-        assert_eq!(err.status, axum::http::StatusCode::NOT_FOUND);
-        assert_eq!(err.code, "not_found");
-        // A token that does not exist is also 404 (indistinguishable).
-        let err2 = assert_owns_endpoint(&pool, "doesnotexi", &owner_id)
-            .await
-            .unwrap_err();
-        assert_eq!(err2.status, axum::http::StatusCode::NOT_FOUND);
-
-        // Feed/tunnel cap gate: correct cap+token true; wrong-owner cap false.
-        assert!(verify_cap_owns_token(&pool, "tokAAAAAAA", Some(&secret)).await);
-        assert!(!verify_cap_owns_token(&pool, "tokAAAAAAA", Some(&b_secret)).await);
-        assert!(!verify_cap_owns_token(&pool, "tokAAAAAAA", None).await);
-        assert!(!verify_cap_owns_token(&pool, "tokAAAAAAA", Some("")).await);
-    }
-}
+mod tests;

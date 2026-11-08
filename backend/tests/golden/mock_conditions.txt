@@ -2,6 +2,7 @@
 status: 413
 headers:
   content-length: 83
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   x-hookbox-endpoint: <token>
   x-hookbox-plane: mock
@@ -11,6 +12,7 @@ body: {"detail":"Request body exceeds the configured limit.","error":"payload_to
 status: 413
 headers:
   content-length: 83
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   x-hookbox-endpoint: <token>
   x-hookbox-plane: mock
@@ -22,6 +24,7 @@ headers:
   access-control-allow-origin: *
   access-control-expose-headers: *
   content-length: 56
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   retry-after: <volatile>
   vary: Origin
@@ -37,6 +40,7 @@ status: 499
 headers:
   connection: close
   content-length: 0
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   x-hookbox-plane: mock
 body: <empty>
 
@@ -46,6 +50,7 @@ headers:
   access-control-allow-origin: *
   access-control-expose-headers: *
   content-length: 52
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   vary: Origin
   x-hookbox-endpoint: <token>

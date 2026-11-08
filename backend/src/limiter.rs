@@ -1,8 +1,9 @@
 //! In-memory token-bucket rate limiter — PORT of `redis_state.rate_limit_check`
 //! + the reference proportional-refill math (AC-39, AC-15, AC-11, AC-S18).
 //!
-//! Keyed `rl:<token>` / `rl:<token>:<rule_id>` (mock plane, `interceptor::engine`)
-//! or `share:<ip>` / `share:__global__` (public share resolver, `routes::share`).
+//! Keyed `rl:<token>` / `rl:<token>:<rule_id>` (mock plane, `interceptor::engine`),
+//! `share:<ip>` / `share:__global__` (public share resolver, `routes::share`)
+//! or `session:<ip>` (session mint/restore, `routes::session`).
 //! A bucket holds a fractional token count refilled proportionally to elapsed
 //! time at `limit/window` tokens/sec; each request consumes one token.
 //! Over-limit yields a `retry_after`. `limit<=0` ⇒ unlimited. The limiter

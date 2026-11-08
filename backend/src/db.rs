@@ -34,6 +34,9 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+mod migration_0004_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::testing::{memory_pool, seed_endpoint, seed_owner};
 

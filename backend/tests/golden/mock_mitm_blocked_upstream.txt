@@ -12,6 +12,7 @@ headers:
   access-control-allow-origin: *
   access-control-expose-headers: *
   content-length: 80
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   vary: Origin
   x-hookbox-endpoint: <token>

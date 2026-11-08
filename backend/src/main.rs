@@ -24,6 +24,12 @@ async fn main() -> anyhow::Result<()> {
     if cfg.path_fallback_only {
         tracing::warn!("MOCK_DOMAIN is unset/misconfigured — serving path-fallback-only mode");
     }
+    if cfg.insecure_cookie_on_public_host() {
+        tracing::warn!(
+            "APP_HOST is not localhost but the owner-key cookie is not Secure — set an \
+             https:// PUBLIC_BASE_URL (or SESSION_COOKIE_SECURE=true) when serving over TLS"
+        );
+    }
 
     // Ensure the SQLite parent directory exists before opening.
     if cfg.sqlite_path != ":memory:" {
@@ -37,9 +43,14 @@ async fn main() -> anyhow::Result<()> {
 
     // First-run demo data (AC-54): idempotent — a no-op once any endpoint exists.
     let id_len = cfg.endpoint_id_length;
+    // Never log the demo owner's key — use the `seed` bin to see it once.
     match seed::seed_if_empty(&pool, id_len).await {
-        Ok(Some((email, _secret, token))) => {
-            tracing::info!("seeded demo data: owner {email}, primary endpoint {token}");
+        Ok(Some(seeded)) => {
+            tracing::info!(
+                "seeded demo data: owner {}, primary endpoint {}",
+                seeded.owner_id,
+                seeded.token
+            );
         }
         Ok(None) => {}
         Err(e) => tracing::warn!("seed skipped ({e})"),

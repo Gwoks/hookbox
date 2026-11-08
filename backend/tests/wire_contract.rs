@@ -232,11 +232,14 @@ async fn golden_management_auth_and_not_found() {
         .send(&h.app)
         .await;
     out += &c.render("foreign or missing endpoint", "");
-    let c = Req::post("/api/session")
-        .json(json!({"email": "nope"}))
+    let c = Req::post("/api/session").send(&h.app).await;
+    out += &c.render("session mint without csrf header", "");
+    let c = Req::post("/api/session/restore")
+        .header("x-hookbox", "1")
+        .json(json!({"key": "short"}))
         .send(&h.app)
         .await;
-    out += &c.render("session invalid email", "");
+    out += &c.render("session restore malformed key", "");
     assert_golden("management_auth_and_not_found", &out);
 }
 

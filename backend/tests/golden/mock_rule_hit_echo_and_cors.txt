@@ -4,6 +4,7 @@ headers:
   access-control-allow-origin: *
   access-control-expose-headers: *
   content-length: 6
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: text/plain
   vary: Origin
   x-custom: 1
@@ -19,6 +20,7 @@ headers:
   access-control-allow-origin: *
   access-control-expose-headers: *
   content-length: 138
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   content-type: application/json
   vary: Origin
   x-hookbox-endpoint: <token>
@@ -35,6 +37,7 @@ headers:
   access-control-expose-headers: *
   access-control-max-age: 600
   content-length: 0
+  content-security-policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads
   vary: Origin
   x-hookbox-endpoint: <token>
   x-hookbox-plane: mock

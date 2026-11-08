@@ -50,13 +50,33 @@ impl ApiError {
             .with_header("www-authenticate", "Bearer")
     }
 
+    /// `403 csrf_rejected` — a cookie-authenticated (or cookie-setting) call
+    /// without `x-hookbox: 1`, or from a foreign origin. Runs before any
+    /// credential lookup, so it never reveals whether a cookie is valid.
+    pub fn csrf_rejected() -> Self {
+        ApiError::new(
+            StatusCode::FORBIDDEN,
+            "csrf_rejected",
+            "This request must come from the HookBox app.",
+        )
+    }
+
+    /// `401 invalid_key` — a recovery key that is malformed or unknown.
+    pub fn invalid_key() -> Self {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_key",
+            "That recovery key is not valid.",
+        )
+    }
+
     /// `404 not_found` — used for both "absent" and "exists-but-not-mine"
     /// (a non-owner cannot distinguish the two; never 403). §5.1.
     pub fn not_found(detail: impl Into<String>) -> Self {
         ApiError::new(StatusCode::NOT_FOUND, "not_found", detail)
     }
 
-    /// `422` validation failure (bad field / clamp / bad email).
+    /// `422` validation failure (bad field / clamp).
     pub fn validation(detail: impl Into<String>) -> Self {
         ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", detail)
     }
@@ -146,6 +166,16 @@ mod tests {
             .headers
             .iter()
             .any(|(n, v)| n.as_str() == "retry-after" && v == "7"));
+    }
+
+    #[test]
+    fn csrf_rejected_is_403_and_invalid_key_is_401() {
+        let e = ApiError::csrf_rejected();
+        assert_eq!(e.status, StatusCode::FORBIDDEN);
+        assert_eq!(e.code, "csrf_rejected");
+        let e = ApiError::invalid_key();
+        assert_eq!(e.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(e.code, "invalid_key");
     }
 
     #[test]
