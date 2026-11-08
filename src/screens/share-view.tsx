@@ -14,6 +14,7 @@ import { RotateCw } from "lucide-react";
 import { t } from "@/lib/copy";
 import { cn } from "@/lib/cn";
 import { relTime } from "@/lib/time";
+import { useCountdown } from "@/lib/hooks/use-countdown";
 import { BrandMark } from "@/components/hookbox/brand-mark";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
 import { Button } from "@/components/ui/button";
@@ -27,43 +28,16 @@ const COLUMN_GRID =
 
 export function ShareView() {
   const { code = "" } = useParams();
-  const { status, data, retryInSeconds, refresh } = useSharedFeed(code);
+  const { status, data, retryInSeconds, refresh, isHidden, isOffline } =
+    useSharedFeed(code);
   const [openRowId, setOpenRowId] = useState<number | null>(null);
-  const [isHidden, setIsHidden] = useState(
-    () => document.visibilityState === "hidden",
+  const countdown = useCountdown(
+    status === "rateLimited" ? retryInSeconds : null,
   );
-  const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
-  const [countdown, setCountdown] = useState<number | null>(null);
 
   useEffect(() => {
     document.title = t("viewer.docTitle");
   }, []);
-
-  useEffect(() => {
-    const onVis = () => setIsHidden(document.visibilityState === "hidden");
-    const onOnline = () => setIsOffline(false);
-    const onOffline = () => setIsOffline(true);
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("online", onOnline);
-    window.addEventListener("offline", onOffline);
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("online", onOnline);
-      window.removeEventListener("offline", onOffline);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (status !== "rateLimited" || retryInSeconds == null) {
-      setCountdown(null);
-      return;
-    }
-    setCountdown(retryInSeconds);
-    const interval = setInterval(() => {
-      setCountdown((c) => (c && c > 0 ? c - 1 : 0));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [status, retryInSeconds]);
 
   // AC-106's terminal state — no banner, no card, header + footer retained.
   if (status === "unavailable") {
