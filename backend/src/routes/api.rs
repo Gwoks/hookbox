@@ -26,6 +26,8 @@ use crate::helpers::{is_safe_key, validate_target_url};
 use crate::ids::{gen_owner_secret, gen_token, hash_email, hash_secret};
 use crate::models::*;
 use crate::state::AppState;
+use crate::util::json::parse_json_or;
+use crate::util::time::to_rfc3339;
 
 // --- serialization helpers ---------------------------------------------------
 
@@ -41,22 +43,6 @@ fn mock_url(state: &AppState, token: &str) -> String {
 
 fn path_url(state: &AppState, token: &str) -> String {
     format!("{}/e/{token}", state.cfg.public_base_url)
-}
-
-/// Normalize a stored TEXT timestamp to an RFC3339 string. SQLite
-/// `datetime('now')` yields `YYYY-MM-DD HH:MM:SS` (UTC, no zone); the contract
-/// is RFC3339 UTC, so we present the `T`-separated `...Z` form.
-fn to_rfc3339(value: Option<String>) -> Option<String> {
-    let v = value?;
-    let v = v.trim();
-    if v.is_empty() {
-        return None;
-    }
-    if v.contains('T') {
-        return Some(v.to_string());
-    }
-    // "2026-06-21 12:00:00" -> "2026-06-21T12:00:00Z"
-    Some(format!("{}Z", v.replacen(' ', "T", 1)))
 }
 
 fn endpoint_summary(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> EndpointSummary {
@@ -98,13 +84,6 @@ fn endpoint_detail(
     }
 }
 
-fn parse_json_value(s: Option<String>, fallback: Value) -> Value {
-    match s {
-        Some(t) if !t.is_empty() => serde_json::from_str(&t).unwrap_or(fallback),
-        _ => fallback,
-    }
-}
-
 fn rule_from_row(row: &sqlx::sqlite::SqliteRow) -> MockRule {
     let webhook: Option<String> = row.get("webhook_json");
     MockRule {
@@ -113,9 +92,9 @@ fn rule_from_row(row: &sqlx::sqlite::SqliteRow) -> MockRule {
         name: row.get("name"),
         priority: row.get("priority"),
         enabled: row.get::<i64, _>("enabled") != 0,
-        match_: parse_json_value(row.get("match_json"), json!({})),
-        response: parse_json_value(row.get("response_json"), json!({})),
-        state_writes: parse_json_value(row.get("state_writes_json"), json!([])),
+        match_: parse_json_or(row.get("match_json"), json!({})),
+        response: parse_json_or(row.get("response_json"), json!({})),
+        state_writes: parse_json_or(row.get("state_writes_json"), json!([])),
         latency_ms: row.get("latency_ms"),
         rate_limit_per_min: row.get("rate_limit_per_min"),
         chaos_mode: row.get("chaos_mode"),
@@ -869,13 +848,13 @@ async fn get_request(
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     let detail = RequestDetail {
         summary: request_summary(&row),
-        request_headers: parse_json_value(row.get("request_headers"), json!({})),
-        query_params: parse_json_value(row.get("query_params"), json!({})),
+        request_headers: parse_json_or(row.get("request_headers"), json!({})),
+        query_params: parse_json_or(row.get("query_params"), json!({})),
         request_body: row.get("request_body"),
-        response_headers: parse_json_value(row.get("response_headers"), json!({})),
+        response_headers: parse_json_or(row.get("response_headers"), json!({})),
         response_body: row.get("response_body"),
-        trace: parse_json_value(row.get("trace_json"), json!([])),
-        state_snapshot: parse_json_value(row.get("state_snapshot"), json!({})),
+        trace: parse_json_or(row.get("trace_json"), json!([])),
+        state_snapshot: parse_json_or(row.get("state_snapshot"), json!({})),
     };
     Ok(Json(detail))
 }
@@ -955,7 +934,7 @@ async fn peek_collection(
     .bind(&name)
     .fetch_optional(&state.pool)
     .await?;
-    let parsed = parse_json_value(items, json!([]));
+    let parsed = parse_json_or(items, json!([]));
     Ok(Json(json!({ "items": parsed })))
 }
 

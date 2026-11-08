@@ -11,6 +11,8 @@
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
+use crate::util::json::parse_json_or;
+
 /// Outcome of a mutation closure run inside the transaction.
 pub enum Mutation {
     /// New array + the item value to return to the caller.
@@ -45,14 +47,7 @@ pub async fn list_items(
     .bind(name)
     .fetch_optional(pool)
     .await?;
-    Ok(parse_items(items))
-}
-
-fn parse_items(s: Option<String>) -> Vec<Value> {
-    match s {
-        Some(t) if !t.is_empty() => serde_json::from_str(&t).unwrap_or_default(),
-        _ => Vec::new(),
-    }
+    Ok(parse_json_or(items, Vec::new()))
 }
 
 /// Persist a new items array for a collection inside the calling transaction.
@@ -101,7 +96,7 @@ pub async fn append_item(
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_items(current);
+    let mut items = parse_json_or(current, Vec::new());
     if items.len() >= max_items {
         tx.rollback().await.ok();
         return Ok(Mutation::TooLarge);
@@ -210,7 +205,7 @@ where
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_items(current);
+    let mut items = parse_json_or(current, Vec::new());
     match f(&mut items) {
         Mutation::Ok(new_items, ret) => {
             write_items(&mut tx, token, name, &new_items, ttl_seconds).await?;

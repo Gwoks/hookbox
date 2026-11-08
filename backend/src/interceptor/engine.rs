@@ -26,6 +26,7 @@ use crate::helpers::{self, redact, value_to_string};
 use crate::interceptor::{conditions, cors, crud, matcher, proxy, templating};
 use crate::rule_cache::{CompiledEndpoint, Resolved};
 use crate::state::AppState;
+use crate::util::time::now_iso;
 
 /// Trace step accumulated for the off-path persist.
 #[derive(Clone)]
@@ -838,10 +839,6 @@ fn spawn_trace(
         summary["id"] = json!(row_id);
         hub.publish(&token_s, FeedEvent::new("new_request", summary));
     });
-}
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
 }
 
 /// Read a value out of a JSON body via jsonpath-lite (used by tests/helpers).

@@ -67,6 +67,8 @@ use crate::models::{
 };
 use crate::routes::api::effective_client_ip;
 use crate::state::AppState;
+use crate::util::json::parse_json_or;
+use crate::util::time::to_rfc3339;
 
 /// Dropped entirely from the PUBLIC projection: internal markers that identify
 /// the endpoint or the matched rule. Prefix rule, not an enumeration, so a
@@ -120,32 +122,6 @@ fn mask_token_in_value(token: &str, value: Value) -> Value {
 /// collide with a real IP literal, but still lives in the same `share:`
 /// namespace so both are subject to the limiter's one shared eviction bound.
 const SHARE_RATE_LIMIT_GLOBAL_KEY: &str = "share:__global__";
-
-// --- small local helpers (deliberately NOT reused from routes::api, which
-// keeps this file's two upstream edits to exactly the pub(crate) visibility
-// change + the tombstone statement) --------------------------------------
-
-/// Normalize a stored TEXT timestamp to an RFC3339 string, mirroring
-/// `routes::api::to_rfc3339`. SQLite `datetime('now')` yields
-/// `YYYY-MM-DD HH:MM:SS` (UTC, no zone); the contract is RFC3339 UTC.
-fn to_rfc3339(value: Option<String>) -> Option<String> {
-    let v = value?;
-    let v = v.trim();
-    if v.is_empty() {
-        return None;
-    }
-    if v.contains('T') {
-        return Some(v.to_string());
-    }
-    Some(format!("{}Z", v.replacen(' ', "T", 1)))
-}
-
-fn parse_json_value(s: Option<String>, fallback: Value) -> Value {
-    match s {
-        Some(t) if !t.is_empty() => serde_json::from_str(&t).unwrap_or(fallback),
-        _ => fallback,
-    }
-}
 
 /// `url` is built from `PUBLIC_BASE_URL` only — never `mock_url`'s wildcard
 /// form, never `Host`/`X-Forwarded-Host` (AC-99, AC-S14). A share URL on the
@@ -309,13 +285,13 @@ fn public_request_detail(row: &SqliteRow, token: &str) -> PublicRequestDetail {
         duration_ms: row.get("duration_ms"),
         timestamp: to_rfc3339(row.get("created_at")).unwrap_or_default(),
         request_headers: filter_public_request_headers(
-            parse_json_value(row.get("request_headers"), json!({})),
+            parse_json_or(row.get("request_headers"), json!({})),
             token,
         ),
-        query_params: parse_json_value(row.get("query_params"), json!({})),
+        query_params: parse_json_or(row.get("query_params"), json!({})),
         request_body: row.get("request_body"),
         response_headers: filter_public_response_headers(
-            parse_json_value(row.get("response_headers"), json!({})),
+            parse_json_or(row.get("response_headers"), json!({})),
             token,
         ),
         response_body: row.get("response_body"),

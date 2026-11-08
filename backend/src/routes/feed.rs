@@ -23,16 +23,13 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::error::ApiError;
 use crate::feed::FeedEvent;
 use crate::state::AppState;
+use crate::util::time::now_iso;
 
 const SSE_HEARTBEAT_S: u64 = 25;
 
 #[derive(serde::Deserialize)]
 pub struct FeedQuery {
     pub cap: Option<String>,
-}
-
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
 }
 
 // --- WS ----------------------------------------------------------------------
