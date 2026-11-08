@@ -15,6 +15,7 @@ use crate::models::{Message, RequestDetail, RequestSummary};
 use crate::state::AppState;
 use crate::util::json::parse_json_or;
 use crate::util::time::to_rfc3339;
+use crate::validate::Paging;
 
 fn request_summary(row: &sqlx::sqlite::SqliteRow) -> RequestSummary {
     RequestSummary {
@@ -45,20 +46,13 @@ pub(super) async fn list_requests(
     Path(token): Path<String>,
     Query(q): Query<RequestsQuery>,
 ) -> Result<Json<Vec<RequestSummary>>, ApiError> {
-    let limit = q.limit.unwrap_or(50);
-    let offset = q.offset.unwrap_or(0);
-    if !(1..=200).contains(&limit) {
-        return Err(ApiError::validation("limit must be between 1 and 200."));
-    }
-    if offset < 0 {
-        return Err(ApiError::validation("offset must be >= 0."));
-    }
+    let paging = Paging::new(q.limit, q.offset)?;
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     let rows =
         sqlx::query("SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?")
             .bind(&token)
-            .bind(limit)
-            .bind(offset)
+            .bind(paging.limit)
+            .bind(paging.offset)
             .fetch_all(&state.pool)
             .await?;
     Ok(Json(rows.iter().map(request_summary).collect()))

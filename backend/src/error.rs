@@ -61,6 +61,16 @@ impl ApiError {
         ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", detail)
     }
 
+    /// `422 invalid_collection` — a collection name outside the safe
+    /// `^[A-Za-z0-9_-]{1,64}$` charset (§5.2 #17/#18).
+    pub fn invalid_collection() -> Self {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_collection",
+            "Invalid collection name.",
+        )
+    }
+
     /// `429 rate_limited` with `Retry-After` (and optional `X-RateLimit-*`).
     pub fn rate_limited(detail: impl Into<String>, retry_after: i64) -> Self {
         ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", detail)

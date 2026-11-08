@@ -27,7 +27,7 @@ fn mock_url(state: &AppState, token: &str) -> String {
     if state.cfg.path_fallback_only {
         // PUBLIC_BASE_URL makes this copy-pasteable (e.g.
         // `https://hookbox.example.com/e/<token>`); blank keeps it relative.
-        format!("{}/e/{token}", state.cfg.public_base_url)
+        path_url(state, token)
     } else {
         format!("https://{token}.{}", state.cfg.mock_domain)
     }

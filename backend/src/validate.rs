@@ -1,5 +1,54 @@
 //! Field validators shared by the management routes and the mock-plane stores.
 
+use crate::error::ApiError;
+
+/// `limit` when the caller sends none.
+const DEFAULT_PAGE_LIMIT: i64 = 50;
+/// Largest accepted `limit`.
+const MAX_PAGE_LIMIT: i64 = 200;
+
+/// A validated `?limit=&offset=` page of a trace list (owner #12 and the
+/// public share feed): `limit` defaults to 50 and must be 1..=200; `offset`
+/// defaults to 0 and must be >= 0. The 422 details are part of the contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Paging {
+    pub(crate) limit: i64,
+    pub(crate) offset: i64,
+}
+
+impl Paging {
+    pub(crate) fn new(limit: Option<i64>, offset: Option<i64>) -> Result<Self, ApiError> {
+        let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        let offset = offset.unwrap_or(0);
+        if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
+            return Err(ApiError::validation("limit must be between 1 and 200."));
+        }
+        if offset < 0 {
+            return Err(ApiError::validation("offset must be >= 0."));
+        }
+        Ok(Paging { limit, offset })
+    }
+}
+
+/// An Auto-CRUD collection name that passed `is_safe_key` (#17/#18); anything
+/// else is `422 invalid_collection`.
+#[derive(Debug)]
+pub(crate) struct CollectionName(String);
+
+impl CollectionName {
+    pub(crate) fn parse(raw: String) -> Result<Self, ApiError> {
+        if is_safe_key(&raw) {
+            Ok(CollectionName(raw))
+        } else {
+            Err(ApiError::invalid_collection())
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// `^[A-Za-z0-9_-]{1,64}$` — the safe charset for state keys and collection
 /// names (PORT of `is_safe_key`). Used for #17/#18 collection-name validation,
 /// Auto-CRUD path segments, and before any `endpoint_state` write.
@@ -38,6 +87,37 @@ pub(crate) fn validate_target_url(v: Option<&str>) -> Result<Option<String>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn paging_defaults_and_bounds() {
+        assert_eq!(
+            Paging::new(None, None).unwrap(),
+            Paging {
+                limit: 50,
+                offset: 0
+            }
+        );
+        assert_eq!(Paging::new(Some(1), Some(0)).unwrap().limit, 1);
+        assert_eq!(Paging::new(Some(200), Some(7)).unwrap().offset, 7);
+        let too_big = Paging::new(Some(201), None).unwrap_err();
+        assert_eq!(too_big.detail, "limit must be between 1 and 200.");
+        assert!(Paging::new(Some(0), None).is_err());
+        let negative = Paging::new(None, Some(-1)).unwrap_err();
+        assert_eq!(negative.detail, "offset must be >= 0.");
+        assert_eq!(negative.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn collection_name_parse() {
+        assert_eq!(
+            CollectionName::parse("widgets".into()).unwrap().as_str(),
+            "widgets"
+        );
+        let err = CollectionName::parse("bad name".into()).unwrap_err();
+        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(err.code, "invalid_collection");
+    }
 
     #[test]
     fn safe_key_charset() {

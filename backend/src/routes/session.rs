@@ -54,7 +54,7 @@ pub(super) async fn create_session(
     // Per-source anti-enumeration rate limit (AC-S5); fails open.
     let client_ip = effective_client_ip(connect_info, &headers);
     if let Some(retry) = session_rate_limited(&state, &client_ip) {
-        return Ok(ApiError::rate_limited("Too many session requests.", retry).into_response());
+        return Err(ApiError::rate_limited("Too many session requests.", retry));
     }
 
     let email = body

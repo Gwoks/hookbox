@@ -36,12 +36,19 @@ pub fn gen_token(length: usize) -> String {
         .collect()
 }
 
-/// CSPRNG bearer capability: `n_bytes` of entropy, base64url no-pad
-/// (mirrors Python `secrets.token_urlsafe(n_bytes)`). Default 32 ⇒ 256-bit.
-pub fn gen_owner_secret(n_bytes: usize) -> String {
+/// `n_bytes` of CSPRNG output, base64url no-pad (mirrors Python
+/// `secrets.token_urlsafe(n_bytes)`). The one generator behind every random
+/// secret/code below.
+fn random_b64url(n_bytes: usize) -> String {
     let mut buf = vec![0u8; n_bytes];
     rand::thread_rng().fill_bytes(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+}
+
+/// CSPRNG bearer capability: `n_bytes` of entropy, base64url no-pad.
+/// Default 32 ⇒ 256-bit.
+pub fn gen_owner_secret(n_bytes: usize) -> String {
+    random_b64url(n_bytes)
 }
 
 /// Non-secret owner id derived from email: `sha256(lower(trim(email)))` truncated
@@ -64,9 +71,7 @@ pub fn hash_secret(secret: &str) -> String {
 /// owner id, owner secret, endpoint name and the clock (AC-32) — it is pure
 /// randomness with no derivation. Stored only as `hash_secret(code)` (F4).
 pub fn gen_share_code(n_bytes: usize) -> String {
-    let mut buf = vec![0u8; n_bytes.max(16)]; // 128-bit floor
-    rand::thread_rng().fill_bytes(&mut buf);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    random_b64url(n_bytes.max(16)) // 128-bit floor
 }
 
 #[cfg(test)]

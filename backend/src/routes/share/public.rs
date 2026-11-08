@@ -23,6 +23,7 @@ use crate::models::{
 use crate::net::client_ip::effective_client_ip;
 use crate::state::AppState;
 use crate::util::time::to_rfc3339;
+use crate::validate::Paging;
 
 /// The rate-limit namespace, and the global-ceiling bucket key inside it
 /// (AC-S7): every per-IP key is `share:<ip>`; `share:__global__` cannot
@@ -79,6 +80,13 @@ fn check_share_rate_limit(state: &AppState, ip: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+/// Every public handler's outermost exit: the success body or ANY error
+/// (404/422/429, or a 503 bubbled from `sqlx::Error`) leaves with
+/// `Cache-Control: no-store` (AC-37).
+fn finish_public(result: Result<impl IntoResponse, ApiError>) -> Response {
+    no_store(result.into_response())
 }
 
 /// Best-effort, coalesced, off the response path (§5.2's `last_used_at`
@@ -189,14 +197,7 @@ async fn public_list_requests_inner(
     // return 422 for a live code and 404 for a dead one — a boolean
     // existence oracle that defeats AC-36.
     let q = parse_public_requests_query(raw_q)?;
-    let limit = q.limit.unwrap_or(50);
-    let offset = q.offset.unwrap_or(0);
-    if !(1..=200).contains(&limit) {
-        return Err(ApiError::validation("limit must be between 1 and 200."));
-    }
-    if offset < 0 {
-        return Err(ApiError::validation("offset must be >= 0."));
-    }
+    let paging = Paging::new(q.limit, q.offset)?;
 
     // 3. Code shape — no DB read on a malformed code.
     if !is_share_code_shape(code) {
@@ -211,8 +212,8 @@ async fn public_list_requests_inner(
     let rows =
         sqlx::query("SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?")
             .bind(&resolved.token)
-            .bind(limit)
-            .bind(offset)
+            .bind(paging.limit)
+            .bind(paging.offset)
             .fetch_all(&state.pool)
             .await?;
     let requests: Vec<PublicRequestSummary> = rows.iter().map(public_request_summary).collect();
@@ -240,10 +241,7 @@ pub(crate) async fn public_list_requests(
     Query(raw_q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     let ip = effective_client_ip(connect_info, &headers);
-    match public_list_requests_inner(&state, &ip, &code, &raw_q).await {
-        Ok(v) => no_store(v.into_response()),
-        Err(e) => no_store(e.into_response()),
-    }
+    finish_public(public_list_requests_inner(&state, &ip, &code, &raw_q).await)
 }
 
 // === #23 GET /api/share/{code}/requests/{id} (PUBLIC) =========================
@@ -303,10 +301,7 @@ pub(crate) async fn public_get_request(
     Path((code, request_id_raw)): Path<(String, String)>,
 ) -> Response {
     let ip = effective_client_ip(connect_info, &headers);
-    match public_get_request_inner(&state, &ip, &code, &request_id_raw).await {
-        Ok(v) => no_store(v.into_response()),
-        Err(e) => no_store(e.into_response()),
-    }
+    finish_public(public_get_request_inner(&state, &ip, &code, &request_id_raw).await)
 }
 
 #[cfg(test)]

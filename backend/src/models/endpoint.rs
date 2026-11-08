@@ -1,13 +1,12 @@
-//! Session, endpoint summary/detail and endpoint-create/patch shapes (§5.3).
+//! Session, endpoint summary/detail, endpoint-create, and the state /
+//! collection peek shapes (§5.3).
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // ---- Session / owner ----
-#[derive(Debug, Deserialize)]
-pub struct SessionCreate {
-    pub email: String,
-}
-
 #[derive(Debug, Serialize)]
 pub struct EndpointSummary {
     pub token: String,
@@ -34,33 +33,6 @@ pub struct EndpointCreate {
     pub name: Option<String>,
 }
 
-/// All optional → partial update. We track presence via `Option` plus, for
-/// nullable-clearing fields, `Option<Option<T>>` is overkill here; the route
-/// builds the SET clause from whichever keys are present using a manual
-/// `serde_json::Map` pass (mirrors pydantic `exclude_unset`). For typed clamp
-/// validation we still deserialize into this struct.
-#[derive(Debug, Default, Deserialize)]
-pub struct EndpointConfigPatch {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub auto_crud: Option<bool>,
-    #[serde(default)]
-    pub target_url: Option<String>,
-    #[serde(default)]
-    pub default_mode: Option<String>,
-    #[serde(default)]
-    pub latency_ms: Option<i64>,
-    #[serde(default)]
-    pub rate_limit_per_min: Option<i64>,
-    #[serde(default)]
-    pub chaos_pct: Option<i64>,
-    #[serde(default)]
-    pub chaos_mode: Option<String>, // OQ-2: "error" | "dropout"
-    #[serde(default)]
-    pub cors_enabled: Option<bool>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct EndpointDetail {
     pub token: String,
@@ -79,6 +51,21 @@ pub struct EndpointDetail {
     pub created_at: String,
     pub last_hit: Option<String>,
     pub request_count: i64,
+}
+
+// ---- Endpoint state / Auto-CRUD peek (#15, #17) ----
+
+/// `GET /api/endpoints/{token}/state` → `{"state": {key: value}}`.
+#[derive(Debug, Serialize)]
+pub struct StateResponse {
+    pub state: BTreeMap<String, String>,
+}
+
+/// `GET /api/endpoints/{token}/collections/{name}` → `{"items": [...]}` (the
+/// stored array, passed through as parsed).
+#[derive(Debug, Serialize)]
+pub struct CollectionResponse {
+    pub items: Value,
 }
 
 #[cfg(test)]
