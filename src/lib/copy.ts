@@ -541,6 +541,10 @@ export const copy = {
 
   // ── 5.9 Endpoint settings ──
   'set.title': 'Settings',
+  'set.nav.aria': 'Settings sections',
+  'set.saveBar.dirty': 'Unsaved changes',
+  'set.saveBar.clean': 'All changes saved',
+  'set.discard': 'Discard',
   'set.loading.aria': 'Loading settings',
   'set.error.title': "Couldn't load settings",
   'set.error.retry': 'Retry',
