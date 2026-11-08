@@ -126,7 +126,7 @@ pub(crate) fn strip_forward_headers(
 ///
 /// Shared by the two independent token-disclosure masks that must never
 /// drift apart again (`routes::share::projection::mask_token_in_value` and
-/// `interceptor::engine::redact_echo_persisted_headers`, hookbox-mun.37 /
+/// `interceptor::engine::echo::redact_echo_persisted_headers`, hookbox-mun.37 /
 /// hookbox-mun.38): a case-SENSITIVE `str::contains` lets a case-folded
 /// token survive both filters, because nginx's `$host` variable is
 /// documented as returning its value in lowercase, so the near-universal

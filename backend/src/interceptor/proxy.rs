@@ -31,11 +31,13 @@ pub struct ProxyResponse {
 }
 
 /// Why a forward failed (mapped to the §5.5 status by the engine).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProxyError {
     /// SSRF block / connection / DNS error → 502 upstream_unreachable.
+    #[error("upstream unreachable: {0}")]
     Unreachable(String),
     /// Timeout → 504 upstream_timeout.
+    #[error("upstream timed out")]
     Timeout,
 }
 
@@ -84,6 +86,13 @@ fn safe_response_headers(resp: &reqwest::Response) -> Vec<(String, String)> {
         .collect()
 }
 
+/// One request hop: where, how, and with what body.
+struct Hop {
+    url: Url,
+    method: String,
+    body: Vec<u8>,
+}
+
 /// Forward an unmatched request to `target_url`. Returns the captured upstream
 /// response, or a `ProxyError` the engine maps to 502/504.
 pub async fn forward(
@@ -101,100 +110,135 @@ pub async fn forward(
             "no upstream target configured".into(),
         ));
     }
-    let redirects_allowed = if cfg.mitm_follow_redirects {
+    let fwd_headers = strip_forward_headers(headers_lower);
+    let mut hop = Hop {
+        url: build_target_url(target_url, mock_path, query)?,
+        method: method.to_ascii_uppercase(),
+        body: body.to_vec(),
+    };
+    let mut redirects_left = if cfg.mitm_follow_redirects {
         cfg.mitm_max_redirects
     } else {
         0
     };
-    let fwd_headers = strip_forward_headers(headers_lower);
-
-    let mut current_url = build_target_url(target_url, mock_path, query)?;
-    let mut current_method = method.to_ascii_uppercase();
-    let mut current_body = body.to_vec();
-    let mut redirects_left = redirects_allowed;
-
     loop {
-        let host = current_url
-            .host_str()
-            .ok_or_else(|| ProxyError::Unreachable("target has no host".into()))?
-            .to_string();
-        let port = current_url
-            .port_or_known_default()
-            .ok_or_else(|| ProxyError::Unreachable("target has no port".into()))?;
-
-        // SSRF guard on every resolved IP; PIN to the validated address.
-        let validated = resolve_and_check(&host, cfg.mitm_allow_private)
-            .map_err(|e| ProxyError::Unreachable(e.0))?;
-        let pinned = std::net::SocketAddr::new(validated[0], port);
-
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(cfg.mitm_timeout_s))
-            .redirect(reqwest::redirect::Policy::none()) // we re-validate each hop
-            .resolve(&host, pinned) // pin DNS to the validated IP (no rebinding)
-            .build()
-            .map_err(|e| ProxyError::Unreachable(format!("client build: {e}")))?;
-
-        let m = reqwest::Method::from_bytes(current_method.as_bytes())
-            .map_err(|_| ProxyError::Unreachable("bad method".into()))?;
-        let mut req = client.request(m, current_url.clone());
-        for (k, v) in &fwd_headers {
-            req = req.header(k, v);
-        }
-        if !current_body.is_empty() {
-            req = req.body(current_body.clone());
-        }
-
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(e) if e.is_timeout() => return Err(ProxyError::Timeout),
-            Err(e) => return Err(ProxyError::Unreachable(format!("{e}"))),
-        };
-
-        let status = resp.status();
+        let resp = send(cfg, &hop, &fwd_headers).await?;
         // Manual redirect handling so each hop is re-validated (AC-S4 redirects).
-        if status.is_redirection() && redirects_left > 0 {
-            if let Some(loc) = resp
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-            {
+        if redirects_left > 0 {
+            if let Some(next) = next_hop(&hop, &resp)? {
                 redirects_left -= 1;
-                current_url = current_url
-                    .join(loc)
-                    .map_err(|e| ProxyError::Unreachable(format!("bad redirect: {e}")))?;
-                let code = status.as_u16();
-                if (code == 301 || code == 302 || code == 303)
-                    && current_method != "GET"
-                    && current_method != "HEAD"
-                {
-                    current_method = "GET".into();
-                    current_body.clear();
-                } else {
-                    current_body.clear();
-                }
+                hop = next;
                 continue;
             }
         }
-
-        let out_status = status.as_u16();
-        let mut out_headers = safe_response_headers(&resp);
-        let full = resp
-            .bytes()
-            .await
-            .map_err(|e| ProxyError::Unreachable(format!("read body: {e}")))?;
-        let mut body = full.to_vec();
-        let truncated = body.len() > cfg.mitm_max_body_bytes;
-        if truncated {
-            body.truncate(cfg.mitm_max_body_bytes);
-            out_headers.push(("X-HookBox-Truncated".into(), "true".into()));
-        }
-        return Ok(ProxyResponse {
-            status: out_status,
-            headers: out_headers,
-            body,
-            truncated,
-        });
+        return read_capped(resp, cfg).await;
     }
+}
+
+/// A client for one hop whose DNS is PINNED to the SSRF-validated address of
+/// `url`'s host (no second resolution at connect time, so no rebinding);
+/// `Host` / TLS SNI still carry the original hostname. Redirects are off —
+/// `forward` re-validates each hop itself.
+fn pinned_client(cfg: &Config, url: &Url) -> Result<reqwest::Client, ProxyError> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| ProxyError::Unreachable("target has no host".into()))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| ProxyError::Unreachable("target has no port".into()))?;
+    // SSRF guard on every resolved IP; PIN to the validated address.
+    let validated = resolve_and_check(host, cfg.mitm_allow_private)
+        .map_err(|e| ProxyError::Unreachable(e.0))?;
+    let ip = validated
+        .first()
+        .copied()
+        .ok_or_else(|| ProxyError::Unreachable("target resolved to no address".into()))?;
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(cfg.mitm_timeout_s))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(host, std::net::SocketAddr::new(ip, port))
+        .build()
+        .map_err(|e| ProxyError::Unreachable(format!("client build: {e}")))
+}
+
+/// Send one hop (timeout → 504, anything else → 502).
+async fn send(
+    cfg: &Config,
+    hop: &Hop,
+    headers: &BTreeMap<String, String>,
+) -> Result<reqwest::Response, ProxyError> {
+    let client = pinned_client(cfg, &hop.url)?;
+    let method = reqwest::Method::from_bytes(hop.method.as_bytes())
+        .map_err(|_| ProxyError::Unreachable("bad method".into()))?;
+    let mut req = client.request(method, hop.url.clone());
+    for (k, v) in headers {
+        req = req.header(k, v);
+    }
+    if !hop.body.is_empty() {
+        req = req.body(hop.body.clone());
+    }
+    req.send().await.map_err(|e| {
+        if e.is_timeout() {
+            ProxyError::Timeout
+        } else {
+            ProxyError::Unreachable(format!("{e}"))
+        }
+    })
+}
+
+/// The hop a redirect response points to, if it is one with a `Location`.
+/// The body is always dropped; 301/302/303 also turn a non-GET/HEAD into a
+/// GET.
+fn next_hop(hop: &Hop, resp: &reqwest::Response) -> Result<Option<Hop>, ProxyError> {
+    let status = resp.status();
+    if !status.is_redirection() {
+        return Ok(None);
+    }
+    let Some(location) = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return Ok(None);
+    };
+    let url = hop
+        .url
+        .join(location)
+        .map_err(|e| ProxyError::Unreachable(format!("bad redirect: {e}")))?;
+    let see_other = matches!(status.as_u16(), 301..=303);
+    let method = if see_other && hop.method != "GET" && hop.method != "HEAD" {
+        "GET".to_string()
+    } else {
+        hop.method.clone()
+    };
+    Ok(Some(Hop {
+        url,
+        method,
+        body: Vec::new(),
+    }))
+}
+
+/// Capture the upstream status, safe headers and body, capped at
+/// `mitm_max_body_bytes` (+ `X-HookBox-Truncated: true`).
+async fn read_capped(resp: reqwest::Response, cfg: &Config) -> Result<ProxyResponse, ProxyError> {
+    let status = resp.status().as_u16();
+    let mut headers = safe_response_headers(&resp);
+    let full = resp
+        .bytes()
+        .await
+        .map_err(|e| ProxyError::Unreachable(format!("read body: {e}")))?;
+    let mut body = full.to_vec();
+    let truncated = body.len() > cfg.mitm_max_body_bytes;
+    if truncated {
+        body.truncate(cfg.mitm_max_body_bytes);
+        headers.push(("X-HookBox-Truncated".into(), "true".into()));
+    }
+    Ok(ProxyResponse {
+        status,
+        headers,
+        body,
+        truncated,
+    })
 }
 
 #[cfg(test)]

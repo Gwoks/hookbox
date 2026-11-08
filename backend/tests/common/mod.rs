@@ -161,6 +161,32 @@ pub async fn call_with(
     (status, v, headers)
 }
 
+/// An owner-authenticated request with a verbatim body and `content-type`
+/// (for malformed / non-JSON bodies `call` cannot express).
+pub async fn call_raw(
+    app: &Router,
+    method: &str,
+    path: &str,
+    secret: &str,
+    content_type: &str,
+    body: &'static str,
+) -> Reply {
+    let req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", APP_HOST)
+        .header("authorization", format!("Bearer {secret}"))
+        .header("content-type", content_type)
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, v, headers)
+}
+
 /// Create an endpoint for `secret`'s owner; returns its token.
 pub async fn new_endpoint(app: &Router, secret: &str) -> String {
     let (s, body, _) = call(

@@ -1,7 +1,77 @@
-//! The trace write path over `request_logs` (AC-46/47/57): one INSERT plus
-//! the write-time per-token cap prune, run off the response path.
+//! `request_logs` (traces): the typed trace row and its reads, plus the
+//! write path (AC-46/47/57) — one INSERT and the write-time per-token cap
+//! prune, run off the response path.
 
 use sqlx::SqlitePool;
+
+use crate::validate::Paging;
+
+/// One stored trace. The header/query/trace/state columns are JSON TEXT,
+/// parsed leniently by the presenters.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct RequestRow {
+    pub(crate) id: i64,
+    pub(crate) token: String,
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) status_code: i64,
+    pub(crate) served_by: String,
+    pub(crate) matched_rule_id: Option<i64>,
+    pub(crate) duration_ms: i64,
+    pub(crate) overhead_ms: i64,
+    pub(crate) request_headers: Option<String>,
+    pub(crate) query_params: Option<String>,
+    pub(crate) request_body: Option<String>,
+    pub(crate) response_headers: Option<String>,
+    pub(crate) response_body: Option<String>,
+    pub(crate) trace_json: Option<String>,
+    pub(crate) state_snapshot: Option<String>,
+    pub(crate) created_at: String,
+}
+
+/// One page of `token`'s traces, newest first.
+pub(crate) async fn page(
+    pool: &SqlitePool,
+    token: &str,
+    paging: Paging,
+) -> Result<Vec<RequestRow>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?")
+        .bind(token)
+        .bind(paging.limit)
+        .bind(paging.offset)
+        .fetch_all(pool)
+        .await
+}
+
+/// Trace `id`, whatever endpoint it belongs to (the caller checks ownership).
+pub(crate) async fn find(pool: &SqlitePool, id: i64) -> Result<Option<RequestRow>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM request_logs WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Delete every trace on `token` (management #14).
+pub(crate) async fn clear(pool: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM request_logs WHERE token = ?")
+        .bind(token)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Trace `id`, only if it belongs to `token` (scoped in the same statement).
+pub(crate) async fn find_in(
+    pool: &SqlitePool,
+    token: &str,
+    id: i64,
+) -> Result<Option<RequestRow>, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM request_logs WHERE id = ? AND token = ?")
+        .bind(id)
+        .bind(token)
+        .fetch_optional(pool)
+        .await
+}
 
 /// A trace record to persist off the response path (AC-46/47/57). Bodies are
 /// already truncated to `MAX_BODY_BYTES` and headers already redacted by the

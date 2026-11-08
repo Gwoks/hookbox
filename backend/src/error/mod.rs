@@ -12,6 +12,12 @@ use serde_json::json;
 
 use crate::net::headers::try_header;
 
+mod api_json;
+mod code;
+
+pub use api_json::ApiJson;
+pub use code::ErrorCode;
+
 /// Internal error type, converted to the flat JSON envelope on response.
 ///
 /// `code` is the stable machine string (e.g. `"unauthorized"`, `"not_found"`),
@@ -21,16 +27,16 @@ use crate::net::headers::try_header;
 #[derive(Debug, Clone)]
 pub struct ApiError {
     pub status: StatusCode,
-    pub code: String,
+    pub code: ErrorCode,
     pub detail: String,
     pub headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl ApiError {
-    pub fn new(status: StatusCode, code: impl Into<String>, detail: impl Into<String>) -> Self {
+    pub fn new(status: StatusCode, code: ErrorCode, detail: impl Into<String>) -> Self {
         ApiError {
             status,
-            code: code.into(),
+            code,
             detail: detail.into(),
             headers: Vec::new(),
         }
@@ -46,7 +52,7 @@ impl ApiError {
 
     /// `401 unauthorized` + `WWW-Authenticate: Bearer` (§5.1).
     pub fn unauthorized(detail: impl Into<String>) -> Self {
-        ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized", detail)
+        ApiError::new(StatusCode::UNAUTHORIZED, ErrorCode::Unauthorized, detail)
             .with_header("www-authenticate", "Bearer")
     }
 
@@ -56,7 +62,7 @@ impl ApiError {
     pub fn csrf_rejected() -> Self {
         ApiError::new(
             StatusCode::FORBIDDEN,
-            "csrf_rejected",
+            ErrorCode::CsrfRejected,
             "This request must come from the HookBox app.",
         )
     }
@@ -65,7 +71,7 @@ impl ApiError {
     pub fn invalid_key() -> Self {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
-            "invalid_key",
+            ErrorCode::InvalidKey,
             "That recovery key is not valid.",
         )
     }
@@ -73,12 +79,26 @@ impl ApiError {
     /// `404 not_found` — used for both "absent" and "exists-but-not-mine"
     /// (a non-owner cannot distinguish the two; never 403). §5.1.
     pub fn not_found(detail: impl Into<String>) -> Self {
-        ApiError::new(StatusCode::NOT_FOUND, "not_found", detail)
+        ApiError::new(StatusCode::NOT_FOUND, ErrorCode::NotFound, detail)
+    }
+
+    /// `410 endpoint_gone` — the endpoint was deleted (tombstoned). The mock
+    /// plane and the owner routes share this exact body.
+    pub fn endpoint_gone() -> Self {
+        ApiError::new(
+            StatusCode::GONE,
+            ErrorCode::EndpointGone,
+            "This endpoint was deleted or expired.",
+        )
     }
 
     /// `422` validation failure (bad field / clamp).
     pub fn validation(detail: impl Into<String>) -> Self {
-        ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "validation_error", detail)
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCode::ValidationError,
+            detail,
+        )
     }
 
     /// `422 invalid_collection` — a collection name outside the safe
@@ -86,20 +106,24 @@ impl ApiError {
     pub fn invalid_collection() -> Self {
         ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_collection",
+            ErrorCode::InvalidCollection,
             "Invalid collection name.",
         )
     }
 
     /// `429 rate_limited` with `Retry-After` (and optional `X-RateLimit-*`).
     pub fn rate_limited(detail: impl Into<String>, retry_after: i64) -> Self {
-        ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", detail)
-            .with_header("retry-after", retry_after.to_string())
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::RateLimited,
+            detail,
+        )
+        .with_header("retry-after", retry_after.to_string())
     }
 
     /// The flat JSON body value `{"error": <code>, "detail": <detail>}`.
     pub fn body(&self) -> serde_json::Value {
-        json!({ "error": self.code, "detail": self.detail })
+        json!({ "error": self.code.as_str(), "detail": self.detail })
     }
 }
 
@@ -128,7 +152,7 @@ impl From<sqlx::Error> for ApiError {
         tracing::error!("sqlite error: {e}");
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            "store_unavailable",
+            ErrorCode::StoreUnavailable,
             "The data store is temporarily unavailable. Please try again.",
         )
     }

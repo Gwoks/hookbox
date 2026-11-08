@@ -4,9 +4,8 @@
 /// `datetime('now')` yields `YYYY-MM-DD HH:MM:SS` (UTC, no zone); the contract
 /// is RFC3339 UTC, so we present the `T`-separated `...Z` form. A value that
 /// already contains a `T` is passed through; blank/absent is `None`.
-pub(crate) fn to_rfc3339(value: Option<String>) -> Option<String> {
-    let v = value?;
-    let v = v.trim();
+pub(crate) fn to_rfc3339(value: Option<&str>) -> Option<String> {
+    let v = value?.trim();
     if v.is_empty() {
         return None;
     }
@@ -15,6 +14,11 @@ pub(crate) fn to_rfc3339(value: Option<String>) -> Option<String> {
     }
     // "2026-06-21 12:00:00" -> "2026-06-21T12:00:00Z"
     Some(format!("{}Z", v.replacen(' ', "T", 1)))
+}
+
+/// `to_rfc3339` for a NOT NULL column: blank renders as `""`.
+pub(crate) fn rfc3339(value: &str) -> String {
+    to_rfc3339(Some(value)).unwrap_or_default()
 }
 
 /// The current UTC instant as RFC3339 with microseconds and a `Z` suffix —
@@ -31,7 +35,7 @@ mod tests {
     #[test]
     fn sqlite_datetime_becomes_rfc3339_utc() {
         assert_eq!(
-            to_rfc3339(Some("2026-06-21 12:00:00".into())),
+            to_rfc3339(Some("2026-06-21 12:00:00")),
             Some("2026-06-21T12:00:00Z".into())
         );
     }
@@ -39,7 +43,7 @@ mod tests {
     #[test]
     fn already_rfc3339_passes_through_trimmed() {
         assert_eq!(
-            to_rfc3339(Some(" 2026-06-21T12:00:00Z ".into())),
+            to_rfc3339(Some(" 2026-06-21T12:00:00Z ")),
             Some("2026-06-21T12:00:00Z".into())
         );
     }
@@ -47,7 +51,7 @@ mod tests {
     #[test]
     fn blank_or_absent_is_none() {
         assert_eq!(to_rfc3339(None), None);
-        assert_eq!(to_rfc3339(Some("   ".into())), None);
+        assert_eq!(to_rfc3339(Some("   ")), None);
     }
 
     #[test]

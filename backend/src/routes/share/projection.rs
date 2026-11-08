@@ -4,12 +4,12 @@
 //! share viewer — storage, the owner Inspector and F5's CSV stay verbatim.
 
 use serde_json::{json, Value};
-use sqlx::{sqlite::SqliteRow, Row};
 
 use crate::models::{PublicRequestDetail, PublicRequestSummary};
 use crate::net::headers::{contains_ci, REDACTED, TOKEN_BEARING_REQUEST_HEADERS};
+use crate::repo::requests::RequestRow;
 use crate::util::json::parse_json_or;
-use crate::util::time::to_rfc3339;
+use crate::util::time::rfc3339;
 
 /// Dropped entirely from the PUBLIC projection: internal markers that identify
 /// the endpoint or the matched rule. Prefix rule, not an enumeration, so a
@@ -39,7 +39,7 @@ const PUBLIC_RESPONSE_HEADER_REDACT: [&str; 5] = [
 /// documented as lowercase, so a case-sensitive `contains` let a
 /// case-folded token survive verbatim. The `response_body` column is NOT
 /// filtered here at all (§5.11) — that channel is closed on the persist path
-/// instead, in `interceptor::engine::redact_echo_persisted_headers`, which
+/// instead, in `interceptor::engine::echo::redact_echo_persisted_headers`, which
 /// shares this exact case-insensitive comparison via `contains_ci`
 /// so the two can never drift apart again (hookbox-mun.37).
 fn mask_token_in_value(token: &str, value: Value) -> Value {
@@ -103,41 +103,41 @@ fn filter_public_request_headers(raw: Value, token: &str) -> Value {
     Value::Object(out)
 }
 
-pub(super) fn public_request_summary(row: &SqliteRow) -> PublicRequestSummary {
+pub(super) fn public_request_summary(row: &RequestRow) -> PublicRequestSummary {
     PublicRequestSummary {
-        id: row.get("id"),
-        method: row.get("method"),
-        path: row.get("path"),
-        status_code: row.get("status_code"),
-        served_by: row.get("served_by"),
-        duration_ms: row.get("duration_ms"),
-        timestamp: to_rfc3339(row.get("created_at")).unwrap_or_default(),
+        id: row.id,
+        method: row.method.clone(),
+        path: row.path.clone(),
+        status_code: row.status_code,
+        served_by: row.served_by.clone(),
+        duration_ms: row.duration_ms,
+        timestamp: rfc3339(&row.created_at),
     }
 }
 
 /// `token` is the resolved share row's OWN endpoint token (never taken from
 /// the caller) — used only to mask its own reappearance in the projection
 /// (AC-43, AC-S2).
-pub(super) fn public_request_detail(row: &SqliteRow, token: &str) -> PublicRequestDetail {
+pub(super) fn public_request_detail(row: &RequestRow, token: &str) -> PublicRequestDetail {
     PublicRequestDetail {
-        id: row.get("id"),
-        method: row.get("method"),
-        path: row.get("path"),
-        status_code: row.get("status_code"),
-        served_by: row.get("served_by"),
-        duration_ms: row.get("duration_ms"),
-        timestamp: to_rfc3339(row.get("created_at")).unwrap_or_default(),
+        id: row.id,
+        method: row.method.clone(),
+        path: row.path.clone(),
+        status_code: row.status_code,
+        served_by: row.served_by.clone(),
+        duration_ms: row.duration_ms,
+        timestamp: rfc3339(&row.created_at),
         request_headers: filter_public_request_headers(
-            parse_json_or(row.get("request_headers"), json!({})),
+            parse_json_or(row.request_headers.as_deref(), json!({})),
             token,
         ),
-        query_params: parse_json_or(row.get("query_params"), json!({})),
-        request_body: row.get("request_body"),
+        query_params: parse_json_or(row.query_params.as_deref(), json!({})),
+        request_body: row.request_body.clone(),
         response_headers: filter_public_response_headers(
-            parse_json_or(row.get("response_headers"), json!({})),
+            parse_json_or(row.response_headers.as_deref(), json!({})),
             token,
         ),
-        response_body: row.get("response_body"),
+        response_body: row.response_body.clone(),
     }
 }
 

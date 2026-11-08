@@ -3,4 +3,5 @@
 
 pub(crate) mod client_ip;
 pub(crate) mod headers;
+pub(crate) mod query;
 pub mod ws;

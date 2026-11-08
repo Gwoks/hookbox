@@ -1,6 +1,16 @@
-//! Field validators shared by the management routes and the mock-plane stores.
+//! Field validators shared by the management routes and the mock-plane
+//! stores, plus the `PatchObject` reader the PATCH routes parse through.
 
 use crate::error::ApiError;
+
+mod fields;
+mod patch;
+
+pub(crate) use fields::{
+    chaos_mode, clamp_to, default_mode, endpoint_name, priority, response_spec, rule_name,
+    CHAOS_MODE_MSG, DEFAULT_MODE_MSG, NAME_TYPE_MSG,
+};
+pub(crate) use patch::PatchObject;
 
 /// `limit` when the caller sends none.
 const DEFAULT_PAGE_LIMIT: i64 = 50;
@@ -59,6 +69,20 @@ pub(crate) fn is_safe_key(key: &str) -> bool {
     }
     key.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Longest accepted share-link label (characters, after trimming).
+const SHARE_LABEL_MAX_CHARS: usize = 80;
+
+/// A share-link label: trimmed; blank (or absent) is `None`.
+pub(crate) fn share_label(raw: Option<&str>) -> Result<Option<String>, ApiError> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(t) if t.chars().count() > SHARE_LABEL_MAX_CHARS => {
+            Err(ApiError::validation("label must be at most 80 characters."))
+        }
+        Some(t) => Ok(Some(t.to_string())),
+    }
 }
 
 /// Validate a MITM `target_url`: http(s) scheme with a host, else error
@@ -129,6 +153,16 @@ mod tests {
         assert!(!is_safe_key("has space"));
         assert!(!is_safe_key("dots.here"));
         assert!(!is_safe_key("slash/here"));
+    }
+
+    #[test]
+    fn share_label_trims_blanks_and_caps() {
+        assert_eq!(share_label(None).unwrap(), None);
+        assert_eq!(share_label(Some("   ")).unwrap(), None);
+        assert_eq!(share_label(Some(" hi ")).unwrap(), Some("hi".to_string()));
+        assert!(share_label(Some(&"x".repeat(80))).is_ok());
+        let err = share_label(Some(&"x".repeat(81))).unwrap_err();
+        assert_eq!(err.detail, "label must be at most 80 characters.");
     }
 
     #[test]

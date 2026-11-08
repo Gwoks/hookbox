@@ -147,7 +147,7 @@ pub async fn sse_handler(
     if state.feed_hub.subscriber_count(&token) as i64 >= state.cfg.ws_max_conn_per_endpoint {
         return ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "too_many_connections",
+            crate::error::ErrorCode::TooManyConnections,
             "Too many feed connections.",
         )
         .into_response();

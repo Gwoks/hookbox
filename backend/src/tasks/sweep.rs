@@ -16,6 +16,7 @@ use sqlx::SqlitePool;
 
 use crate::config::Config;
 use crate::limiter::Limiter;
+use crate::repo::retention;
 
 /// Run one sweep pass. Returned tuple is `(traces_pruned, state_reaped,
 /// crud_reaped, tombstones_reaped)` for observability/tests.
@@ -23,50 +24,14 @@ pub async fn sweep_once(
     pool: &SqlitePool,
     cfg: &Config,
 ) -> Result<(u64, u64, u64, u64), sqlx::Error> {
-    // (a) TTL prune of traces past TRACE_TTL_HOURS.
-    let ttl = format!("-{} hours", cfg.trace_ttl_hours);
-    let traces_ttl = sqlx::query("DELETE FROM request_logs WHERE created_at < datetime('now', ?)")
-        .bind(&ttl)
-        .execute(pool)
-        .await?
-        .rows_affected();
-
-    // (a) per-token cap prune (newest TRACE_CAP per token).
-    let cap_pruned = sqlx::query(
-        "DELETE FROM request_logs
-         WHERE id NOT IN (
-             SELECT id FROM (
-                 SELECT id, ROW_NUMBER() OVER (PARTITION BY token ORDER BY id DESC) AS rn
-                 FROM request_logs
-             ) WHERE rn <= ?
-         )",
-    )
-    .bind(cfg.trace_cap)
-    .execute(pool)
-    .await?
-    .rows_affected();
-
+    // (a) TTL prune of traces past TRACE_TTL_HOURS, then the per-token cap.
+    let traces_ttl = retention::prune_traces_older_than(pool, cfg.trace_ttl_hours).await?;
+    let cap_pruned = retention::cap_traces_per_token(pool, cfg.trace_cap).await?;
     // (b) expired state + crud.
-    let state_reaped =
-        sqlx::query("DELETE FROM endpoint_state WHERE expires_at <= datetime('now')")
-            .execute(pool)
-            .await?
-            .rows_affected();
-    let crud_reaped =
-        sqlx::query("DELETE FROM crud_collections WHERE expires_at <= datetime('now')")
-            .execute(pool)
-            .await?
-            .rows_affected();
-
+    let state_reaped = retention::reap_expired_state(pool).await?;
+    let crud_reaped = retention::reap_expired_crud(pool).await?;
     // (c) tombstones older than GONE_TTL_HOURS -> hard delete (token degrades to 404).
-    let gone_ttl = format!("-{} hours", cfg.gone_ttl_hours);
-    let tombstones = sqlx::query(
-        "DELETE FROM endpoints WHERE gone_at IS NOT NULL AND gone_at < datetime('now', ?)",
-    )
-    .bind(&gone_ttl)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let tombstones = retention::reap_tombstones_older_than(pool, cfg.gone_ttl_hours).await?;
 
     Ok((
         traces_ttl + cap_pruned,

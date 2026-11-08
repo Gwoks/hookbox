@@ -3,14 +3,63 @@
 //! sample traces so a fresh dashboard lands populated. Idempotent: a no-op when
 //! any endpoint already exists.
 
-use serde_json::json;
 use sqlx::SqlitePool;
 
 use crate::ids::{gen_owner_id, gen_owner_secret, gen_token, hash_secret};
-use crate::repo::owners;
+use crate::models::{MatchCriteria, MockRuleCreate, ResponseSpec};
+use crate::repo::endpoints::{self, NewEndpoint};
+use crate::repo::requests::{insert_trace, TraceRecord};
+use crate::repo::{owners, rules};
 
 /// Entropy of the demo owner's key (the `OWNER_SECRET_BYTES` floor).
 const DEMO_KEY_BYTES: usize = 32;
+
+/// Write-time trace cap for the seeded traces (well above the two planted).
+const DEMO_TRACE_CAP: i64 = 100;
+
+/// The demo rule: GET /hello -> 200 {"hello":"world"} with a template tag.
+fn demo_rule() -> MockRuleCreate {
+    MockRuleCreate {
+        name: Some("Hello rule".to_string()),
+        priority: 100,
+        enabled: true,
+        r#match: MatchCriteria {
+            method: "GET".to_string(),
+            path: "/hello".to_string(),
+            ..MatchCriteria::default()
+        },
+        response: ResponseSpec {
+            body_template: "{\"hello\":\"world\",\"at\":\"{{now 'iso'}}\"}".to_string(),
+            ..ResponseSpec::default()
+        },
+        state_writes: Vec::new(),
+        latency_ms: None,
+        rate_limit_per_min: None,
+        chaos_mode: None,
+        webhook_action: None,
+    }
+}
+
+/// A sample `GET <path>` trace served by `served_by` (`n` scales timings).
+fn demo_trace(token: &str, path: &str, served_by: &str, n: i64) -> TraceRecord {
+    TraceRecord {
+        token: token.to_string(),
+        method: "GET".to_string(),
+        path: path.to_string(),
+        status_code: 200,
+        served_by: served_by.to_string(),
+        matched_rule_id: None,
+        duration_ms: n * 2,
+        overhead_ms: n,
+        request_headers: "{}".to_string(),
+        query_params: "{}".to_string(),
+        request_body: None,
+        response_headers: "{}".to_string(),
+        response_body: None,
+        trace_json: "[]".to_string(),
+        state_snapshot: "{}".to_string(),
+    }
+}
 
 /// What a first-run seed planted. `key` is the demo owner's recovery key —
 /// a live credential, so callers must only ever show it to the operator
@@ -27,10 +76,7 @@ pub async fn seed_if_empty(
     pool: &SqlitePool,
     id_len: usize,
 ) -> Result<Option<SeededOwner>, sqlx::Error> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM endpoints")
-        .fetch_one(pool)
-        .await?;
-    if count > 0 {
+    if endpoints::any_exist(pool).await? {
         return Ok(None);
     }
 
@@ -39,49 +85,26 @@ pub async fn seed_if_empty(
     owners::insert(pool, &owner_id, &hash_secret(&key)).await?;
 
     let token = gen_token(id_len);
-    sqlx::query(
-        "INSERT INTO endpoints (token, owner_id, name, auto_crud) VALUES (?, ?, 'Demo API', 1)",
-    )
-    .bind(&token)
-    .bind(&owner_id)
-    .execute(pool)
-    .await?;
-
-    // A demo rule: GET /hello -> 200 {"hello":"world"} with a template tag.
-    let match_json = json!({"method":"GET","path":"/hello"}).to_string();
-    let response_json = json!({
-        "status_code": 200,
-        "content_type": "application/json",
-        "body_template": "{\"hello\":\"world\",\"at\":\"{{now 'iso'}}\"}",
-        "headers": {}
-    })
-    .to_string();
-    sqlx::query(
-        "INSERT INTO mock_rules (token, name, priority, enabled, match_json, response_json, state_writes_json)
-         VALUES (?, 'Hello rule', 100, 1, ?, ?, '[]')",
-    )
-    .bind(&token)
-    .bind(&match_json)
-    .bind(&response_json)
-    .execute(pool)
-    .await?;
+    let endpoint = NewEndpoint {
+        token: &token,
+        owner_id: &owner_id,
+        name: Some("Demo API"),
+        auto_crud: true,
+    };
+    endpoints::insert(pool, &endpoint).await?;
+    rules::insert(pool, &token, &demo_rule()).await?;
 
     // A couple of sample traces so the first-run feed is populated.
-    for (i, (path, sb)) in [("/hello", "rule"), ("/widgets", "crud")]
-        .iter()
+    for (i, (path, served_by)) in [("/hello", "rule"), ("/widgets", "crud")]
+        .into_iter()
         .enumerate()
     {
-        sqlx::query(
-            "INSERT INTO request_logs (token, method, path, status_code, served_by, duration_ms, overhead_ms,
-                 request_headers, query_params, response_headers, trace_json, state_snapshot)
-             VALUES (?, 'GET', ?, 200, ?, ?, ?, '{}', '{}', '{}', '[]', '{}')",
+        let n = i as i64 + 1;
+        insert_trace(
+            pool,
+            &demo_trace(&token, path, served_by, n),
+            DEMO_TRACE_CAP,
         )
-        .bind(&token)
-        .bind(path)
-        .bind(sb)
-        .bind((i as i64 + 1) * 2)
-        .bind(i as i64 + 1)
-        .execute(pool)
         .await?;
     }
 

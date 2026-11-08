@@ -29,7 +29,7 @@
 //!     here (§5.11) — the third channel (hookbox-mun.36) was a
 //!     `default_mode = "echo"` row's persisted `headers` sub-object carrying
 //!     the same host/origin/referer verbatim; that is closed on the persist
-//!     path instead, in `interceptor::engine::redact_echo_persisted_headers`,
+//!     path instead, in `interceptor::engine::echo::redact_echo_persisted_headers`,
 //!     so this module's projection never needs to know about body-shaped data.
 //!   * **One 404 for every negative outcome.** `share_not_found()` is the
 //!     ONLY 404 the public resolver may emit — unknown code, revoked code,

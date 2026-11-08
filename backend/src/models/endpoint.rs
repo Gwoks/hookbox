@@ -6,6 +6,26 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::Config;
+use crate::repo::endpoints::EndpointRow;
+use crate::util::time::{rfc3339, to_rfc3339};
+
+/// The copy-pasteable mock URL: the wildcard host, or the path fallback when
+/// `PATH_FALLBACK_ONLY` is set.
+fn mock_url(cfg: &Config, token: &str) -> String {
+    if cfg.path_fallback_only {
+        // PUBLIC_BASE_URL makes this copy-pasteable (e.g.
+        // `https://hookbox.example.com/e/<token>`); blank keeps it relative.
+        path_url(cfg, token)
+    } else {
+        format!("https://{token}.{}", cfg.mock_domain)
+    }
+}
+
+fn path_url(cfg: &Config, token: &str) -> String {
+    format!("{}/e/{token}", cfg.public_base_url)
+}
+
 // ---- Session / owner ----
 #[derive(Debug, Clone, Serialize)]
 pub struct EndpointSummary {
@@ -16,6 +36,20 @@ pub struct EndpointSummary {
     pub created_at: String,
     pub last_hit: Option<String>,
     pub request_count: i64,
+}
+
+impl EndpointSummary {
+    pub(crate) fn from_row(row: &EndpointRow, cfg: &Config) -> Self {
+        EndpointSummary {
+            token: row.token.clone(),
+            name: row.name.clone(),
+            mock_url: mock_url(cfg, &row.token),
+            path_url: path_url(cfg, &row.token),
+            created_at: rfc3339(&row.created_at),
+            last_hit: to_rfc3339(row.last_hit.as_deref()),
+            request_count: row.request_count,
+        }
+    }
 }
 
 /// `GET|POST /api/session` and `POST /api/session/restore`: who the caller
@@ -67,6 +101,29 @@ pub struct EndpointDetail {
     pub created_at: String,
     pub last_hit: Option<String>,
     pub request_count: i64,
+}
+
+impl EndpointDetail {
+    pub(crate) fn from_row(row: &EndpointRow, cfg: &Config, tunnel_active: bool) -> Self {
+        EndpointDetail {
+            token: row.token.clone(),
+            name: row.name.clone(),
+            mock_url: mock_url(cfg, &row.token),
+            path_url: path_url(cfg, &row.token),
+            auto_crud: row.auto_crud,
+            target_url: row.target_url.clone(),
+            default_mode: row.default_mode.clone(),
+            latency_ms: row.latency_ms,
+            rate_limit_per_min: row.rate_limit_per_min,
+            chaos_pct: row.chaos_pct,
+            chaos_mode: row.chaos_mode.clone(),
+            cors_enabled: row.cors_enabled,
+            tunnel_active,
+            created_at: rfc3339(&row.created_at),
+            last_hit: to_rfc3339(row.last_hit.as_deref()),
+            request_count: row.request_count,
+        }
+    }
 }
 
 // ---- Endpoint state / Auto-CRUD peek (#15, #17) ----

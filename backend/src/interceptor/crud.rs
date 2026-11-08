@@ -14,9 +14,11 @@
 //! A write body must be a JSON object (else 400); per-item byte cap → 400; the
 //! collection item cap → 400. A SQLite fault surfaces as 503.
 
+use axum::http::StatusCode;
 use serde_json::Value;
 
 use crate::config::Config;
+use crate::error::{ApiError, ErrorCode};
 use crate::repo::crud::{self as crud_repo, Mutation};
 use crate::state::AppState;
 use crate::validate::is_safe_key;
@@ -41,17 +43,18 @@ impl CrudResponse {
             body: None,
         }
     }
+    fn error(error: ApiError) -> Self {
+        CrudResponse::json(error.status.as_u16(), error.body())
+    }
     fn bad_request(detail: &str) -> Self {
-        CrudResponse::json(
-            400,
-            serde_json::json!({"error": "bad_request", "detail": detail}),
-        )
+        CrudResponse::error(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::BadRequest,
+            detail,
+        ))
     }
     fn not_found() -> Self {
-        CrudResponse::json(
-            404,
-            serde_json::json!({"error": "not_found", "detail": "No such item."}),
-        )
+        CrudResponse::error(ApiError::not_found("No such item."))
     }
 }
 
@@ -105,114 +108,111 @@ fn find<'a>(items: &'a [Value], id: &str) -> Option<&'a Value> {
         .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(id))
 }
 
-/// Execute one Auto-CRUD operation. Returns a `CrudResponse`, or `Err(())` on a
-/// SQLite fault (the engine maps to 503 store_unavailable).
+/// The collection one Auto-CRUD call operates on.
+struct Target<'a> {
+    state: &'a AppState,
+    token: &'a str,
+    coll: &'a str,
+}
+
+/// Execute one Auto-CRUD operation. Returns a `CrudResponse`, or the
+/// `sqlx::Error` of a SQLite fault (the engine maps it to 503
+/// `store_unavailable`).
 pub async fn handle(
     state: &AppState,
     token: &str,
     method: &str,
     mock_path: &str,
     body_text: &str,
-) -> Result<CrudResponse, ()> {
-    let (coll, ident) = match parse_path(mock_path) {
-        Some(p) => p,
-        None => return Ok(CrudResponse::not_found()),
+) -> Result<CrudResponse, sqlx::Error> {
+    let Some((coll, ident)) = parse_path(mock_path) else {
+        return Ok(CrudResponse::not_found());
     };
     let method = method.to_ascii_uppercase();
-    let cfg = &state.cfg;
-    let ttl = cfg.crud_ttl_seconds;
-
-    // Collection-level (no id).
-    if ident.is_none() {
-        match method.as_str() {
-            "GET" | "HEAD" => {
-                let items = crud_repo::list_items(&state.pool, token, &coll)
-                    .await
-                    .map_err(|_| ())?;
-                return Ok(CrudResponse::json(200, Value::Array(items)));
-            }
-            "POST" => {
-                let obj = match parse_object_body(body_text, cfg) {
-                    Ok(o) => o,
-                    Err(e) => return Ok(CrudResponse::bad_request(&e)),
-                };
-                return match crud_repo::append_item(
-                    &state.pool,
-                    token,
-                    &coll,
-                    obj,
-                    cfg.crud_max_items,
-                    ttl,
-                )
-                .await
-                {
-                    Ok(Mutation::Ok(_, item)) => Ok(CrudResponse::json(201, item)),
-                    Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("collection is full")),
-                    Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
-                    Err(_) => Err(()),
-                };
-            }
-            _ => {
-                return Ok(CrudResponse::bad_request(
-                    "an item id is required for this method",
-                ))
-            }
-        }
+    let target = Target {
+        state,
+        token,
+        coll: &coll,
+    };
+    match ident {
+        None => collection(&target, &method, body_text).await,
+        Some(id) => item(&target, &method, &id, body_text).await,
     }
+}
 
-    // Item-level (collection + id).
-    let id = ident.unwrap();
-    match method.as_str() {
+/// `/<coll>`: GET / HEAD lists, POST appends (server-assigned `id`).
+async fn collection(
+    t: &Target<'_>,
+    method: &str,
+    body_text: &str,
+) -> Result<CrudResponse, sqlx::Error> {
+    let (pool, cfg) = (&t.state.pool, &t.state.cfg);
+    match method {
         "GET" | "HEAD" => {
-            let items = crud_repo::list_items(&state.pool, token, &coll)
-                .await
-                .map_err(|_| ())?;
-            match find(&items, &id) {
-                Some(item) => Ok(CrudResponse::json(200, item.clone())),
-                None => Ok(CrudResponse::not_found()),
-            }
+            let items = crud_repo::list_items(pool, t.token, t.coll).await?;
+            Ok(CrudResponse::json(200, Value::Array(items)))
         }
-        "PUT" => {
+        "POST" => {
             let obj = match parse_object_body(body_text, cfg) {
-                Ok(o) => o,
+                Ok(obj) => obj,
                 Err(e) => return Ok(CrudResponse::bad_request(&e)),
             };
-            match crud_repo::replace_item(&state.pool, token, &coll, &id, obj, ttl).await {
-                Ok(Mutation::Ok(_, item)) => Ok(CrudResponse::json(200, item)),
-                Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
-                Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("item too large")),
-                Err(_) => Err(()),
-            }
+            let (max, ttl) = (cfg.crud_max_items, cfg.crud_ttl_seconds);
+            let outcome = crud_repo::append_item(pool, t.token, t.coll, obj, max, ttl).await?;
+            Ok(map_mutation(outcome, 201, "collection is full"))
         }
-        "PATCH" => {
-            let patch = match parse_object_body(body_text, cfg) {
-                Ok(o) => o,
-                Err(e) => return Ok(CrudResponse::bad_request(&e)),
-            };
-            match crud_repo::merge_item(
-                &state.pool,
-                token,
-                &coll,
-                &id,
-                patch,
-                cfg.crud_max_item_bytes,
-                ttl,
-            )
-            .await
-            {
-                Ok(Mutation::Ok(_, item)) => Ok(CrudResponse::json(200, item)),
-                Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
-                Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("item too large")),
-                Err(_) => Err(()),
-            }
-        }
-        "DELETE" => match crud_repo::delete_item(&state.pool, token, &coll, &id, ttl).await {
-            Ok(Mutation::Ok(..)) => Ok(CrudResponse::no_content()),
-            Ok(Mutation::NotFound) => Ok(CrudResponse::not_found()),
-            Ok(Mutation::TooLarge) => Ok(CrudResponse::bad_request("item too large")),
-            Err(_) => Err(()),
-        },
-        _ => Ok(CrudResponse::bad_request("unsupported method for an item")),
+        _ => Ok(CrudResponse::bad_request(
+            "an item id is required for this method",
+        )),
+    }
+}
+
+/// `/<coll>/<id>`: GET / HEAD read, PUT replaces, PATCH shallow-merges,
+/// DELETE removes (204).
+async fn item(
+    t: &Target<'_>,
+    method: &str,
+    id: &str,
+    body_text: &str,
+) -> Result<CrudResponse, sqlx::Error> {
+    let (pool, cfg) = (&t.state.pool, &t.state.cfg);
+    let ttl = cfg.crud_ttl_seconds;
+    if !matches!(method, "GET" | "HEAD" | "PUT" | "PATCH" | "DELETE") {
+        return Ok(CrudResponse::bad_request("unsupported method for an item"));
+    }
+    if matches!(method, "GET" | "HEAD") {
+        let items = crud_repo::list_items(pool, t.token, t.coll).await?;
+        return Ok(match find(&items, id) {
+            Some(item) => CrudResponse::json(200, item.clone()),
+            None => CrudResponse::not_found(),
+        });
+    }
+    if method == "DELETE" {
+        let outcome = crud_repo::delete_item(pool, t.token, t.coll, id, ttl).await?;
+        return Ok(match outcome {
+            Mutation::Ok(..) => CrudResponse::no_content(),
+            other => map_mutation(other, 204, "item too large"),
+        });
+    }
+    let obj = match parse_object_body(body_text, cfg) {
+        Ok(obj) => obj,
+        Err(e) => return Ok(CrudResponse::bad_request(&e)),
+    };
+    let outcome = if method == "PUT" {
+        crud_repo::replace_item(pool, t.token, t.coll, id, obj, ttl).await?
+    } else {
+        let max = cfg.crud_max_item_bytes;
+        crud_repo::merge_item(pool, t.token, t.coll, id, obj, max, ttl).await?
+    };
+    Ok(map_mutation(outcome, 200, "item too large"))
+}
+
+/// A stored mutation's outcome as the HTTP answer.
+fn map_mutation(outcome: Mutation, ok_status: u16, too_large: &str) -> CrudResponse {
+    match outcome {
+        Mutation::Ok(_, item) => CrudResponse::json(ok_status, item),
+        Mutation::NotFound => CrudResponse::not_found(),
+        Mutation::TooLarge => CrudResponse::bad_request(too_large),
     }
 }
 

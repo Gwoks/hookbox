@@ -12,12 +12,10 @@
 //!     sks.24) the feed + SPA. The `X-HookBox-Plane` observability header is
 //!     injected on the response either way.
 
-use std::collections::BTreeMap;
-
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::Request,
     middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
     Router,
@@ -26,7 +24,9 @@ use http_body_util::BodyExt;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::interceptor::engine;
+use crate::interceptor::mock_error::MockError;
 use crate::net::headers::try_header;
+use crate::net::query::parse_query;
 use crate::planes::{mock_host_token, resolve_plane, Plane, PlaneResult};
 use crate::routes;
 use crate::session::{harden_mock_response, strip_session_cookie};
@@ -47,50 +47,6 @@ fn request_host(req: &Request<Body>) -> String {
         .map(|s| s.to_string())
         .or_else(|| req.uri().authority().map(|a| a.to_string()))
         .unwrap_or_default()
-}
-
-/// Parse the raw query string into a key→value map (last value wins, matching
-/// the Python `dict(request.query_params)`).
-fn parse_query(uri: &axum::http::Uri) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    if let Some(q) = uri.query() {
-        for pair in q.split('&') {
-            if pair.is_empty() {
-                continue;
-            }
-            let mut it = pair.splitn(2, '=');
-            let k = it.next().unwrap_or("");
-            let v = it.next().unwrap_or("");
-            let kd = urlencoding_decode(k);
-            let vd = urlencoding_decode(v);
-            map.insert(kd, vd);
-        }
-    }
-    map
-}
-
-/// Minimal percent-decode (`+` → space, `%XX` → byte). Lossy on bad escapes.
-fn urlencoding_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => out.push(b' '),
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
-                if let Ok(b) = u8::from_str_radix(hex, 16) {
-                    out.push(b);
-                    i += 2;
-                } else {
-                    out.push(b'%');
-                }
-            }
-            c => out.push(c),
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
 }
 
 /// Run the P1 interceptor for a mock request: buffer the (capped) body, then
@@ -144,12 +100,10 @@ async fn run_interceptor(state: &AppState, result: &PlaneResult, req: Request<Bo
     engine::handle_mock(state, &token, &mock_path, &method, headers, query, body).await
 }
 
+/// The early 413: only `X-HookBox-Endpoint` (no served-by / CORS headers —
+/// the endpoint config has not been loaded yet).
 fn oversize_response(token: &str) -> Response {
-    let mut r = (
-        StatusCode::PAYLOAD_TOO_LARGE,
-        axum::Json(serde_json::json!({"error":"payload_too_large","detail":"Request body exceeds the configured limit."})),
-    )
-        .into_response();
+    let mut r = MockError::PayloadTooLarge.into_response();
     if let Some((name, value)) = try_header("x-hookbox-endpoint", token) {
         r.headers_mut().insert(name, value);
     }
@@ -230,8 +184,10 @@ async fn test_panic_handler() -> Response {
 mod tests {
     use super::*;
     use crate::testing::{memory_pool, test_config};
+    use axum::http::StatusCode;
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
+    use std::collections::BTreeMap;
     use tower::ServiceExt;
 
     // Route-level scenarios (session, endpoint/rule CRUD, paging, owner

@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
 use super::no_store;
 use super::projection::{public_request_detail, public_request_summary};
@@ -21,8 +21,10 @@ use crate::models::{
     PublicEndpointInfo, PublicRequestDetail, PublicRequestSummary, PublicShareFeed,
 };
 use crate::net::client_ip::effective_client_ip;
+use crate::repo::requests;
+use crate::repo::shares::{self, ResolvedShare};
 use crate::state::AppState;
-use crate::util::time::to_rfc3339;
+use crate::util::time::rfc3339;
 use crate::validate::Paging;
 
 /// The rate-limit namespace, and the global-ceiling bucket key inside it
@@ -95,51 +97,17 @@ fn finish_public(result: Result<impl IntoResponse, ApiError>) -> Response {
 fn touch_last_used(state: &AppState, share_id: i64) {
     let pool = state.pool.clone();
     tokio::spawn(async move {
-        let _ = sqlx::query(
-            "UPDATE share_links SET last_used_at = datetime('now')
-              WHERE id = ? AND (last_used_at IS NULL
-                                OR last_used_at < datetime('now','-60 seconds'))",
-        )
-        .bind(share_id)
-        .execute(&pool)
-        .await;
+        if let Err(e) = shares::touch_last_used(&pool, share_id).await {
+            // Logs the non-secret share id only, never the code (AC-S6).
+            tracing::warn!(share_id, "last_used_at touch failed: {e}");
+        }
     });
 }
 
-/// The resolved liveness-checked share row (§5.2's resolution statement).
-struct ResolvedShare {
-    share_id: i64,
-    token: String,
-    endpoint_name: Option<String>,
-    endpoint_created_at: Option<String>,
-    request_count: i64,
-}
-
-/// One round trip, joining liveness so a tombstone is indistinguishable from
-/// an unknown/revoked code (AC-S9): `s.revoked_at IS NULL AND e.gone_at IS
-/// NULL`, both read fresh on every request (never cached — `rule_cache` is
-/// keyed by token for the mock plane only and gets no share entries, which is
-/// what makes revocation take effect on the very next request, AC-37).
+/// Resolve a code to its live share (see `repo::shares::resolve`). Only
+/// `sha256(code)` is ever looked up — never the code itself.
 async fn resolve_share(pool: &SqlitePool, code: &str) -> Result<Option<ResolvedShare>, ApiError> {
-    let code_hash = hash_secret(code); // sha256(code) — never the code itself
-    let row = sqlx::query(
-        "SELECT s.id, s.token, e.name, e.created_at AS endpoint_created_at, e.request_count
-           FROM share_links s
-           JOIN endpoints  e ON e.token = s.token
-          WHERE s.code_hash = ?
-            AND s.revoked_at IS NULL
-            AND e.gone_at   IS NULL",
-    )
-    .bind(&code_hash)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|r| ResolvedShare {
-        share_id: r.get("id"),
-        token: r.get("token"),
-        endpoint_name: r.get("name"),
-        endpoint_created_at: r.get("endpoint_created_at"),
-        request_count: r.get("request_count"),
-    }))
+    Ok(shares::resolve(pool, &hash_secret(code)).await?)
 }
 
 // === #22 GET /api/share/{code}/requests?limit&offset (PUBLIC) ================
@@ -209,19 +177,13 @@ async fn public_list_requests_inner(
         .await?
         .ok_or_else(share_not_found)?;
 
-    let rows =
-        sqlx::query("SELECT * FROM request_logs WHERE token = ? ORDER BY id DESC LIMIT ? OFFSET ?")
-            .bind(&resolved.token)
-            .bind(paging.limit)
-            .bind(paging.offset)
-            .fetch_all(&state.pool)
-            .await?;
+    let rows = requests::page(&state.pool, &resolved.token, paging).await?;
     let requests: Vec<PublicRequestSummary> = rows.iter().map(public_request_summary).collect();
 
     let resp = PublicShareFeed {
         endpoint: PublicEndpointInfo {
             name: resolved.endpoint_name.clone(),
-            created_at: to_rfc3339(resolved.endpoint_created_at.clone()).unwrap_or_default(),
+            created_at: rfc3339(&resolved.endpoint_created_at),
             request_count: resolved.request_count,
         },
         requests,
@@ -281,10 +243,7 @@ async fn public_get_request_inner(
     // the code, never from the path) is the whole of AC-35: cross-endpoint
     // trace enumeration is impossible because the id is scoped inside the
     // same statement.
-    let row = sqlx::query("SELECT * FROM request_logs WHERE id = ? AND token = ?")
-        .bind(request_id)
-        .bind(&resolved.token)
-        .fetch_optional(&state.pool)
+    let row = requests::find_in(&state.pool, &resolved.token, request_id)
         .await?
         .ok_or_else(share_not_found)?;
     let detail = public_request_detail(&row, &resolved.token);

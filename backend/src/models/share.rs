@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::repo::shares::ShareRow;
+use crate::util::time::{rfc3339, to_rfc3339};
+
 // ---- F4 share links (§5.5.1-§5.5.5) ----
 
 /// Request body for `POST /api/endpoints/{token}/shares` (§5.5.1).
@@ -21,6 +24,17 @@ pub struct ShareLink {
     pub label: Option<String>,
     pub created_at: String,
     pub last_used_at: Option<String>,
+}
+
+impl ShareLink {
+    pub(crate) fn from_row(row: &ShareRow) -> Self {
+        ShareLink {
+            id: row.id,
+            label: row.label.clone(),
+            created_at: rfc3339(&row.created_at),
+            last_used_at: to_rfc3339(row.last_used_at.as_deref()),
+        }
+    }
 }
 
 /// 201 body for `POST /api/endpoints/{token}/shares` — the **only** place

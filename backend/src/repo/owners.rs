@@ -3,8 +3,9 @@
 //! random `owner_id` and `secret_hash = sha256(owner key)`; the raw key is
 //! never stored or compared directly — callers hash first (`ids::hash_secret`).
 
-use sqlx::sqlite::SqliteRow;
 use sqlx::SqlitePool;
+
+use super::endpoints::EndpointRow;
 
 /// Insert a brand-new owner, stamping `last_seen` now.
 pub(crate) async fn insert(
@@ -69,8 +70,8 @@ pub(crate) async fn touch_last_seen(pool: &SqlitePool, owner_id: &str) -> Result
 pub(crate) async fn live_endpoints(
     pool: &SqlitePool,
     owner_id: &str,
-) -> Result<Vec<SqliteRow>, sqlx::Error> {
-    sqlx::query(
+) -> Result<Vec<EndpointRow>, sqlx::Error> {
+    sqlx::query_as(
         "SELECT * FROM endpoints
           WHERE owner_id = ? AND gone_at IS NULL
           ORDER BY created_at, token",
