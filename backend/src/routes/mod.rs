@@ -3,7 +3,7 @@
 //! `router()` adds the P3 health / live-feed / tunnel / SPA routes on top.
 //! `router::build_app` only layers plane dispatch + panic catching around it.
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::state::AppState;
@@ -14,7 +14,7 @@ pub mod health;
 mod requests;
 mod rules;
 mod session;
-pub mod share;
+mod share;
 pub mod spa;
 mod state;
 pub mod tunnel_ws;
@@ -63,7 +63,22 @@ pub fn api_routes() -> Router<AppState> {
             "/api/endpoints/:token/collections/:name",
             get(state::peek_collection).delete(state::clear_collection),
         )
-        .merge(share::share_router())
+        .route(
+            "/api/endpoints/:token/shares",
+            get(share::list_shares).post(share::create_share),
+        )
+        .route(
+            "/api/endpoints/:token/shares/:id",
+            delete(share::revoke_share),
+        )
+        .route(
+            "/api/share/:code/requests",
+            get(share::public_list_requests),
+        )
+        .route(
+            "/api/share/:code/requests/:id",
+            get(share::public_get_request),
+        )
 }
 
 /// The full inner router: `/api/**`, `/healthz`, the owner-gated live feed
