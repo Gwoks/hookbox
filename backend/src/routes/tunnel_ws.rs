@@ -23,12 +23,11 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+use crate::auth::parse_bearer;
 use crate::feed::FeedEvent;
 use crate::net::headers::{is_tunnel_response_stripped, try_header};
+use crate::net::ws::{close_with, WS_CLOSE_REBOUND, WS_CLOSE_UNAUTHORIZED};
 use crate::state::AppState;
-
-pub const WS_CLOSE_UNAUTHORIZED: u16 = 4401;
-pub const WS_CLOSE_REBOUND: u16 = 4409;
 
 /// Engine entry point: replay a public request down the bound tunnel (§5.5).
 /// Returns the CLI's response, or `Err(())` on no/closed tunnel / timeout / CLI
@@ -106,7 +105,7 @@ pub async fn tunnel_ws_handler(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(parse_bearer);
-    let secret = bearer.or(q.cap);
+    let secret = bearer.map(str::to_string).or(q.cap);
     let authed = crate::auth::verify_cap_owns_token(&state.pool, &slug, secret.as_deref()).await;
 
     ws.on_upgrade(move |socket| async move {
@@ -116,26 +115,6 @@ pub async fn tunnel_ws_handler(
         }
         run_tunnel(state, slug, socket).await;
     })
-}
-
-fn parse_bearer(h: &str) -> Option<String> {
-    let mut parts = h.splitn(2, ' ');
-    let scheme = parts.next().unwrap_or("");
-    let tok = parts.next().unwrap_or("").trim();
-    if scheme.eq_ignore_ascii_case("bearer") && !tok.is_empty() {
-        Some(tok.to_string())
-    } else {
-        None
-    }
-}
-
-async fn close_with(mut socket: WebSocket, code: u16, reason: &str) {
-    let _ = socket
-        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-            code,
-            reason: reason.to_string().into(),
-        })))
-        .await;
 }
 
 async fn run_tunnel(state: AppState, slug: String, socket: WebSocket) {

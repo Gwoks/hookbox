@@ -22,7 +22,7 @@ use crate::state::AppState;
 mod bearer;
 mod ownership;
 
-use bearer::parse_bearer;
+pub(crate) use bearer::parse_bearer;
 pub use ownership::{assert_owns_endpoint, verify_cap_owns_token};
 
 /// Resolve the authenticated `owner_id` from the bearer secret (PORT of
@@ -31,8 +31,10 @@ pub async fn require_owner(
     pool: &SqlitePool,
     authorization: Option<&str>,
 ) -> Result<String, ApiError> {
-    let secret = parse_bearer(authorization)?;
-    let secret_hash = hash_secret(&secret);
+    let secret = authorization
+        .and_then(parse_bearer)
+        .ok_or_else(|| ApiError::unauthorized("Valid owner capability required."))?;
+    let secret_hash = hash_secret(secret);
     let owner_id: Option<String> =
         sqlx::query_scalar("SELECT owner_id FROM owners WHERE secret_hash = ?")
             .bind(&secret_hash)
