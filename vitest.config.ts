@@ -17,7 +17,7 @@ export default mergeConfig(
       restoreMocks: true,
       coverage: {
         provider: 'v8',
-        include: ['src/lib/**', 'src/components/{ui,hookbox,layout}/**'],
+        include: ['src/lib/**', 'src/design/**', 'src/components/{ui,hookbox,layout}/**'],
         exclude: ['src/**/*.test.{ts,tsx}', 'src/lib/copy.ts'],
         reporter: ['text-summary', 'text'],
       },
