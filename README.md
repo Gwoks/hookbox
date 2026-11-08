@@ -7,8 +7,8 @@ HookBox serves rule-driven mock responses with dynamic templating, persists
 per-endpoint state, can act as an instant CRUD backend, can forward unmatched
 traffic to a real upstream (MITM) and capture it, auto-handles CORS, simulates
 adverse network conditions, and streams every transaction to a real-time
-split-screen debugging dashboard — behind a **no-password, email-keyed** session,
-with a local-tunnel CLI.
+split-screen debugging dashboard — behind a **no-password, anonymous** session
+(a random key in an HttpOnly cookie, no email), with a local-tunnel CLI.
 
 It ships as a **single Rust binary over one SQLite file** that also serves the
 React dashboard. No Redis, no Postgres, no Node at runtime — one process, one
@@ -53,10 +53,12 @@ bash scripts/start.sh      # builds SPA (Vite → dist/) + backend (cargo --rele
                            # then serves → http://localhost:8080
 ```
 
-Open **http://localhost:8080**, enter an email on the landing page, and you get an
-endpoint session instantly — no password, no registration. Your owner identity +
-capability live in browser `localStorage`; the same email always recovers access
-(the capability rotates on each sign-in, so an old leaked secret stops working).
+Open **http://localhost:8080**, click **Get my endpoint**, and you get an endpoint
+session instantly — no email, no password, no registration. Your owner key is a
+random 256-bit secret held in an `HttpOnly`, `SameSite=Strict` cookie (the server
+stores only its SHA-256). Copy it from **Settings → Recovery key** to restore the
+same endpoints in another browser (**I have a recovery key** on the landing page)
+or to drive the tunnel CLI. **Rotate key** replaces it everywhere at once.
 
 ### Docker
 
@@ -72,18 +74,21 @@ open http://localhost:8080
 ## Drive it from the CLI
 
 ```bash
-# 1. Get an owner session → {owner_id, owner_secret, primary:{token,…}}
-curl -s -X POST localhost:8080/api/session \
-  -H 'content-type: application/json' -d '{"email":"you@example.com"}'
+# 1. Mint an anonymous owner → {owner_id, endpoints, primary:{token,…}} + cookie.
+#    Cookie-authenticated calls must send X-HookBox: 1 (CSRF guard).
+curl -s -c jar -X POST localhost:8080/api/session -H 'X-HookBox: 1'
 
-# 2. Add a mock rule (owner_secret as the bearer; <token> from step 1)
+# 2. Reveal the owner key once, then use it as a Bearer (no cookie/header needed)
+curl -s -b jar -X POST localhost:8080/api/session/key -H 'X-HookBox: 1'   # → {"key":"…"}
+
+# 3. Add a mock rule (<key> as the bearer; <token> from step 1)
 curl -s -X POST localhost:8080/api/endpoints/<token>/rules \
   -H 'Authorization: Bearer ***' -H 'content-type: application/json' \
   -d '{"match":{"method":"GET","path":"/hello"},
        "response":{"status_code":200,"content_type":"application/json",
                    "body_template":"{\"hi\":\"{{request.query.name}}\"}}"}}'
 
-# 3. Hit the PUBLIC mock surface (no auth on the mock plane)
+# 4. Hit the PUBLIC mock surface (no auth on the mock plane)
 curl -s 'localhost:8080/e/<token>/hello?name=ada'    # → {"hi":"ada"}
 ```
 
@@ -109,9 +114,19 @@ If `MOCK_DOMAIN` is unset or has no dot, the app logs a warning and serves
 ## Real-time feed is owner-gated
 
 The dashboard's live feed (WebSocket `/ws/<token>` and SSE fallback `/sse/<token>`)
-**requires the owner capability**, presented as `?cap=<owner_secret>` and verified
-server-side **before** the socket is accepted / before any event is sent. The
+**requires the owner key** — the session cookie (browsers) or `Authorization:
+Bearer` (scripts) — verified server-side **before** the socket is accepted, after a
+same-origin `Origin` check (cross-site WebSocket hijacking guard). There is no
+`?cap=` query parameter, so the key never lands in URLs or access logs. Rotating
+the key closes every live feed connection so clients must re-authenticate. The
 **mock surface itself stays fully public**; only the observability feed is gated.
+
+Mock responses are isolated from the dashboard even when served on the same
+origin (`/e/<token>/…`): every mock response carries
+`Content-Security-Policy: sandbox …` (an opaque origin, so mock HTML/JS can't call
+the API), the session cookie is stripped from incoming mock requests (it never
+reaches templates, echo output, MITM upstreams or tunnels), and mock responses
+can't set or clear it.
 
 ## Local tunnel CLI
 
@@ -120,12 +135,13 @@ fallback) to a server on your localhost — a Rust binary built alongside the se
 
 ```bash
 ./backend/target/release/tunnel \
-  --endpoint <token> --secret <owner_secret> \
+  --endpoint <token> --key <owner_key> \
   --port 3000 [--host ws://localhost:8080]
 ```
 
-It authenticates with the endpoint's owner capability over the WebSocket control
-channel, reconnects with backoff, and stops on a rejected secret. Tunneled traffic
+It authenticates with the owner key (`Authorization: Bearer`; the cookie is never
+accepted here) over the WebSocket control channel, reconnects with backoff, and
+stops when the key is rejected — e.g. after **Rotate key**. Tunneled traffic
 appears in the live feed labeled `tunnel`.
 
 ## Configuration (environment variables)
@@ -139,6 +155,7 @@ knobs:
 | --- | --- | --- |
 | `MOCK_DOMAIN` | `mock.local` | Wildcard mock surface base (`*.<MOCK_DOMAIN>`). Blank/dotless → path-fallback-only. |
 | `PUBLIC_BASE_URL` | *(blank)* | Public origin (e.g. `https://hookbox.example.com`) prefixed onto `/e/<token>` mock URLs so the UI/API hand out absolute, copy-pasteable URLs in path-fallback mode. Blank keeps them relative. |
+| `SESSION_COOKIE_SECURE` | *(from `PUBLIC_BASE_URL`)* | Whether the owner-key cookie is `Secure` (then named `__Host-hookbox_key`). Defaults to true when `PUBLIC_BASE_URL` is `https://`. On a non-localhost `APP_HOST` the server **refuses to start** with an insecure cookie unless this is set to `false` explicitly (plain-http intranets only). |
 | `APP_HOST` | `localhost` | Canonical UI/API host (apex + this host never hit the interceptor). |
 | `APP_PORT` / `APP_BIND_HOST` | `8080` / `0.0.0.0` | Published HTTP port / bind address. |
 | `DATABASE_PATH` | `data/app.db` | SQLite file (WAL). |
@@ -319,10 +336,9 @@ server {
         # Long-lived socket: outlive nginx's 60s default between frames.
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
-        # The feed/tunnel handshake carries the owner secret in `?cap=`
-        # (browsers can't set a custom Authorization header on a WS/SSE
-        # handshake); don't let the request line — query string included —
-        # land in the access log.
+        # The feed authenticates with the session cookie or a Bearer header
+        # (the old `?cap=` query credential is gone); access_log stays off as
+        # defense in depth against any credential in a request line.
         access_log off;
     }
 
@@ -338,7 +354,7 @@ server {
         proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
-        # Same ?cap= exposure as /ws/ above.
+        # Same defense in depth as /ws/ above.
         access_log off;
     }
 
