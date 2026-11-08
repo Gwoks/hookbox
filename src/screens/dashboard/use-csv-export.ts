@@ -40,7 +40,15 @@ export function useCsvExport(token: string): CsvExport {
   const [hasDetailNote, setHasDetailNote] = useState(false)
   const controllerRef = useRef<AbortController | null>(null)
 
-  useEffect(() => () => controllerRef.current?.abort(), [])
+  // Abort on unmount and drop the controller, so the aborted run knows the
+  // user navigated away (no "cancelled" toast) rather than pressed Cancel.
+  useEffect(
+    () => () => {
+      controllerRef.current?.abort()
+      controllerRef.current = null
+    },
+    [],
+  )
 
   const finish = useCallback(
     (snapshot: readonly RequestSummary[], details: ReadonlyArray<DetailCell>) => {
@@ -83,8 +91,10 @@ export function useCsvExport(token: string): CsvExport {
         return
       }
       if (controller.signal.aborted) {
-        setPhase(IDLE)
-        toast(t('feed.export.cancelled'))
+        if (controllerRef.current === controller) {
+          setPhase(IDLE)
+          toast(t('feed.export.cancelled'))
+        }
         return
       }
       finish(snapshot, details)

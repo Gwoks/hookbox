@@ -88,6 +88,11 @@ export function useResource<T>(
   const reload = useCallback((opts?: { silent?: boolean }) => run(opts?.silent ? 'silent' : 'reload'), [run])
 
   const setData = useCallback((next: T | ((prev: T | undefined) => T)) => {
+    // A locally applied value (e.g. a save response) is newer than any reload
+    // still in flight: invalidate it so a late, stale response can't win.
+    generationRef.current += 1
+    controllerRef.current?.abort()
+    setRefreshing(false)
     setCore((prev) => ({
       ...prev,
       data: typeof next === 'function' ? (next as (p: T | undefined) => T)(prev.data) : next,

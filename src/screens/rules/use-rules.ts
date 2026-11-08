@@ -52,7 +52,7 @@ export function useRules(token: string) {
       await api.patchRule(token, rule.id, { enabled })
       toast(enabled ? t('rules.toast.enabled') : t('rules.toast.disabled'))
     } catch {
-      setEnabled(!enabled)
+      setEnabled(rule.enabled) // revert to the value before this toggle
       toast(t('rules.error.toggle'), 'danger')
     }
   }

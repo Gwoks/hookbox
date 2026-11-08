@@ -9,7 +9,7 @@
  * "select it yourself" — no duplicate value control needed here. Used by
  * CodeBlock and KeyValueRows. */
 import { Check, Copy, X } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/cn'
 import { t } from '@/lib/copy'
 import { Button } from './button'
@@ -29,6 +29,12 @@ export function CopyButton({
 }) {
   const [status, setStatus] = useState<Status>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    [],
+  )
   const idleLabel = label ?? t('common.copy')
 
   const onCopy = useCallback(async () => {

@@ -109,7 +109,9 @@ export function useSharedFeed(code: string): UseSharedFeedResult {
       setStatus('error')
       scheduleNext(backoffDelay(failuresRef.current, ERROR_BACKOFF))
     } finally {
-      inFlightRef.current = false
+      // A stale call (its effect was torn down) must not clear the flag the
+      // current generation's poll now owns.
+      if (gen === generationRef.current) inFlightRef.current = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code])
@@ -122,6 +124,12 @@ export function useSharedFeed(code: string): UseSharedFeedResult {
   }, [poll])
 
   useEffect(() => {
+    // A fresh code (or a re-run effect) starts clean: the previous
+    // generation's in-flight request was aborted in cleanup and a terminal
+    // 404 belonged to the previous code.
+    inFlightRef.current = false
+    stoppedRef.current = false
+    failuresRef.current = 0
     void poll()
 
     // (e) resume on visible / online; isHidden/isOffline above re-render.

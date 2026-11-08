@@ -13,6 +13,20 @@ function deferred<T>() {
 }
 
 describe('useResource', () => {
+  it('setData invalidates an in-flight reload so a late response cannot overwrite it', async () => {
+    let call = 0
+    const late = deferred<string>()
+    const { result } = renderHook(() =>
+      useResource(() => (++call === 1 ? Promise.resolve('server-v1') : late.promise), []),
+    )
+    await waitFor(() => expect(result.current.data).toBe('server-v1'))
+    act(() => void result.current.reload({ silent: true }))
+    act(() => result.current.setData('saved-v2'))
+    await act(async () => late.resolve('stale-v1'))
+    expect(result.current.data).toBe('saved-v2')
+    expect(result.current.refreshing).toBe(false)
+  })
+
   it('goes loading → ready with the fetched data', async () => {
     const { result } = renderHook(() => useResource(async () => ['a'], []))
     expect(result.current.status).toBe('loading')

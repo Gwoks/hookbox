@@ -4,8 +4,11 @@
  *
  * - The draft is seeded from `source`; edits never mutate `source`.
  * - `resetKey`: when it changes (e.g. a different endpoint token), the draft
- *   is re-seeded from the current source. A refreshed `source` under the
- *   SAME key keeps the user's edits, and `diff` is taken against it.
+ *   is re-seeded from the current source.
+ * - A refreshed `source` under the SAME key (compared by value) rebases: the
+ *   user's own edits are kept on top of the new source, and every untouched
+ *   field follows the server — so a clean draft stays clean and Save never
+ *   sends a stale value back.
  * - `diff` holds only the top-level keys whose values differ (nested
  *   arrays/objects compared by value), ready to send as a PATCH body.
  */
@@ -39,14 +42,30 @@ export interface Draft<T extends object> {
   diff: Partial<T>
 }
 
-export function useDraft<T extends object>(source: T, { resetKey }: { resetKey?: unknown } = {}): Draft<T> {
-  const [state, setState] = useState({ key: resetKey, draft: source })
+interface DraftState<T> {
+  key: unknown
+  /** The source the current edits were made against. */
+  base: T
+  draft: T
+}
 
-  // Re-seed during render when the key changes (React's "adjusting state
-  // when a prop changes" pattern — no effect, no stale frame committed).
-  const isStale = !Object.is(state.key, resetKey)
-  if (isStale) setState({ key: resetKey, draft: source })
-  const draft = isStale ? source : state.draft
+/** The state for this render: re-seeded on a key change, rebased on a refresh. */
+function syncDraft<T extends object>(state: DraftState<T>, source: T, resetKey: unknown): DraftState<T> {
+  if (!Object.is(state.key, resetKey)) return { key: resetKey, base: source, draft: source }
+  if (isEqual(state.base, source)) return state
+  const edits = shallowDiff(state.base, state.draft)
+  return { key: resetKey, base: source, draft: { ...source, ...edits } }
+}
+
+export function useDraft<T extends object>(source: T, { resetKey }: { resetKey?: unknown } = {}): Draft<T> {
+  const [state, setState] = useState<DraftState<T>>({ key: resetKey, base: source, draft: source })
+
+  // Adjust during render (React's "adjusting state when a prop changes"
+  // pattern — no effect, no stale frame committed). Converges in one pass:
+  // the next render sees the synced key/base and returns the same state.
+  const synced = syncDraft(state, source, resetKey)
+  if (synced !== state) setState(synced)
+  const draft = synced.draft
 
   const patch = useCallback((changes: Partial<T>) => {
     setState((prev) => ({ ...prev, draft: { ...prev.draft, ...changes } }))
@@ -55,7 +74,7 @@ export function useDraft<T extends object>(source: T, { resetKey }: { resetKey?:
     <K extends keyof T>(key: K, value: T[K]) => patch({ [key]: value } as unknown as Partial<T>),
     [patch],
   )
-  const reset = useCallback(() => setState({ key: resetKey, draft: source }), [resetKey, source])
+  const reset = useCallback(() => setState({ key: resetKey, base: source, draft: source }), [resetKey, source])
 
   const diff = useMemo(() => shallowDiff(source, draft), [source, draft])
   return { draft, set, patch, reset, dirty: Object.keys(diff).length > 0, diff }

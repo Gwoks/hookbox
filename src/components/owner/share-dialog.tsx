@@ -4,7 +4,7 @@
  * 201 response; the list carries `{ id, label, created_at, last_used_at }`
  * and revoke addresses a link by that non-secret integer `id`, never the
  * code. No per-row URL, no per-row copy, no Preview (AC-25). */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ExternalLink } from 'lucide-react'
 import { api, ApiError, type ShareLink, type ShareLinkCreated } from '@/api'
 import { errorMessage as apiErrorMessage } from '@/lib/api-errors'
@@ -71,19 +71,27 @@ export function ShareDialog({
   const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null)
   const labelTooLong = label.trim().length > 80
 
+  // Only the latest load may write: close/reopen (or a retry) while a list
+  // request is in flight must not let the older response win.
+  const loadSeq = useRef(0)
   async function load() {
+    const seq = ++loadSeq.current
     setList({ kind: 'loading' })
     try {
       const links = await api.listShares(token)
+      if (seq !== loadSeq.current) return
       setList({ kind: 'ready', links })
       onCountChange?.(links.length)
     } catch (err) {
+      if (seq !== loadSeq.current) return
       setList({ kind: 'error', message: errorMessage(err, t('share.list.error.body')) })
     }
   }
 
   useEffect(() => {
     if (open) void load()
+    // `load` is recreated every render; re-running on its identity would
+    // refetch on every keystroke. The list depends only on open + token.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, token])
 

@@ -45,6 +45,34 @@ afterEach(() => {
 })
 
 describe('useSharedFeed', () => {
+  it('a code change while a poll is in flight still loads the new code', async () => {
+    // The first request never settles before the code changes (back/forward
+    // between two share links, or StrictMode's double-invoked effect).
+    getSharedRequests.mockImplementationOnce(() => new Promise(() => {}))
+    getSharedRequests.mockResolvedValue(FEED)
+    const { result, rerender } = renderHook(({ code }) => useSharedFeed(code), {
+      initialProps: { code: 'first' },
+    })
+    rerender({ code: 'second' })
+    await settle()
+    expect(getSharedRequests).toHaveBeenLastCalledWith('second', expect.anything())
+    expect(result.current.status).toBe('ready')
+  })
+
+  it('a 404 on one code does not stop polling for the next code', async () => {
+    getSharedRequests.mockRejectedValueOnce(new ApiError('not_found', 'gone', 404))
+    getSharedRequests.mockResolvedValue(FEED)
+    const { result, rerender } = renderHook(({ code }) => useSharedFeed(code), {
+      initialProps: { code: 'dead' },
+    })
+    await settle()
+    expect(result.current.status).toBe('unavailable')
+    rerender({ code: 'alive' })
+    await settle()
+    expect(getSharedRequests).toHaveBeenLastCalledWith('alive', expect.anything())
+    expect(result.current.status).toBe('ready')
+  })
+
   it('loads, then polls every 5s while visible', async () => {
     getSharedRequests.mockResolvedValue(FEED)
     const { result } = renderHook(() => useSharedFeed('code1'))
