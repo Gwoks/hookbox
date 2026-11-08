@@ -1,0 +1,40 @@
+## unknown token path-fallback
+status: 404
+headers:
+  content-length: 57
+  content-type: application/json
+  x-hookbox-endpoint: zzzzzzzzzzzz
+  x-hookbox-plane: mock
+body: {"detail":"No such endpoint.","error":"unknown_endpoint"}
+
+## unknown token wildcard
+status: 404
+headers:
+  content-length: 57
+  content-type: application/json
+  x-hookbox-endpoint: zzzzzzzzzzzz
+  x-hookbox-plane: mock
+body: {"detail":"No such endpoint.","error":"unknown_endpoint"}
+
+## default no_match
+status: 404
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 61
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: default
+body: {"detail":"No rule matched this request.","error":"no_match"}
+
+## gone endpoint
+status: 410
+headers:
+  content-length: 74
+  content-type: application/json
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+body: {"detail":"This endpoint was deleted or expired.","error":"endpoint_gone"}
+

@@ -1,0 +1,34 @@
+## no credential
+status: 401
+headers:
+  content-length: 68
+  content-type: application/json
+  www-authenticate: Bearer
+  x-hookbox-plane: api
+body: {"detail":"Valid owner capability required.","error":"unauthorized"}
+
+## unknown bearer
+status: 401
+headers:
+  content-length: 68
+  content-type: application/json
+  www-authenticate: Bearer
+  x-hookbox-plane: api
+body: {"detail":"Valid owner capability required.","error":"unauthorized"}
+
+## foreign or missing endpoint
+status: 404
+headers:
+  content-length: 52
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"Endpoint not found.","error":"not_found"}
+
+## session invalid email
+status: 422
+headers:
+  content-length: 66
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"A valid email is required.","error":"validation_error"}
+

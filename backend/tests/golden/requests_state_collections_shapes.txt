@@ -1,0 +1,72 @@
+## list requests bad limit
+status: 422
+headers:
+  content-length: 72
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"limit must be between 1 and 200.","error":"validation_error"}
+
+## clear requests
+status: 200
+headers:
+  content-length: 51
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [message, success]
+
+## get state
+status: 200
+headers:
+  content-length: 12
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [state]
+
+## clear state
+status: 200
+headers:
+  content-length: 43
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [message, success]
+
+## peek collection
+status: 200
+headers:
+  content-length: 12
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [items]
+
+## peek bad collection
+status: 422
+headers:
+  content-length: 66
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"Invalid collection name.","error":"invalid_collection"}
+
+## clear collection
+status: 200
+headers:
+  content-length: 48
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [message, success]
+
+## get missing request
+status: 404
+headers:
+  content-length: 51
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"Request not found.","error":"not_found"}
+
+## delete endpoint
+status: 200
+headers:
+  content-length: 46
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [message, success]
+

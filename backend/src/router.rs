@@ -678,4 +678,34 @@ mod tests {
         assert_eq!(plane.as_deref(), Some("api"));
         assert_eq!(body["error"], json!("unauthorized"));
     }
+
+    /// Oracle for the mock-plane query parser (S0 safety net, hookbox-a73):
+    /// a later phase swaps the hand-rolled decoder for `form_urlencoded` and
+    /// must reproduce every row here unchanged.
+    #[test]
+    fn parse_query_oracle() {
+        let cases: [(&str, &[(&str, &str)]); 13] = [
+            ("a=1&b=2", &[("a", "1"), ("b", "2")]),
+            ("a=x+y", &[("a", "x y")]),
+            ("a=%41", &[("a", "A")]),
+            ("a=%4", &[("a", "%4")]),
+            ("a=%zz", &[("a", "%zz")]),
+            ("a=%%41", &[("a", "%A")]),
+            ("=v", &[("", "v")]),
+            ("a", &[("a", "")]),
+            ("&&a=1&&", &[("a", "1")]),
+            ("a=1&a=2", &[("a", "2")]),
+            ("a=%E2%82%AC", &[("a", "\u{20ac}")]),
+            ("a=%FF", &[("a", "\u{fffd}")]),
+            ("a=b=c", &[("a", "b=c")]),
+        ];
+        for (query, expected) in cases {
+            let uri: axum::http::Uri = format!("/p?{query}").parse().unwrap();
+            let want: BTreeMap<String, String> = expected
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(parse_query(&uri), want, "query `{query}`");
+        }
+    }
 }

@@ -1,0 +1,55 @@
+## payload too large (content-length)
+status: 413
+headers:
+  content-length: 83
+  content-type: application/json
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+body: {"detail":"Request body exceeds the configured limit.","error":"payload_too_large"}
+
+## payload too large (streamed)
+status: 413
+headers:
+  content-length: 83
+  content-type: application/json
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+body: {"detail":"Request body exceeds the configured limit.","error":"payload_too_large"}
+
+## rate limited
+status: 429
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 56
+  content-type: application/json
+  retry-after: <volatile>
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: ratelimit
+  x-ratelimit-limit: 1
+  x-ratelimit-remaining: 0
+body: {"detail":"Rate limit exceeded.","error":"rate_limited"}
+
+## chaos dropout
+status: 499
+headers:
+  connection: close
+  content-length: 0
+  x-hookbox-plane: mock
+body: <empty>
+
+## chaos error (status masked)
+status: 0
+headers:
+  access-control-allow-origin: *
+  access-control-expose-headers: *
+  content-length: 52
+  content-type: application/json
+  vary: Origin
+  x-hookbox-endpoint: <token>
+  x-hookbox-plane: mock
+  x-hookbox-served-by: chaos
+body: {"detail":"Injected chaos failure.","error":"chaos"}
+

@@ -1,0 +1,56 @@
+## non-object body
+status: 422
+headers:
+  content-length: 75
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"Request body must be a JSON object.","error":"validation_error"}
+
+## name too long
+status: 422
+headers:
+  content-length: 76
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"name must be at most 100 characters.","error":"validation_error"}
+
+## bad chaos_mode
+status: 422
+headers:
+  content-length: 80
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"chaos_mode must be 'error' or 'dropout'.","error":"validation_error"}
+
+## bad default_mode
+status: 422
+headers:
+  content-length: 82
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"default_mode must be 'mock_404' or 'echo'.","error":"validation_error"}
+
+## bad target_url scheme
+status: 422
+headers:
+  content-length: 84
+  content-type: application/json
+  x-hookbox-plane: api
+body: {"detail":"target_url must use the http or https scheme","error":"validation_error"}
+
+## latency clamp
+status: 200
+headers:
+  content-length: 359
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [auto_crud, chaos_mode, chaos_pct, cors_enabled, created_at, default_mode, last_hit, latency_ms, mock_url, name, path_url, rate_limit_per_min, request_count, target_url, token, tunnel_active]
+
+## valid patch
+status: 200
+headers:
+  content-length: 360
+  content-type: application/json
+  x-hookbox-plane: api
+body: json-keys [auto_crud, chaos_mode, chaos_pct, cors_enabled, created_at, default_mode, last_hit, latency_ms, mock_url, name, path_url, rate_limit_per_min, request_count, target_url, token, tunnel_active]
+
