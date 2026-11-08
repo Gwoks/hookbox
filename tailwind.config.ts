@@ -127,6 +127,10 @@ const config: Config = {
           from: { transform: 'translateY(100%)' },
           to: { transform: 'translateY(0)' },
         },
+        'sheet-in-right': {
+          from: { transform: 'translateX(100%)' },
+          to: { transform: 'translateX(0)' },
+        },
         'toast-in': {
           from: { opacity: '0', transform: 'translateX(8px)' },
           to: { opacity: '1', transform: 'translateX(0)' },
@@ -148,6 +152,7 @@ const config: Config = {
         'overlay-in': 'overlay-in var(--dur-base) var(--ease-standard)',
         'content-in': 'content-in var(--dur-base) var(--ease-standard)',
         'sheet-in': 'sheet-in var(--dur-slow) var(--ease-standard)',
+        'sheet-in-right': 'sheet-in-right var(--dur-slow) var(--ease-standard)',
         'toast-in': 'toast-in var(--dur-base) var(--ease-standard)',
         'feed-row-in':
           'feed-row-in var(--dur-base) var(--ease-emphasized), rail-flash 600ms var(--ease-standard)',
