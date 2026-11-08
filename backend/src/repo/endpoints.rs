@@ -125,8 +125,10 @@ pub(crate) async fn create_with_fresh_token(
 
 /// OQ-1: tombstone rather than hard-delete so the mock plane returns 410.
 /// Clears the live config (rules / state / Auto-CRUD), revokes every share
-/// link, then sets `gone_at`.
+/// link, then sets `gone_at` — all in ONE transaction, so a failure part-way
+/// leaves the endpoint exactly as it was (no half-deleted live endpoint).
 pub(crate) async fn tombstone(pool: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
     for sql in [
         "DELETE FROM mock_rules WHERE token = ?",
         "DELETE FROM endpoint_state WHERE token = ?",
@@ -137,7 +139,72 @@ pub(crate) async fn tombstone(pool: &SqlitePool, token: &str) -> Result<(), sqlx
         "UPDATE share_links SET revoked_at = datetime('now') WHERE token = ? AND revoked_at IS NULL",
         "UPDATE endpoints SET gone_at = datetime('now') WHERE token = ?",
     ] {
-        sqlx::query(sql).bind(token).execute(pool).await?;
+        // Dropping `tx` on an early `?` rolls the whole tombstone back.
+        sqlx::query(sql).bind(token).execute(&mut *tx).await?;
     }
-    Ok(())
+    tx.commit().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::pool_with_endpoint;
+
+    async fn count(pool: &SqlitePool, sql: &str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    }
+
+    async fn plant_live_config(pool: &SqlitePool) {
+        for sql in [
+            "INSERT INTO mock_rules (token) VALUES ('tok')",
+            "INSERT INTO endpoint_state (token, key, value, expires_at)
+                 VALUES ('tok', 'k', 'v', datetime('now', '+1 hour'))",
+            "INSERT INTO crud_collections (token, name, expires_at)
+                 VALUES ('tok', 'c', datetime('now', '+1 hour'))",
+            "INSERT INTO share_links (code_hash, token) VALUES ('h', 'tok')",
+        ] {
+            sqlx::query(sql).execute(pool).await.unwrap();
+        }
+    }
+
+    /// (live rules, live state, live collections, unrevoked shares)
+    async fn live_config(pool: &SqlitePool) -> [i64; 4] {
+        [
+            count(pool, "SELECT COUNT(*) FROM mock_rules").await,
+            count(pool, "SELECT COUNT(*) FROM endpoint_state").await,
+            count(pool, "SELECT COUNT(*) FROM crud_collections").await,
+            count(
+                pool,
+                "SELECT COUNT(*) FROM share_links WHERE revoked_at IS NULL",
+            )
+            .await,
+        ]
+    }
+
+    #[tokio::test]
+    async fn tombstone_clears_config_revokes_shares_and_sets_gone_at() {
+        let (pool, _owner) = pool_with_endpoint("tok").await;
+        plant_live_config(&pool).await;
+        tombstone(&pool, "tok").await.unwrap();
+        assert_eq!(live_config(&pool).await, [0, 0, 0, 0]);
+        assert!(find(&pool, "tok").await.unwrap().unwrap().is_gone());
+    }
+
+    /// B4: the tombstone is all-or-nothing — when its last statement fails,
+    /// none of the earlier deletes / revokes survive.
+    #[tokio::test]
+    async fn tombstone_is_atomic_when_a_statement_fails() {
+        let (pool, _owner) = pool_with_endpoint("tok").await;
+        plant_live_config(&pool).await;
+        sqlx::query(
+            "CREATE TRIGGER fail_gone BEFORE UPDATE OF gone_at ON endpoints
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(tombstone(&pool, "tok").await.is_err());
+        assert_eq!(live_config(&pool).await, [1, 1, 1, 1]);
+        assert!(!find(&pool, "tok").await.unwrap().unwrap().is_gone());
+    }
 }
