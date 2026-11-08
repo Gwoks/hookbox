@@ -31,6 +31,7 @@ import {
 } from "@/api";
 import { t } from "@/lib/copy";
 import { absolutize } from "@/lib/url";
+import { isEndpointGone } from "@/lib/api-errors";
 import { cn } from "@/lib/cn";
 import { downloadBlob } from "@/lib/download";
 import {
@@ -43,7 +44,7 @@ import {
   type ConfigBundle,
   type ConfigDiffRow,
 } from "@/lib/config-bundle";
-import { AppShell } from "@/components/hookbox/app-shell";
+import { AppShell } from "@/components/owner/app-shell";
 import { CodeBlock } from "@/components/hookbox/code-block";
 import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { InlineAlert } from "@/components/hookbox/inline-alert";
@@ -609,7 +610,7 @@ function ConfigurationSection({
     } catch (err) {
       setExporting(false);
       setExportError(
-        err instanceof ApiError && (err.status === 404 || err.status === 410)
+        isEndpointGone(err)
           ? t("common.error.endpointGone")
           : t("set.config.export.error"),
       );

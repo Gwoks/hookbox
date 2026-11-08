@@ -20,8 +20,8 @@ import {
   Settings as SettingsIcon,
   Share2,
 } from "lucide-react";
-import { BrandMark } from "./brand-mark";
-import { MockUrlChip } from "./code-block";
+import { BrandMark } from "@/components/hookbox/brand-mark";
+import { MockUrlChip } from "@/components/hookbox/code-block";
 import { ShareDialog } from "./share-dialog";
 import { Button } from "@/components/ui/button";
 import {

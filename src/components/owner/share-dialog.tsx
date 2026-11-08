@@ -6,7 +6,8 @@
  * code. No per-row URL, no per-row copy, no Preview (AC-25). */
 import { useEffect, useState } from 'react'
 import { AlertTriangle, ExternalLink } from 'lucide-react'
-import { ApiError, api, type ShareLink, type ShareLinkCreated } from '@/api'
+import { api, ApiError, type ShareLink, type ShareLinkCreated } from '@/api'
+import { errorMessage as apiErrorMessage } from '@/lib/api-errors'
 import { t } from '@/lib/copy'
 import { absolutize } from '@/lib/url'
 import { relTime } from '@/lib/time'
@@ -22,8 +23,8 @@ import {
   DialogFooter,
   DialogHeader,
 } from '@/components/ui/dialog'
-import { InlineAlert } from './inline-alert'
-import { CodeBlock } from './code-block'
+import { InlineAlert } from '@/components/hookbox/inline-alert'
+import { CodeBlock } from '@/components/hookbox/code-block'
 
 // The documented default (backend/src/config.rs SHARE_MAX_PER_ENDPOINT). The
 // API does not expose the configured value to the client, so this is a
@@ -40,13 +41,8 @@ function looksUnreachable(hostname: string): boolean {
 
 // AC-81: a 404/410 on mint/list/revoke surfaces the shared endpoint-gone
 // copy; otherwise the server's own detail (or a generic fallback).
-function errorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    if (err.status === 404 || err.status === 410) return t('common.error.endpointGone')
-    return err.message || fallback
-  }
-  return fallback
-}
+const errorMessage = (err: unknown, fallback: string): string =>
+  apiErrorMessage(err, fallback, { mapGone: true })
 
 type ListState =
   | { kind: 'loading' }

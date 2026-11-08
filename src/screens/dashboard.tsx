@@ -43,7 +43,7 @@ import {
   isSentinelCell,
   type DetailCell,
 } from "@/lib/request-export";
-import { AppShell } from "@/components/hookbox/app-shell";
+import { AppShell } from "@/components/owner/app-shell";
 import { SplitPane } from "@/components/hookbox/split-pane";
 import { FeedRow } from "@/components/hookbox/feed-row";
 import { ConnectionPill } from "@/components/hookbox/connection-pill";

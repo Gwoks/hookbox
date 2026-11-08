@@ -30,7 +30,7 @@ import {
 } from "@/api";
 import { z } from "zod";
 import { t } from "@/lib/copy";
-import { AppShell } from "@/components/hookbox/app-shell";
+import { AppShell } from "@/components/owner/app-shell";
 import { ConfirmDialog } from "@/components/hookbox/confirm-dialog";
 import { MethodBadge } from "@/components/hookbox/method-badge";
 import { InlineAlert } from "@/components/hookbox/inline-alert";

@@ -23,11 +23,7 @@ const OWNER_ONLY = [
 ];
 const FEED_DIR = path.join(SRC, "feed") + path.sep;
 
-const KNOWN_OFFENDERS = new Set([
-  "src/components/hookbox/app-shell.tsx",
-  "src/components/hookbox/confirm-dialog.tsx",
-  "src/components/hookbox/share-dialog.tsx",
-]);
+const KNOWN_OFFENDERS = new Set<string>([]);
 
 function violations(file: string): string[] {
   return directImports(file)
