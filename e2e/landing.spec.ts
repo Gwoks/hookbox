@@ -128,3 +128,40 @@ test.describe("landing gate (AC-J1)", () => {
     await expect(page.getByText(/welcome back/i)).toHaveCount(0);
   });
 });
+
+test.describe("landing page (FE-P5)", () => {
+  test("the hero sets one verb on a peach pill and pairs the one primary with a tint secondary", async ({
+    page,
+  }) => {
+    await installMockBackend(page, { authed: false });
+    await page.goto("/");
+    const h1 = page.getByRole("heading", { level: 1 });
+    await expect(h1).toHaveText("Mock, intercept, and watch HTTP — live.");
+    await expect(h1.getByText("intercept", { exact: true })).toHaveClass(/rounded-pill/);
+    await expect(h1.getByText("intercept", { exact: true })).toHaveClass(/bg-card-peach/);
+
+    await expect(
+      page.getByRole("button", { name: "Get my endpoint", exact: true }),
+    ).toHaveClass(/bg-accent-fill/);
+    await expect(
+      page.getByRole("button", { name: "I have a recovery key", exact: true }),
+    ).toHaveClass(/bg-accent-subtle-bg/);
+    // DESIGN.md: one filled blue action per screen.
+    await expect(page.locator('[class~="bg-accent-fill"]')).toHaveCount(1);
+  });
+
+  test("the header links to the feature grid, the CLI and the call to action", async ({
+    page,
+  }) => {
+    await installMockBackend(page, { authed: false });
+    await page.goto("/");
+    const banner = page.getByRole("banner");
+    await banner.getByRole("link", { name: "How it works", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "One URL. Every request on the record." })).toBeInViewport();
+    await expect(banner.getByRole("link", { name: "CLI", exact: true })).toHaveAttribute("href", "/cli");
+    await banner.getByRole("link", { name: "Get started", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Get my endpoint", exact: true })).toBeInViewport();
+    // The product mockup is a picture, not a second (inert) dashboard.
+    await expect(page.getByRole("option")).toHaveCount(0);
+  });
+});

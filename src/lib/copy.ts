@@ -12,6 +12,8 @@ export const copy = {
   'landing.brand.wordmark': 'HookBox',
   'landing.brand.markAlt': 'HookBox',
   'landing.hero.headline': 'Mock, intercept, and watch HTTP — live.',
+  // The one word of the headline set on the peach hero pill.
+  'landing.hero.highlight': 'intercept',
   'landing.hero.subhead':
     'Self-hosted API mocking and request interception with a real-time inspector. One click, one endpoint. No email, no password, no setup.',
   'landing.start.submit': 'Get my endpoint',
@@ -28,7 +30,21 @@ export const copy = {
   'landing.strip.inspect.title': 'Inspect',
   'landing.strip.inspect.body':
     'A streaming feed of every hit with a deep inspector — headers, query, body, the response served, and the full resolution trace.',
-  'landing.cli.link': 'Already have an endpoint? Tunnel from your machine →',
+  'landing.nav.how': 'How it works',
+  'landing.nav.cli': 'CLI',
+  'landing.nav.getStarted': 'Get started',
+  'landing.mockup.caption':
+    'A preview of the HookBox dashboard: a live feed of requests beside the selected request and its headers.',
+  'landing.mockup.endpoint': 'checkout-api',
+  'landing.features.eyebrow': 'How it works',
+  'landing.features.title': 'One URL. Every request on the record.',
+  'landing.features.lead':
+    "Point a webhook or a client at your mock URL. HookBox answers by your rules, forwards what you don't mock, and shows every hit the moment it lands.",
+  'landing.features.mock.sample': 'POST /login  →  201\n{ "token": "{{random \'uuid\'}}" }',
+  'landing.tunnel.body':
+    "Forward an endpoint's public traffic to a server on your localhost — test webhooks against the code you're running right now.",
+  'landing.tunnel.command': 'tunnel --port 3000 --endpoint <endpoint> --key <recovery-key>',
+  'landing.tunnel.link': 'Read the CLI guide',
   'landing.footer.tagline':
     "Self-hosted · Single binary · No tracking — built for developers who'd rather run it themselves.",
   // ── 4.2 Landing states ──

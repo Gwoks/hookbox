@@ -43,3 +43,23 @@ test("AC-D16: feed-row arrival animation is suppressed under reduced motion", as
     `animName=${animName} animDur=${animDur} transDur=${transDur}`,
   ).toBeTruthy();
 });
+
+test("the landing hero's character marks do not animate under reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await installMockBackend(page, { authed: false });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Get my endpoint" })).toBeVisible();
+  const marks = page.locator('[aria-hidden="true"] > .animate-mark-in');
+  await expect(marks).toHaveCount(5);
+  const names = await marks.evaluateAll((els) =>
+    els.map((el) => getComputedStyle(el).animationName),
+  );
+  expect(names.every((name) => name === "none")).toBe(true);
+  // ...and they are fully visible, not stuck at the keyframes' opacity 0.
+  const opacities = await marks.evaluateAll((els) =>
+    els.map((el) => Number(getComputedStyle(el).opacity)),
+  );
+  expect(opacities.every((o) => o === 1)).toBe(true);
+});
