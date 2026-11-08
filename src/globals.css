@@ -131,6 +131,7 @@
   --neutral-chip-fg: var(--stone);
   --neutral-chip-bg: var(--warm-100);
   --overlay-scrim: rgba(0, 0, 0, 0.45);
+  --control-thumb: var(--white); /* switch thumb */
 
   /* Accent feature cards (DESIGN.md "Accent/Dark Feature Card"): a full hue
      fill with ink text and no border; midnight is the inverted island. */
@@ -251,6 +252,7 @@
   --neutral-chip-fg: var(--warm-200-dark);
   --neutral-chip-bg: var(--warm-800);
   --overlay-scrim: rgba(0, 0, 0, 0.62);
+  --control-thumb: var(--warm-25-dark);
 
   /* Accent cards — dark: a 16% wash of the hue with primary text and a 28%
      hue border (a full-strength fill would glare on the charcoal canvas). */

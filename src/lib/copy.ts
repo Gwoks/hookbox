@@ -693,6 +693,12 @@ export const copy = {
   'common.notFound.title': 'Page not found',
   'common.notFound.body': "That page doesn't exist.",
   'common.notFound.home': 'Back to start',
+  // Shared primitives (S4): NumberSlider's nullable toggle, ListEditor rows.
+  'common.inherit': 'Inherit',
+  'common.inherit.helper': 'Use the endpoint setting',
+  'common.list.remove': 'Remove row {n}',
+  'common.list.empty': 'Nothing added yet.',
+  'common.loading': 'Loading…',
 } as const
 
 export type CopyKey = keyof typeof copy

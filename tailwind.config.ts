@@ -60,6 +60,7 @@ const config: Config = {
         danger: { fg: 'var(--danger-fg)', bg: 'var(--danger-bg)', border: 'var(--danger-border)' },
         info: { fg: 'var(--info-fg)', bg: 'var(--info-bg)' },
         focus: 'var(--focus-ring)',
+        control: { thumb: 'var(--control-thumb)' },
         // Accent feature cards (DESIGN.md): `bg-card-sky text-card-sky-fg
         // border-card-sky-border`. Light = full hue fill; dark = 16% wash.
         card: Object.fromEntries(

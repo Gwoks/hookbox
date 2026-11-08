@@ -96,7 +96,7 @@ describe.each(THEMES)('%s theme meets WCAG AA (>= 4.5:1)', (_name, vars) => {
     expect(contrast(vars, fg, bg, '--bg-surface')).toBeGreaterThanOrEqual(AA)
   })
 
-  it.each(['--text-primary', '--text-secondary', '--text-tertiary'])(
+  it.each(['--text-primary', '--text-secondary', '--text-tertiary', '--accent-strong'])(
     '%s on the canvas and on surfaces',
     (fg) => {
       expect(contrast(vars, fg, '--bg-canvas')).toBeGreaterThanOrEqual(AA)
