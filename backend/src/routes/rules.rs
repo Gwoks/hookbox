@@ -9,33 +9,15 @@ use axum::{
     Json,
 };
 use serde_json::{json, Value};
-use sqlx::Row;
 
 use crate::auth::{assert_owns_endpoint, OwnerId};
 use crate::error::ApiError;
 use crate::models::{MatchCriteria, MockRule, MockRuleCreate, ResponseSpec, StateWrite};
-use crate::repo::bind_value;
+use crate::repo::{bind_value, rules};
 use crate::state::AppState;
-use crate::util::json::parse_json_or;
-use crate::util::time::to_rfc3339;
 
-fn rule_from_row(row: &sqlx::sqlite::SqliteRow) -> MockRule {
-    let webhook: Option<String> = row.get("webhook_json");
-    MockRule {
-        id: row.get("id"),
-        token: row.get("token"),
-        name: row.get("name"),
-        priority: row.get("priority"),
-        enabled: row.get::<i64, _>("enabled") != 0,
-        match_: parse_json_or(row.get("match_json"), json!({})),
-        response: parse_json_or(row.get("response_json"), json!({})),
-        state_writes: parse_json_or(row.get("state_writes_json"), json!([])),
-        latency_ms: row.get("latency_ms"),
-        rate_limit_per_min: row.get("rate_limit_per_min"),
-        chaos_mode: row.get("chaos_mode"),
-        webhook_action: webhook.and_then(|w| serde_json::from_str(&w).ok()),
-        created_at: to_rfc3339(row.get("created_at")).unwrap_or_default(),
-    }
+fn rule_not_found() -> ApiError {
+    ApiError::not_found("Rule not found.")
 }
 
 // --- 7. GET /api/endpoints/{token}/rules -------------------------------------
@@ -46,11 +28,8 @@ pub(super) async fn list_rules(
     Path(token): Path<String>,
 ) -> Result<Json<Vec<MockRule>>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let rows = sqlx::query("SELECT * FROM mock_rules WHERE token = ? ORDER BY priority, id")
-        .bind(&token)
-        .fetch_all(&state.pool)
-        .await?;
-    Ok(Json(rows.iter().map(rule_from_row).collect()))
+    let rows = rules::list(&state.pool, &token).await?;
+    Ok(Json(rows.iter().map(MockRule::from_row).collect()))
 }
 
 // --- 8. POST /api/endpoints/{token}/rules ------------------------------------
@@ -127,11 +106,10 @@ pub(super) async fn create_rule(
     .await?;
 
     state.rule_cache.invalidate(&token);
-    let row = sqlx::query("SELECT * FROM mock_rules WHERE id = ?")
-        .bind(id)
-        .fetch_one(&state.pool)
-        .await?;
-    Ok((StatusCode::CREATED, Json(rule_from_row(&row))).into_response())
+    let row = rules::find(&state.pool, &token, id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    Ok((StatusCode::CREATED, Json(MockRule::from_row(&row))).into_response())
 }
 
 // --- 9. GET /api/endpoints/{token}/rules/{id} --------------------------------
@@ -142,13 +120,10 @@ pub(super) async fn get_rule(
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Json<MockRule>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let row = sqlx::query("SELECT * FROM mock_rules WHERE id = ? AND token = ?")
-        .bind(rule_id)
-        .bind(&token)
-        .fetch_optional(&state.pool)
+    let row = rules::find(&state.pool, &token, rule_id)
         .await?
-        .ok_or_else(|| ApiError::not_found("Rule not found."))?;
-    Ok(Json(rule_from_row(&row)))
+        .ok_or_else(rule_not_found)?;
+    Ok(Json(MockRule::from_row(&row)))
 }
 
 // --- 10. PATCH /api/endpoints/{token}/rules/{id} -----------------------------
@@ -160,15 +135,9 @@ pub(super) async fn patch_rule(
     Json(raw): Json<Value>,
 ) -> Result<Json<MockRule>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM mock_rules WHERE id = ? AND token = ?")
-            .bind(rule_id)
-            .bind(&token)
-            .fetch_optional(&state.pool)
-            .await?;
-    if exists.is_none() {
-        return Err(ApiError::not_found("Rule not found."));
-    }
+    let current = rules::find(&state.pool, &token, rule_id)
+        .await?
+        .ok_or_else(rule_not_found)?;
     let obj = raw
         .as_object()
         .ok_or_else(|| ApiError::validation("Request body must be a JSON object."))?;
@@ -272,25 +241,25 @@ pub(super) async fn patch_rule(
         });
     }
 
-    if !sets.is_empty() {
-        let sql = format!(
-            "UPDATE mock_rules SET {} WHERE id = ? AND token = ?",
-            sets.join(", ")
-        );
-        let mut q = sqlx::query(&sql);
-        for b in &binds {
-            q = bind_value(q, b);
-        }
-        q = q.bind(rule_id).bind(&token);
-        q.execute(&state.pool).await?;
-        state.rule_cache.invalidate(&token);
+    if sets.is_empty() {
+        return Ok(Json(MockRule::from_row(&current)));
     }
+    let sql = format!(
+        "UPDATE mock_rules SET {} WHERE id = ? AND token = ?",
+        sets.join(", ")
+    );
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = bind_value(q, b);
+    }
+    q = q.bind(rule_id).bind(&token);
+    q.execute(&state.pool).await?;
+    state.rule_cache.invalidate(&token);
 
-    let row = sqlx::query("SELECT * FROM mock_rules WHERE id = ?")
-        .bind(rule_id)
-        .fetch_one(&state.pool)
-        .await?;
-    Ok(Json(rule_from_row(&row)))
+    let row = rules::find(&state.pool, &token, rule_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    Ok(Json(MockRule::from_row(&row)))
 }
 
 // --- 11. DELETE /api/endpoints/{token}/rules/{id} (204, no body) -------------
@@ -308,7 +277,7 @@ pub(super) async fn delete_rule(
             .fetch_optional(&state.pool)
             .await?;
     if exists.is_none() {
-        return Err(ApiError::not_found("Rule not found."));
+        return Err(rule_not_found());
     }
     sqlx::query("DELETE FROM mock_rules WHERE id = ? AND token = ?")
         .bind(rule_id)

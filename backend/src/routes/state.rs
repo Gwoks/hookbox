@@ -55,7 +55,7 @@ pub(super) async fn peek_collection(
     .fetch_optional(&state.pool)
     .await?;
     Ok(Json(CollectionResponse {
-        items: parse_json_or(items, json!([])),
+        items: parse_json_or(items.as_deref(), json!([])),
     }))
 }
 

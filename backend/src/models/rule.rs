@@ -2,7 +2,11 @@
 //! writes, webhook action, and the serialized rule row.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+
+use crate::repo::rules::RuleRow;
+use crate::util::json::parse_json_or;
+use crate::util::time::rfc3339;
 
 fn default_method() -> String {
     "ANY".to_string()
@@ -153,6 +157,29 @@ pub struct MockRule {
     pub chaos_mode: Option<String>, // OQ-2
     pub webhook_action: Option<Value>,
     pub created_at: String,
+}
+
+impl MockRule {
+    pub(crate) fn from_row(row: &RuleRow) -> Self {
+        MockRule {
+            id: row.id,
+            token: row.token.clone(),
+            name: row.name.clone(),
+            priority: row.priority,
+            enabled: row.enabled,
+            match_: parse_json_or(Some(row.match_json.as_str()), json!({})),
+            response: parse_json_or(Some(row.response_json.as_str()), json!({})),
+            state_writes: parse_json_or(Some(row.state_writes_json.as_str()), json!([])),
+            latency_ms: row.latency_ms,
+            rate_limit_per_min: row.rate_limit_per_min,
+            chaos_mode: row.chaos_mode.clone(),
+            webhook_action: row
+                .webhook_json
+                .as_deref()
+                .and_then(|w| serde_json::from_str(w).ok()),
+            created_at: rfc3339(&row.created_at),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -7,15 +7,15 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use sqlx::Row;
 
 use super::no_store;
 use crate::auth::{assert_owns_endpoint, OwnerId};
 use crate::error::ApiError;
 use crate::ids::{gen_share_code, hash_secret};
 use crate::models::{ShareLink, ShareLinkCreate, ShareLinkCreated};
+use crate::repo::shares;
 use crate::state::AppState;
-use crate::util::time::to_rfc3339;
+use crate::util::time::rfc3339;
 
 /// `url` is built from `PUBLIC_BASE_URL` only — never `mock_url`'s wildcard
 /// form, never `Host`/`X-Forwarded-Host` (AC-99, AC-S14). A share URL on the
@@ -82,7 +82,7 @@ pub(crate) async fn create_share(
     // in this database, ever.
     let code = gen_share_code(state.cfg.share_code_bytes);
     let code_hash = hash_secret(&code);
-    let row = sqlx::query(
+    let (id, created_at): (i64, String) = sqlx::query_as(
         "INSERT INTO share_links (code_hash, token, label) VALUES (?, ?, ?) RETURNING id, created_at",
     )
     .bind(&code_hash)
@@ -90,8 +90,6 @@ pub(crate) async fn create_share(
     .bind(&label)
     .fetch_one(&state.pool)
     .await?;
-    let id: i64 = row.get("id");
-    let created_at: Option<String> = row.get("created_at");
 
     // 7. `code` and `url` appear ONLY here, in ONLY this response, and are
     // never re-derivable (AC-104).
@@ -100,7 +98,7 @@ pub(crate) async fn create_share(
         code: code.clone(),
         url: share_url(&state, &code),
         label,
-        created_at: to_rfc3339(created_at).unwrap_or_default(),
+        created_at: rfc3339(&created_at),
         last_used_at: None,
     };
     Ok(no_store((StatusCode::CREATED, Json(resp)).into_response()))
@@ -115,23 +113,8 @@ pub(crate) async fn list_shares(
 ) -> Result<Json<Vec<ShareLink>>, ApiError> {
     assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     // Revoked links never appear (AC-25). No `code`, no `url`, no code prefix.
-    let rows = sqlx::query(
-        "SELECT id, label, created_at, last_used_at FROM share_links
-          WHERE token = ? AND revoked_at IS NULL ORDER BY created_at DESC, id DESC",
-    )
-    .bind(&token)
-    .fetch_all(&state.pool)
-    .await?;
-    let list = rows
-        .iter()
-        .map(|r| ShareLink {
-            id: r.get("id"),
-            label: r.get("label"),
-            created_at: to_rfc3339(r.get("created_at")).unwrap_or_default(),
-            last_used_at: to_rfc3339(r.get("last_used_at")),
-        })
-        .collect();
-    Ok(Json(list))
+    let rows = shares::list_active(&state.pool, &token).await?;
+    Ok(Json(rows.iter().map(ShareLink::from_row).collect()))
 }
 
 // === #21 DELETE /api/endpoints/{token}/shares/{id} (owner) ===================

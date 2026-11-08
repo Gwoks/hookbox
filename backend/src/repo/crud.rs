@@ -36,7 +36,7 @@ pub async fn list_items(
     .bind(name)
     .fetch_optional(pool)
     .await?;
-    Ok(parse_json_or(items, Vec::new()))
+    Ok(parse_json_or(items.as_deref(), Vec::new()))
 }
 
 /// Persist a new items array for a collection inside the calling transaction.
@@ -85,7 +85,7 @@ pub async fn append_item(
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_json_or(current, Vec::new());
+    let mut items = parse_json_or(current.as_deref(), Vec::new());
     if items.len() >= max_items {
         tx.rollback().await.ok();
         return Ok(Mutation::TooLarge);
@@ -194,7 +194,7 @@ where
             .bind(name)
             .fetch_optional(&mut *tx)
             .await?;
-    let mut items = parse_json_or(current, Vec::new());
+    let mut items = parse_json_or(current.as_deref(), Vec::new());
     match f(&mut items) {
         Mutation::Ok(new_items, ret) => {
             write_items(&mut tx, token, name, &new_items, ttl_seconds).await?;

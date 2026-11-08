@@ -4,8 +4,11 @@
 //! only the pool and the migrations.
 
 pub(crate) mod crud;
+pub(crate) mod endpoints;
 pub(crate) mod owners;
 pub(crate) mod requests;
+pub(crate) mod rules;
+pub(crate) mod shares;
 pub(crate) mod state;
 
 use serde_json::Value;

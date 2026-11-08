@@ -10,70 +10,26 @@ use axum::{
     Json,
 };
 use serde_json::{json, Value};
-use sqlx::Row;
 
-use crate::auth::{assert_owns_endpoint, OwnerId};
+use crate::auth::{assert_owns_endpoint, require_owned_endpoint, OwnerId};
 use crate::error::ApiError;
 use crate::ids::gen_token;
 use crate::models::{EndpointCreate, EndpointDetail, EndpointSummary, Message};
 use crate::repo::bind_value;
+use crate::repo::endpoints::{self, EndpointRow};
 use crate::state::AppState;
-use crate::util::time::to_rfc3339;
+
 use crate::validate::validate_target_url;
 
 // --- presentation -------------------------------------------------------------
 
-fn mock_url(state: &AppState, token: &str) -> String {
-    if state.cfg.path_fallback_only {
-        // PUBLIC_BASE_URL makes this copy-pasteable (e.g.
-        // `https://hookbox.example.com/e/<token>`); blank keeps it relative.
-        path_url(state, token)
-    } else {
-        format!("https://{token}.{}", state.cfg.mock_domain)
-    }
+/// The summary shape (shared with the session route).
+pub(super) fn endpoint_summary(state: &AppState, row: &EndpointRow) -> EndpointSummary {
+    EndpointSummary::from_row(row, &state.cfg)
 }
 
-fn path_url(state: &AppState, token: &str) -> String {
-    format!("{}/e/{token}", state.cfg.public_base_url)
-}
-
-pub(super) fn endpoint_summary(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> EndpointSummary {
-    let token: String = row.get("token");
-    EndpointSummary {
-        mock_url: mock_url(state, &token),
-        path_url: path_url(state, &token),
-        name: row.get("name"),
-        created_at: to_rfc3339(row.get("created_at")).unwrap_or_default(),
-        last_hit: to_rfc3339(row.get("last_hit")),
-        request_count: row.get("request_count"),
-        token,
-    }
-}
-
-fn endpoint_detail(
-    state: &AppState,
-    row: &sqlx::sqlite::SqliteRow,
-    tunnel_active: bool,
-) -> EndpointDetail {
-    let token: String = row.get("token");
-    EndpointDetail {
-        mock_url: mock_url(state, &token),
-        path_url: path_url(state, &token),
-        name: row.get("name"),
-        auto_crud: row.get::<i64, _>("auto_crud") != 0,
-        target_url: row.get("target_url"),
-        default_mode: row.get("default_mode"),
-        latency_ms: row.get("latency_ms"),
-        rate_limit_per_min: row.get("rate_limit_per_min"),
-        chaos_pct: row.get("chaos_pct"),
-        chaos_mode: row.get("chaos_mode"),
-        cors_enabled: row.get::<i64, _>("cors_enabled") != 0,
-        tunnel_active,
-        created_at: to_rfc3339(row.get("created_at")).unwrap_or_default(),
-        last_hit: to_rfc3339(row.get("last_hit")),
-        request_count: row.get("request_count"),
-        token,
-    }
+fn endpoint_detail(state: &AppState, row: &EndpointRow) -> EndpointDetail {
+    EndpointDetail::from_row(row, &state.cfg, state.tunnels.is_active(&row.token))
 }
 
 /// Insert a fresh endpoint for an owner, retrying on the (astronomically rare)
@@ -103,13 +59,8 @@ pub(super) async fn new_endpoint(
     Ok(token)
 }
 
-async fn fetch_endpoint(
-    state: &AppState,
-    token: &str,
-) -> Result<sqlx::sqlite::SqliteRow, ApiError> {
-    sqlx::query("SELECT * FROM endpoints WHERE token = ?")
-        .bind(token)
-        .fetch_optional(&state.pool)
+async fn fetch_endpoint(state: &AppState, token: &str) -> Result<EndpointRow, ApiError> {
+    endpoints::find(&state.pool, token)
         .await?
         .ok_or_else(|| ApiError::not_found("Endpoint not found."))
 }
@@ -120,10 +71,7 @@ pub(super) async fn list_endpoints(
     State(state): State<AppState>,
     OwnerId(owner_id): OwnerId,
 ) -> Result<Json<Vec<EndpointSummary>>, ApiError> {
-    let rows = sqlx::query("SELECT * FROM endpoints WHERE owner_id = ? ORDER BY created_at, token")
-        .bind(&owner_id)
-        .fetch_all(&state.pool)
-        .await?;
+    let rows = endpoints::list_by_owner(&state.pool, &owner_id).await?;
     Ok(Json(
         rows.iter().map(|r| endpoint_summary(&state, r)).collect(),
     ))
@@ -143,12 +91,7 @@ pub(super) async fn create_endpoint(
     }
     let token = new_endpoint(&state, &owner_id, body.name.as_deref()).await?;
     let row = fetch_endpoint(&state, &token).await?;
-    let active = state.tunnels.is_active(&token);
-    Ok((
-        StatusCode::CREATED,
-        Json(endpoint_detail(&state, &row, active)),
-    )
-        .into_response())
+    Ok((StatusCode::CREATED, Json(endpoint_detail(&state, &row))).into_response())
 }
 
 // --- 4. GET /api/endpoints/{token} -------------------------------------------
@@ -158,10 +101,8 @@ pub(super) async fn get_endpoint(
     OwnerId(owner_id): OwnerId,
     Path(token): Path<String>,
 ) -> Result<Json<EndpointDetail>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let row = fetch_endpoint(&state, &token).await?;
-    let active = state.tunnels.is_active(&token);
-    Ok(Json(endpoint_detail(&state, &row, active)))
+    let row = require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    Ok(Json(endpoint_detail(&state, &row)))
 }
 
 // --- 5. PATCH /api/endpoints/{token} -----------------------------------------
@@ -265,8 +206,7 @@ pub(super) async fn patch_endpoint(
     }
 
     let row = fetch_endpoint(&state, &token).await?;
-    let active = state.tunnels.is_active(&token);
-    Ok(Json(endpoint_detail(&state, &row, active)))
+    Ok(Json(endpoint_detail(&state, &row)))
 }
 
 // --- 6. DELETE /api/endpoints/{token} (tombstone) ----------------------------

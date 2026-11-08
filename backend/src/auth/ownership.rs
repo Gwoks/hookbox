@@ -5,14 +5,7 @@ use sqlx::SqlitePool;
 
 use super::owner_for_key;
 use crate::error::ApiError;
-
-/// The owner of `token` (tombstoned endpoints included), if it exists.
-async fn endpoint_owner(pool: &SqlitePool, token: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT owner_id FROM endpoints WHERE token = ?")
-        .bind(token)
-        .fetch_optional(pool)
-        .await
-}
+use crate::repo::endpoints::{self, owner_of as endpoint_owner, EndpointRow};
 
 /// `Ok(())` iff `owner_id` owns `token`; else 404 (never 403). Callers that
 /// need the full row should select it themselves after this passes, or use
@@ -24,6 +17,19 @@ pub async fn assert_owns_endpoint(
 ) -> Result<(), ApiError> {
     match endpoint_owner(pool, token).await? {
         Some(o) if o == owner_id => Ok(()),
+        _ => Err(ApiError::not_found("Endpoint not found.")),
+    }
+}
+
+/// The endpoint row iff `owner_id` owns `token`; else 404 (never 403). One
+/// query for the check and the row.
+pub(crate) async fn require_owned_endpoint(
+    pool: &SqlitePool,
+    token: &str,
+    owner_id: &str,
+) -> Result<EndpointRow, ApiError> {
+    match endpoints::find(pool, token).await? {
+        Some(row) if row.owner_id == owner_id => Ok(row),
         _ => Err(ApiError::not_found("Endpoint not found.")),
     }
 }

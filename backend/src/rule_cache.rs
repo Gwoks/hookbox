@@ -10,10 +10,11 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
-use crate::interceptor::matcher::{compile_rule, CompiledRule};
-use crate::models::{MatchCriteria, ResponseSpec, StateWrite, WebhookAction};
+use crate::interceptor::matcher::CompiledRule;
+use crate::repo::endpoints::{self, EndpointRow};
+use crate::repo::rules::{self, RuleRow};
 
 /// A compiled endpoint ready for the fast path.
 #[derive(Clone)]
@@ -72,71 +73,38 @@ impl RuleCache {
         if let Some(hit) = self.entries.get(token) {
             return Ok(Some(hit.clone()));
         }
-        let row = sqlx::query("SELECT * FROM endpoints WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await?;
-        let row = match row {
-            Some(r) => r,
-            None => return Ok(None), // unknown -> 404 (not cached)
+        let Some(row) = endpoints::find(pool, token).await? else {
+            return Ok(None); // unknown -> 404 (not cached)
         };
-        let gone_at: Option<String> = row.get("gone_at");
-        if gone_at.is_some() {
+        if row.is_gone() {
             self.entries.insert(token.to_string(), Resolved::Gone);
             return Ok(Some(Resolved::Gone));
         }
-
-        let rule_rows =
-            sqlx::query("SELECT * FROM mock_rules WHERE token = ? ORDER BY priority, id")
-                .bind(token)
-                .fetch_all(pool)
-                .await?;
-        let mut rules = Vec::with_capacity(rule_rows.len());
-        let mut any_state = false;
-        for r in &rule_rows {
-            let match_json: String = r.get("match_json");
-            let response_json: String = r.get("response_json");
-            let writes_json: String = r.get("state_writes_json");
-            let webhook_json: Option<String> = r.get("webhook_json");
-            let mc: MatchCriteria = serde_json::from_str(&match_json).unwrap_or_default();
-            let rsp: ResponseSpec = serde_json::from_str(&response_json).unwrap_or_default();
-            let writes: Vec<StateWrite> = serde_json::from_str(&writes_json).unwrap_or_default();
-            let webhook: Option<WebhookAction> =
-                webhook_json.and_then(|w| serde_json::from_str(&w).ok());
-            let compiled = compile_rule(
-                r.get("id"),
-                r.get("priority"),
-                r.get::<i64, _>("enabled") != 0,
-                &mc,
-                rsp,
-                writes,
-                r.get("latency_ms"),
-                r.get("rate_limit_per_min"),
-                r.get("chaos_mode"),
-                webhook,
-            );
-            if compiled.gates_on_state() {
-                any_state = true;
-            }
-            rules.push(compiled);
-        }
-
-        let ep = Arc::new(CompiledEndpoint {
-            token: token.to_string(),
-            auto_crud: row.get::<i64, _>("auto_crud") != 0,
-            target_url: row.get("target_url"),
-            default_mode: row.get("default_mode"),
-            latency_ms: row.get("latency_ms"),
-            rate_limit_per_min: row.get("rate_limit_per_min"),
-            chaos_pct: row.get("chaos_pct"),
-            chaos_mode: row.get("chaos_mode"),
-            cors_enabled: row.get::<i64, _>("cors_enabled") != 0,
-            rules: Arc::new(rules),
-            any_rule_gates_on_state: any_state,
-        });
-        let resolved = Resolved::Live(ep);
+        let rule_rows = rules::list(pool, token).await?;
+        let resolved = Resolved::Live(Arc::new(CompiledEndpoint::from_rows(&row, &rule_rows)));
         self.entries.insert(token.to_string(), resolved.clone());
         Ok(Some(resolved))
+    }
+}
+
+impl CompiledEndpoint {
+    /// Compile a live endpoint row plus its rules (already in `priority, id`
+    /// order) for the fast path.
+    pub(crate) fn from_rows(row: &EndpointRow, rule_rows: &[RuleRow]) -> Self {
+        let rules: Vec<CompiledRule> = rule_rows.iter().map(CompiledRule::from_row).collect();
+        CompiledEndpoint {
+            token: row.token.clone(),
+            auto_crud: row.auto_crud,
+            target_url: row.target_url.clone(),
+            default_mode: row.default_mode.clone(),
+            latency_ms: row.latency_ms,
+            rate_limit_per_min: row.rate_limit_per_min,
+            chaos_pct: row.chaos_pct,
+            chaos_mode: row.chaos_mode.clone(),
+            cors_enabled: row.cors_enabled,
+            any_rule_gates_on_state: rules.iter().any(CompiledRule::gates_on_state),
+            rules: Arc::new(rules),
+        }
     }
 }
 

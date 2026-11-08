@@ -193,3 +193,35 @@ async fn foreign_endpoint_is_404_not_403() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], json!("not_found"));
 }
+
+/// B7: a stored value that cannot decode into its column type (a BLOB in a
+/// TEXT column keeps its storage class; 'high' in an INTEGER column stays
+/// TEXT) is a stable 503 `store_unavailable` on every read path that loads
+/// the row — never a panic turned into a bare 500.
+#[tokio::test]
+async fn row_decode_mismatch_is_503_store_unavailable() {
+    let TestApp { app, secret, state } = TestApp::new().await;
+    let token = new_endpoint(&app, &secret).await;
+    add_rule(&app, &secret, &token, json!({"priority": 5})).await;
+    sqlx::query("UPDATE endpoints SET name = x'00ff' WHERE token = ?")
+        .bind(&token)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE mock_rules SET priority = 'high' WHERE token = ?")
+        .bind(&token)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let paths = [
+        "/api/session".to_string(),
+        "/api/endpoints".to_string(),
+        format!("/api/endpoints/{token}"),
+        format!("/api/endpoints/{token}/rules"),
+    ];
+    for path in paths {
+        let (s, body, _) = call(&app, "GET", APP_HOST, &path, Some(&secret), None).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{path}: {body}");
+        assert_eq!(body["error"], json!("store_unavailable"), "{path}");
+    }
+}

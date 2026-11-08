@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use crate::models::{
     BodyCondition, MatchCriteria, ResponseSpec, StateRequirement, StateWrite, WebhookAction,
 };
+use crate::repo::rules::RuleRow;
 use crate::util::json::jsonpath_lite;
 
 /// A compiled path: a sequence of segment matchers plus a trailing-wildcard flag.
@@ -135,46 +136,40 @@ pub struct CompiledRule {
 }
 
 impl CompiledRule {
+    /// Compile a stored rule. A JSON column that does not parse degrades to
+    /// its default (an unparseable match = the catch-all default criteria,
+    /// exactly as the rule was always cold-loaded).
+    pub(crate) fn from_row(row: &RuleRow) -> Self {
+        let criteria: MatchCriteria = serde_json::from_str(&row.match_json).unwrap_or_default();
+        let headers = criteria
+            .headers
+            .iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+            .collect();
+        CompiledRule {
+            id: row.id,
+            priority: row.priority,
+            enabled: row.enabled,
+            method: criteria.method.to_ascii_uppercase(),
+            path: compile_path(&criteria.path),
+            headers,
+            query: criteria.query,
+            body_conditions: criteria.body_conditions,
+            state_requirements: criteria.state_requirements,
+            response: serde_json::from_str(&row.response_json).unwrap_or_default(),
+            state_writes: serde_json::from_str(&row.state_writes_json).unwrap_or_default(),
+            latency_ms: row.latency_ms,
+            rate_limit_per_min: row.rate_limit_per_min,
+            chaos_mode: row.chaos_mode.clone(),
+            webhook_action: row
+                .webhook_json
+                .as_deref()
+                .and_then(|w| serde_json::from_str::<WebhookAction>(w).ok()),
+        }
+    }
+
     pub fn gates_on_state(&self) -> bool {
         !self.state_requirements.is_empty()
-    }
-}
-
-/// Build a `CompiledRule` from already-parsed DB fields.
-#[allow(clippy::too_many_arguments)]
-pub fn compile_rule(
-    id: i64,
-    priority: i64,
-    enabled: bool,
-    match_: &MatchCriteria,
-    response: ResponseSpec,
-    state_writes: Vec<StateWrite>,
-    latency_ms: Option<i64>,
-    rate_limit_per_min: Option<i64>,
-    chaos_mode: Option<String>,
-    webhook_action: Option<WebhookAction>,
-) -> CompiledRule {
-    let headers = match_
-        .headers
-        .iter()
-        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-        .collect();
-    CompiledRule {
-        id,
-        priority,
-        enabled,
-        method: match_.method.to_ascii_uppercase(),
-        path: compile_path(&match_.path),
-        headers,
-        query: match_.query.clone(),
-        body_conditions: match_.body_conditions.clone(),
-        state_requirements: match_.state_requirements.clone(),
-        response,
-        state_writes,
-        latency_ms,
-        rate_limit_per_min,
-        chaos_mode,
-        webhook_action,
     }
 }
 
@@ -284,24 +279,60 @@ pub fn select<'a>(
 mod tests {
     use super::*;
 
+    fn row(id: i64, priority: i64, match_json: String) -> RuleRow {
+        RuleRow {
+            id,
+            token: "tok".into(),
+            name: None,
+            priority,
+            enabled: true,
+            match_json,
+            response_json: "{}".into(),
+            state_writes_json: "[]".into(),
+            latency_ms: None,
+            rate_limit_per_min: None,
+            chaos_mode: None,
+            webhook_json: None,
+            created_at: String::new(),
+        }
+    }
+
     fn rule(id: i64, priority: i64, method: &str, path: &str) -> CompiledRule {
-        let mc = MatchCriteria {
+        let criteria = MatchCriteria {
             method: method.into(),
             path: path.into(),
             ..Default::default()
         };
-        compile_rule(
+        CompiledRule::from_row(&row(
             id,
             priority,
-            true,
-            &mc,
-            ResponseSpec::default(),
-            vec![],
-            None,
-            None,
-            None,
-            None,
-        )
+            serde_json::to_string(&criteria).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn from_row_upper_cases_the_method() {
+        assert_eq!(rule(1, 10, "get", "/x").method, "GET");
+    }
+
+    #[test]
+    fn from_row_degrades_corrupt_json_to_defaults() {
+        let corrupt = RuleRow {
+            enabled: false,
+            response_json: "[]".into(),
+            state_writes_json: "nope".into(),
+            latency_ms: Some(3),
+            webhook_json: Some(r#"{"url":5}"#.into()),
+            ..row(2, 5, "{oops".into())
+        };
+        let r = CompiledRule::from_row(&corrupt);
+        assert_eq!(r.method, "ANY");
+        assert!(r.path.match_path("/anything").is_some());
+        assert_eq!(r.response.status_code, 200);
+        assert!(r.state_writes.is_empty());
+        assert!(r.webhook_action.is_none());
+        assert_eq!(r.latency_ms, Some(3));
+        assert!(!r.enabled);
     }
 
     fn empty() -> BTreeMap<String, String> {

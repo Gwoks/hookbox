@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
 use crate::validate::is_safe_key;
 
@@ -19,19 +19,13 @@ pub async fn read_state(
     pool: &SqlitePool,
     token: &str,
 ) -> Result<BTreeMap<String, String>, sqlx::Error> {
-    let rows = sqlx::query(
+    let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT key, value FROM endpoint_state WHERE token = ? AND expires_at > datetime('now')",
     )
     .bind(token)
     .fetch_all(pool)
     .await?;
-    let mut map = BTreeMap::new();
-    for r in &rows {
-        let k: String = r.get("key");
-        let v: String = r.get("value");
-        map.insert(k, v);
-    }
-    Ok(map)
+    Ok(rows.into_iter().collect())
 }
 
 /// Upsert one state key with a fresh TTL. Unsafe keys are silently skipped
