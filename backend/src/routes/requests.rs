@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::auth::{assert_owns_endpoint, OwnerId};
+use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
 use crate::error::ApiError;
 use crate::models::{Message, RequestDetail, RequestSummary};
 use crate::repo::requests;
@@ -28,8 +28,9 @@ pub(super) async fn list_requests(
     Path(token): Path<String>,
     Query(q): Query<RequestsQuery>,
 ) -> Result<Json<Vec<RequestSummary>>, ApiError> {
+    // 422 on bad paging BEFORE the ownership 404 (the frozen order).
     let paging = Paging::new(q.limit, q.offset)?;
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     let rows = requests::page(&state.pool, &token, paging).await?;
     Ok(Json(rows.iter().map(RequestSummary::from).collect()))
 }
@@ -45,7 +46,7 @@ pub(super) async fn get_request(
         .await?
         .ok_or_else(|| ApiError::not_found("Request not found."))?;
     // Ownership via the trace's endpoint (404 for non-owner — AC-S2).
-    assert_owns_endpoint(&state.pool, &row.token, &owner_id).await?;
+    require_owned_endpoint(&state.pool, &row.token, &owner_id).await?;
     Ok(Json(RequestDetail::from(&row)))
 }
 
@@ -53,10 +54,8 @@ pub(super) async fn get_request(
 
 pub(super) async fn clear_requests(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
 ) -> Result<Json<Message>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    requests::clear(&state.pool, &token).await?;
+    requests::clear(&state.pool, &endpoint.token).await?;
     Ok(Json(Message::new("Trace history cleared.")))
 }

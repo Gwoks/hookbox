@@ -6,7 +6,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::auth::{assert_owns_endpoint, OwnerId};
+use crate::auth::OwnedEndpoint;
 use crate::error::ApiError;
 use crate::models::{CollectionResponse, Message, StateResponse};
 use crate::repo;
@@ -18,11 +18,9 @@ use crate::validate::CollectionName;
 
 pub(super) async fn get_state(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
 ) -> Result<Json<StateResponse>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let map = repo::state::read_state(&state.pool, &token).await?;
+    let map = repo::state::read_state(&state.pool, &endpoint.token).await?;
     Ok(Json(StateResponse { state: map }))
 }
 
@@ -30,11 +28,9 @@ pub(super) async fn get_state(
 
 pub(super) async fn clear_state(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
 ) -> Result<Json<Message>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    repo::state::clear_state(&state.pool, &token).await?;
+    repo::state::clear_state(&state.pool, &endpoint.token).await?;
     Ok(Json(Message::new("State cleared.")))
 }
 
@@ -42,12 +38,11 @@ pub(super) async fn clear_state(
 
 pub(super) async fn peek_collection(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path((token, name)): Path<(String, String)>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
+    Path((_, name)): Path<(String, String)>,
 ) -> Result<Json<CollectionResponse>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     let name = CollectionName::parse(name)?;
-    let items = repo::crud::read_items_json(&state.pool, &token, name.as_str()).await?;
+    let items = repo::crud::read_items_json(&state.pool, &endpoint.token, name.as_str()).await?;
     Ok(Json(CollectionResponse {
         items: parse_json_or(items.as_deref(), json!([])),
     }))
@@ -57,11 +52,10 @@ pub(super) async fn peek_collection(
 
 pub(super) async fn clear_collection(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path((token, name)): Path<(String, String)>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
+    Path((_, name)): Path<(String, String)>,
 ) -> Result<Json<Message>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     let name = CollectionName::parse(name)?;
-    repo::crud::clear(&state.pool, &token, name.as_str()).await?;
+    repo::crud::clear(&state.pool, &endpoint.token, name.as_str()).await?;
     Ok(Json(Message::new("Collection cleared.")))
 }

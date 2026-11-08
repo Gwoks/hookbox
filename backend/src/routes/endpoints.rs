@@ -11,7 +11,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::auth::{assert_owns_endpoint, require_owned_endpoint, OwnerId};
+use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
 use crate::error::ApiError;
 use crate::models::{EndpointCreate, EndpointDetail, EndpointSummary, Message};
 use crate::repo::bind_value;
@@ -38,14 +38,16 @@ pub(super) async fn new_endpoint(
     owner_id: &str,
     name: Option<&str>,
 ) -> Result<String, ApiError> {
-    let len = state.cfg.endpoint_id_length;
-    Ok(endpoints::create_with_fresh_token(&state.pool, owner_id, name, len).await?)
+    Ok(create(state, owner_id, name).await?.token)
 }
 
-async fn fetch_endpoint(state: &AppState, token: &str) -> Result<EndpointRow, ApiError> {
-    endpoints::find(&state.pool, token)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Endpoint not found."))
+async fn create(
+    state: &AppState,
+    owner_id: &str,
+    name: Option<&str>,
+) -> Result<EndpointRow, sqlx::Error> {
+    let len = state.cfg.endpoint_id_length;
+    endpoints::create_with_fresh_token(&state.pool, owner_id, name, len).await
 }
 
 // --- 2. GET /api/endpoints ----------------------------------------------------
@@ -72,8 +74,7 @@ pub(super) async fn create_endpoint(
             return Err(ApiError::validation("name must be at most 100 characters."));
         }
     }
-    let token = new_endpoint(&state, &owner_id, body.name.as_deref()).await?;
-    let row = fetch_endpoint(&state, &token).await?;
+    let row = create(&state, &owner_id, body.name.as_deref()).await?;
     Ok((StatusCode::CREATED, Json(endpoint_detail(&state, &row))).into_response())
 }
 
@@ -81,11 +82,9 @@ pub(super) async fn create_endpoint(
 
 pub(super) async fn get_endpoint(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
-) -> Result<Json<EndpointDetail>, ApiError> {
-    let row = require_owned_endpoint(&state.pool, &token, &owner_id).await?;
-    Ok(Json(endpoint_detail(&state, &row)))
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
+) -> Json<EndpointDetail> {
+    Json(endpoint_detail(&state, &endpoint))
 }
 
 // --- 5. PATCH /api/endpoints/{token} -----------------------------------------
@@ -96,7 +95,7 @@ pub(super) async fn patch_endpoint(
     Path(token): Path<String>,
     Json(raw): Json<Value>,
 ) -> Result<Json<EndpointDetail>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    let current = require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     let obj = raw
         .as_object()
         .ok_or_else(|| ApiError::validation("Request body must be a JSON object."))?;
@@ -177,18 +176,20 @@ pub(super) async fn patch_endpoint(
         binds.push(json!(b as i64));
     }
 
-    if !sets.is_empty() {
-        let sql = format!("UPDATE endpoints SET {} WHERE token = ?", sets.join(", "));
-        let mut q = sqlx::query(&sql);
-        for b in &binds {
-            q = bind_value(q, b);
-        }
-        q = q.bind(&token);
-        q.execute(&state.pool).await?;
-        state.rule_cache.invalidate(&token);
+    if sets.is_empty() {
+        return Ok(Json(endpoint_detail(&state, &current)));
     }
+    let sql = format!("UPDATE endpoints SET {} WHERE token = ?", sets.join(", "));
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = bind_value(q, b);
+    }
+    q = q.bind(&token);
+    state.write_through(&token, q.execute(&state.pool)).await?;
 
-    let row = fetch_endpoint(&state, &token).await?;
+    let row = endpoints::find(&state.pool, &token)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
     Ok(Json(endpoint_detail(&state, &row)))
 }
 
@@ -196,11 +197,11 @@ pub(super) async fn patch_endpoint(
 
 pub(super) async fn delete_endpoint(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
 ) -> Result<Json<Message>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    endpoints::tombstone(&state.pool, &token).await?;
-    state.rule_cache.invalidate(&token);
+    let token = &endpoint.token;
+    state
+        .write_through(token, endpoints::tombstone(&state.pool, token))
+        .await?;
     Ok(Json(Message::new("Endpoint deleted.")))
 }

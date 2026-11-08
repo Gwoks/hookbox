@@ -1,28 +1,27 @@
-//! Endpoint-ownership checks: the 404-never-403 route guard and the
-//! extractor-free key check used by the feed and tunnel handshakes.
+//! Endpoint-ownership checks: the 404-never-403 route guard (as a function
+//! and as the `OwnedEndpoint` extractor) and the extractor-free key check
+//! used by the feed and tunnel handshakes.
 
+use axum::extract::{FromRequestParts, RawPathParams};
+use axum::http::request::Parts;
+use axum::response::{IntoResponse, Response};
 use sqlx::SqlitePool;
 
-use super::owner_for_key;
+use super::{owner_for_key, OwnerId};
 use crate::error::ApiError;
 use crate::repo::endpoints::{self, owner_of as endpoint_owner, EndpointRow};
+use crate::state::AppState;
 
-/// `Ok(())` iff `owner_id` owns `token`; else 404 (never 403). Callers that
-/// need the full row should select it themselves after this passes, or use
-/// the route-layer query that already loads the row.
-pub async fn assert_owns_endpoint(
-    pool: &SqlitePool,
-    token: &str,
-    owner_id: &str,
-) -> Result<(), ApiError> {
-    match endpoint_owner(pool, token).await? {
-        Some(o) if o == owner_id => Ok(()),
-        _ => Err(ApiError::not_found("Endpoint not found.")),
-    }
+/// The route parameter every endpoint-scoped route names its token by.
+const TOKEN_PARAM: &str = "token";
+
+fn endpoint_not_found() -> ApiError {
+    ApiError::not_found("Endpoint not found.")
 }
 
-/// The endpoint row iff `owner_id` owns `token`; else 404 (never 403). One
-/// query for the check and the row.
+/// The endpoint row iff `owner_id` owns `token`; else 404 (never 403) — a
+/// non-owner cannot tell "absent" from "someone else's". One query for the
+/// check and the row.
 pub(crate) async fn require_owned_endpoint(
     pool: &SqlitePool,
     token: &str,
@@ -30,7 +29,42 @@ pub(crate) async fn require_owned_endpoint(
 ) -> Result<EndpointRow, ApiError> {
     match endpoints::find(pool, token).await? {
         Some(row) if row.owner_id == owner_id => Ok(row),
-        _ => Err(ApiError::not_found("Endpoint not found.")),
+        _ => Err(endpoint_not_found()),
+    }
+}
+
+/// Extractor for an endpoint-scoped owner route (`/api/endpoints/:token…`):
+/// authenticates the owner (`OwnerId`: 401/403), reads the `:token` path
+/// parameter, then requires ownership (404). Handlers whose own validation
+/// must run BEFORE the ownership check (a typed `Path`/`Query`/JSON body
+/// rejection today precedes the 404) use `OwnerId` + `require_owned_endpoint`
+/// explicitly instead, so that order is kept.
+pub(crate) struct OwnedEndpoint {
+    pub(crate) endpoint: EndpointRow,
+}
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for OwnedEndpoint {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let OwnerId(owner_id) = OwnerId::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let params = RawPathParams::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let token = params
+            .iter()
+            .find_map(|(name, value)| (name == TOKEN_PARAM).then_some(value))
+            .ok_or_else(|| endpoint_not_found().into_response())?;
+        let endpoint = require_owned_endpoint(&state.pool, token, &owner_id)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        Ok(OwnedEndpoint { endpoint })
     }
 }
 

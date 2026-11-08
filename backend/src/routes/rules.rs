@@ -10,7 +10,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::auth::{assert_owns_endpoint, OwnerId};
+use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
 use crate::error::ApiError;
 use crate::models::{MatchCriteria, MockRule, MockRuleCreate, ResponseSpec, StateWrite};
 use crate::repo::{bind_value, rules};
@@ -24,11 +24,9 @@ fn rule_not_found() -> ApiError {
 
 pub(super) async fn list_rules(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
 ) -> Result<Json<Vec<MockRule>>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    let rows = rules::list(&state.pool, &token).await?;
+    let rows = rules::list(&state.pool, &endpoint.token).await?;
     Ok(Json(rows.iter().map(MockRule::from_row).collect()))
 }
 
@@ -73,15 +71,15 @@ pub(super) async fn create_rule(
     Path(token): Path<String>,
     Json(data): Json<MockRuleCreate>,
 ) -> Result<Response, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     validate_rule(&state, &data)?;
     let data = MockRuleCreate {
         latency_ms: clamp_opt(data.latency_ms, 0, state.cfg.latency_max_ms),
         rate_limit_per_min: clamp_opt(data.rate_limit_per_min, 0, state.cfg.rate_limit_max_per_min),
         ..data
     };
-    let row = rules::insert(&state.pool, &token, &data).await?;
-    state.rule_cache.invalidate(&token);
+    let insert = rules::insert(&state.pool, &token, &data);
+    let row = state.write_through(&token, insert).await?;
     Ok((StatusCode::CREATED, Json(MockRule::from_row(&row))).into_response())
 }
 
@@ -92,7 +90,7 @@ pub(super) async fn get_rule(
     OwnerId(owner_id): OwnerId,
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Json<MockRule>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     let row = rules::find(&state.pool, &token, rule_id)
         .await?
         .ok_or_else(rule_not_found)?;
@@ -107,7 +105,7 @@ pub(super) async fn patch_rule(
     Path((token, rule_id)): Path<(String, i64)>,
     Json(raw): Json<Value>,
 ) -> Result<Json<MockRule>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     let current = rules::find(&state.pool, &token, rule_id)
         .await?
         .ok_or_else(rule_not_found)?;
@@ -226,8 +224,7 @@ pub(super) async fn patch_rule(
         q = bind_value(q, b);
     }
     q = q.bind(rule_id).bind(&token);
-    q.execute(&state.pool).await?;
-    state.rule_cache.invalidate(&token);
+    state.write_through(&token, q.execute(&state.pool)).await?;
 
     let row = rules::find(&state.pool, &token, rule_id)
         .await?
@@ -242,10 +239,10 @@ pub(super) async fn delete_rule(
     OwnerId(owner_id): OwnerId,
     Path((token, rule_id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
-    if !rules::delete(&state.pool, &token, rule_id).await? {
+    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
+    let delete = rules::delete(&state.pool, &token, rule_id);
+    if !state.write_through(&token, delete).await? {
         return Err(rule_not_found());
     }
-    state.rule_cache.invalidate(&token);
     Ok(StatusCode::NO_CONTENT.into_response()) // 204 carries no body
 }

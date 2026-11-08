@@ -9,7 +9,7 @@ use axum::{
 };
 
 use super::no_store;
-use crate::auth::{assert_owns_endpoint, require_owned_endpoint, OwnerId};
+use crate::auth::{require_owned_endpoint, OwnedEndpoint, OwnerId};
 use crate::error::ApiError;
 use crate::ids::{gen_share_code, hash_secret};
 use crate::models::{ShareLink, ShareLinkCreate, ShareLinkCreated};
@@ -78,12 +78,10 @@ pub(crate) async fn create_share(
 
 pub(crate) async fn list_shares(
     State(state): State<AppState>,
-    OwnerId(owner_id): OwnerId,
-    Path(token): Path<String>,
+    OwnedEndpoint { endpoint }: OwnedEndpoint,
 ) -> Result<Json<Vec<ShareLink>>, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
     // Revoked links never appear (AC-25). No `code`, no `url`, no code prefix.
-    let rows = shares::list_active(&state.pool, &token).await?;
+    let rows = shares::list_active(&state.pool, &endpoint.token).await?;
     Ok(Json(rows.iter().map(ShareLink::from_row).collect()))
 }
 
@@ -94,7 +92,7 @@ pub(crate) async fn revoke_share(
     OwnerId(owner_id): OwnerId,
     Path((token, id)): Path<(String, i64)>,
 ) -> Result<Response, ApiError> {
-    assert_owns_endpoint(&state.pool, &token, &owner_id).await?;
+    require_owned_endpoint(&state.pool, &token, &owner_id).await?;
     // Soft revoke only (see `repo::shares::revoke`).
     if !shares::revoke(&state.pool, &token, id).await? {
         // Unknown id, id on another endpoint, and already-revoked are all

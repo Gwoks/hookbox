@@ -188,17 +188,17 @@ async fn non_owner_of_token_is_404_not_403() {
         key: b_key,
     } = seed_owner(&pool).await;
 
-    assert!(assert_owns_endpoint(&pool, "tokAAAAAAA", &owner_id)
+    assert!(require_owned_endpoint(&pool, "tokAAAAAAA", &owner_id)
         .await
         .is_ok());
     // Owner B sees 404 (never 403) for a token that exists but is not theirs.
-    let err = assert_owns_endpoint(&pool, "tokAAAAAAA", &b_id)
+    let err = require_owned_endpoint(&pool, "tokAAAAAAA", &b_id)
         .await
         .unwrap_err();
     assert_eq!(err.status, StatusCode::NOT_FOUND);
     assert_eq!(err.code, "not_found");
     // A token that does not exist is also 404 (indistinguishable).
-    let err2 = assert_owns_endpoint(&pool, "doesnotexi", &owner_id)
+    let err2 = require_owned_endpoint(&pool, "doesnotexi", &owner_id)
         .await
         .unwrap_err();
     assert_eq!(err2.status, StatusCode::NOT_FOUND);

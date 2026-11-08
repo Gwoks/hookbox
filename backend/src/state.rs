@@ -7,6 +7,7 @@
 //! (sks.20), feed hub (sks.21) and tunnel registry (sks.23) tasks flesh out the
 //! behavior of their respective modules behind these same fields.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -42,5 +43,18 @@ impl AppState {
             feed_hub: Arc::new(FeedHub::new()),
             tunnels: Arc::new(TunnelRegistry::new()),
         }
+    }
+
+    /// Run a management write that changes what the mock plane serves for
+    /// `token`, then — only once it has succeeded — drop `token`'s compiled
+    /// rule-cache entry so the next P1 request cold-loads the new config.
+    pub(crate) async fn write_through<T, E>(
+        &self,
+        token: &str,
+        write: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        let out = write.await?;
+        self.rule_cache.invalidate(token);
+        Ok(out)
     }
 }

@@ -84,28 +84,34 @@ pub(crate) struct NewEndpoint<'a> {
     pub(crate) auto_crud: bool,
 }
 
-pub(crate) async fn insert(pool: &SqlitePool, new: &NewEndpoint<'_>) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO endpoints (token, owner_id, name, auto_crud) VALUES (?, ?, ?, ?)")
-        .bind(new.token)
-        .bind(new.owner_id)
-        .bind(new.name)
-        .bind(new.auto_crud)
-        .execute(pool)
-        .await?;
-    Ok(())
+/// Insert a new endpoint; returns the stored row (schema defaults applied).
+pub(crate) async fn insert(
+    pool: &SqlitePool,
+    new: &NewEndpoint<'_>,
+) -> Result<EndpointRow, sqlx::Error> {
+    sqlx::query_as(
+        "INSERT INTO endpoints (token, owner_id, name, auto_crud) VALUES (?, ?, ?, ?)
+         RETURNING *",
+    )
+    .bind(new.token)
+    .bind(new.owner_id)
+    .bind(new.name)
+    .bind(new.auto_crud)
+    .fetch_one(pool)
+    .await
 }
 
 /// How many times a colliding fresh token is re-drawn before inserting.
 const TOKEN_ATTEMPTS: usize = 5;
 
 /// Insert a fresh endpoint for an owner under a newly generated token,
-/// re-drawing on the (astronomically rare) collision. Returns the token.
+/// re-drawing on the (astronomically rare) collision. Returns the new row.
 pub(crate) async fn create_with_fresh_token(
     pool: &SqlitePool,
     owner_id: &str,
     name: Option<&str>,
     token_len: usize,
-) -> Result<String, sqlx::Error> {
+) -> Result<EndpointRow, sqlx::Error> {
     let mut token = gen_token(token_len);
     for _ in 0..TOKEN_ATTEMPTS {
         if owner_of(pool, &token).await?.is_none() {
@@ -119,8 +125,7 @@ pub(crate) async fn create_with_fresh_token(
         name,
         auto_crud: false,
     };
-    insert(pool, &new).await?;
-    Ok(token)
+    insert(pool, &new).await
 }
 
 /// OQ-1: tombstone rather than hard-delete so the mock plane returns 410.
