@@ -3,12 +3,11 @@
  *  - primary      the ONE filled blue action per screen (bg-accent-fill)
  *  - tint         DESIGN's "Ghost CTA": sky-tint fill, AA-strong blue text
  *  - ghost        no fill, no border — tertiary actions
- *  - outline      compact 4px-radius bordered action (replaces `secondary`)
+ *  - outline      compact 4px-radius bordered action
  *  - danger       SOFT red (never a filled red button)
  *  - danger-ghost red text only
  *  - nav          muted nav link; `aria-current="page"` marks the active one
  *  - link         inline text link, no box
- * `secondary` is a deprecated alias of `outline` (removed in S6).
  * Loading preserves width, disables and sets aria-busy.
  */
 import { Slot } from '@radix-ui/react-slot'
@@ -30,7 +29,6 @@ const buttonVariants = cva(
         ghost: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
         outline: OUTLINE,
         /** @deprecated use `outline` */
-        secondary: OUTLINE,
         danger: 'border border-danger-border bg-danger-bg text-danger-fg hover:border-danger-fg',
         'danger-ghost': 'text-danger-fg hover:bg-danger-bg',
         nav: 'text-text-secondary hover:text-text-primary aria-[current=page]:bg-surface-hover aria-[current=page]:text-text-primary',
@@ -46,7 +44,7 @@ const buttonVariants = cva(
     },
     compoundVariants: [
       // DESIGN.md "Outlined Text Button": compact 5px/10px padding.
-      { variant: ['outline', 'secondary'], size: 'md', class: 'h-8 px-2.5' },
+      { variant: 'outline', size: 'md', class: 'h-8 px-2.5' },
       // A link is text, not a box: no fixed height or padding at any size.
       { variant: 'link', class: 'h-auto px-0 py-0' },
     ],

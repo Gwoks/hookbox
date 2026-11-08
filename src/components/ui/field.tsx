@@ -5,8 +5,7 @@
  * placed inside a Field is labelled, described and marked invalid without
  * any prop threading. Errors are text + aria-invalid, never color only.
  *
- * Explicit props on a control always win over the context. The `render`
- * prop is the legacy API (every screen still uses it) and is removed in S6.
+ * Explicit props on a control always win over the context.
  */
 import { createContext, useContext, useId, type ReactNode } from 'react'
 import { cn } from '@/lib/cn'
@@ -92,11 +91,9 @@ export interface FieldProps {
   /** Override the generated control id. */
   id?: string
   children?: ReactNode
-  /** @deprecated Pass the control as `children` (removed in S6). */
-  render?: (props: FieldControlState) => ReactNode
 }
 
-export function Field({ label, optional, helper, error, className, id: idProp, children, render }: FieldProps) {
+export function Field({ label, optional, helper, error, className, id: idProp, children }: FieldProps) {
   const generatedId = useId()
   const id = idProp ?? generatedId
   const messageId = `${id}-desc`
@@ -111,7 +108,7 @@ export function Field({ label, optional, helper, error, className, id: idProp, c
         <Label htmlFor={id} optional={optional}>
           {label}
         </Label>
-        {render ? render(state) : children}
+        {children}
         <FieldMessage id={messageId} helper={helper} error={error} />
       </div>
     </FieldContext.Provider>

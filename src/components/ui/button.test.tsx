@@ -27,10 +27,6 @@ describe('Button', () => {
     expect(buttonVariants({ variant: 'danger' })).not.toMatch(/bg-danger-fg/)
   })
 
-  it('keeps `secondary` as a deprecated alias of outline', () => {
-    expect(buttonVariants({ variant: 'secondary' })).toBe(buttonVariants({ variant: 'outline' }))
-  })
-
   it('link has no box: no fixed height and no padding', () => {
     render(<Button variant="link">Docs</Button>)
     const link = screen.getByRole('button', { name: 'Docs' })

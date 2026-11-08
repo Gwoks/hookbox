@@ -35,17 +35,6 @@ describe('Field + FieldContext', () => {
     expect(input).toHaveClass('border-danger-fg')
   })
 
-  it('keeps the legacy render prop working', () => {
-    render(
-      <Field
-        label="Target URL"
-        helper="Where to forward."
-        render={(p) => <Input id={p.id} aria-describedby={p.describedBy} invalid={p.invalid} />}
-      />,
-    )
-    expect(screen.getByLabelText('Target URL')).toHaveAccessibleDescription('Where to forward.')
-  })
-
   it('marks optional fields in the label', () => {
     render(
       <Field label="Label" optional>
