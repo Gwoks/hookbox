@@ -142,6 +142,7 @@ Each AC is testable and observable. **[existing — verified at `<path>`]** = po
 - **AC-S11** No `Access-Control-Allow-*` headers are emitted on any `/api/**` response (P2 has no CORS layer). [reinforces AC-35]
 - **AC-S12** No P1 response ever emits `Access-Control-Allow-Credentials`; Origin is reflected (or `*` only when absent). [reinforces AC-34]
 - **AC-S13** The capability and `Authorization`/`Cookie`/`X-Owner-Id` headers are redacted in stored traces and feed payloads; the cap never appears in `tracing` logs (incl. the `?cap=` query string of `/ws|/sse`) nor in any error body. [reinforces AC-61]
+- *(Superseded 2026-11-08 by AC-S14a–d in `../anonymous-cookie-identity/decision.md`.)*
 - **AC-S14** The API never reads the capability from a cookie; the SPA does not store it in a cookie (holds it in memory/`localStorage`), closing CSRF without tokens.
 - **AC-S15** A P1 request whose `Content-Length` or streamed size exceeds `MAX_INGEST_BODY_BYTES` is rejected `413` without fully buffering. [reinforces AC-58]
 - **AC-S16** No crafted `Host`/path (multi-label subdomain, percent-encoded path, a token equal to the app host, `/api` under a mock host) causes the P1 catch-all to serve `/api/**` or the UI/feed; `/api/**` is unreachable from any mock host. [reinforces AC-6/7/8]
