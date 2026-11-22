@@ -45,6 +45,10 @@ export const sessionSummarySchema = z.object({
 /** POST /api/session/restore body. */
 export const restoreSessionSchema = z.object({ key: z.string().min(1) })
 
+/** POST /api/session optional body: the single-use Cloudflare Turnstile
+ * token, sent only when the SPA was built with a site key. */
+export const sessionCreateSchema = z.object({ turnstile_token: z.string().min(1) })
+
 /** POST /api/session/key (reveal) and /api/session/rotate replies. */
 export const keyResponseSchema = z.object({ key: z.string().min(1) })
 
@@ -248,6 +252,7 @@ export const errorEnvelopeSchema = z.object({
 export type EndpointSummary = z.infer<typeof endpointSummarySchema>
 export type SessionSummary = z.infer<typeof sessionSummarySchema>
 export type RestoreSession = z.infer<typeof restoreSessionSchema>
+export type SessionCreate = z.infer<typeof sessionCreateSchema>
 export type KeyResponse = z.infer<typeof keyResponseSchema>
 export type EndpointCreate = z.infer<typeof endpointCreateSchema>
 export type EndpointConfigPatch = z.infer<typeof endpointConfigPatchSchema>

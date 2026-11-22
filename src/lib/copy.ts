@@ -18,6 +18,7 @@ export const copy = {
     'Self-hosted API mocking and request interception with a real-time inspector. One click, one endpoint. No email, no password, no setup.',
   'landing.start.submit': 'Get my endpoint',
   'landing.start.submitting': 'Setting up…',
+  'landing.start.checking': "Checking you're human…",
   'landing.start.helper':
     'You get an anonymous recovery key instead of an account. Save it from Settings to come back from any browser.',
   'landing.restore.toggle': 'I have a recovery key',
@@ -53,6 +54,7 @@ export const copy = {
   'landing.warn.cookies':
     "This browser is blocking cookies, so HookBox can't keep you signed in. Allow cookies for this site, then reload.",
   'landing.error.generic': "Something didn't go through. Try again.",
+  'landing.error.turnstile': "We couldn't confirm you're human — please try again.",
 
   // ── Recovery key restore form (landing + Settings) ──
   'recovery.restore.label': 'Recovery key',

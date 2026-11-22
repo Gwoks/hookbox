@@ -1,0 +1,14 @@
+# Keep secrets and bulky local artifacts out of the Docker build context.
+# (Stage 1 does `COPY . .`; without this the real .env would land in a layer.)
+.env
+.env.*
+!.env.example
+.git
+node_modules
+dist
+data
+backend/target
+playwright-report
+test-results
+.claude
+.beads/*.db

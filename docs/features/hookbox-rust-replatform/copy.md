@@ -176,6 +176,8 @@ Short, mono-flavored, true to the contract. One sentence each.
 | `landing.error.noEndpoint` | Session created, but no endpoint came back. Try again — if it persists, restart the server. |
 | `landing.warn.storage` | This browser won't remember your session (private mode or storage blocked). You can still continue — keep your email to return. |
 | `landing.error.generic` | Something didn't go through. Try again. |
+| `landing.start.checking` | Checking you're human… |
+| `landing.error.turnstile` | We couldn't confirm you're human — please try again. |
 
 > Note (anti-enumeration, AC-1 / AC-D22): there is **no** "welcome back" or "account created" string. The form, button, and success path are identical for a brand-new and an existing email. Do not add a returning-user variant.
 

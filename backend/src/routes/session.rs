@@ -6,7 +6,8 @@
 //!
 //! | Route                       | Auth              | Result                               |
 //! |-----------------------------|-------------------|--------------------------------------|
-//! | `POST /api/session`         | CsrfGuard + limit | 201 + cookie + summary (new owner);  |
+//! | `POST /api/session`         | CsrfGuard + limit | 201 + cookie + summary (new owner,   |
+//! |                             | (+ Turnstile)     | Turnstile-verified when enabled);    |
 //! |                             |                   | 200 + summary if a valid cookie sent |
 //! | `POST /api/session/restore` | CsrfGuard + limit | 200 + cookie + summary; no rotation  |
 //! | `GET /api/session`          | owner             | 200 summary; refreshes the cookie    |
@@ -18,7 +19,7 @@
 //! carries `Cache-Control: no-store` (`no_store_response`, layered over
 //! these routes in `routes::session_routes`).
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use axum::{
     body::Bytes,
@@ -29,9 +30,9 @@ use axum::{
 };
 
 use crate::auth::{owner_for_key, AuthedOwner, Credential, CsrfGuard};
-use crate::error::ApiError;
+use crate::error::{json_from_slice, ApiError};
 use crate::ids::{gen_owner_id, gen_owner_secret, hash_secret};
-use crate::models::{EndpointSummary, KeyResponse, RestoreBody, SessionSummary};
+use crate::models::{EndpointSummary, KeyResponse, RestoreBody, SessionCreate, SessionSummary};
 use crate::net::client_ip::effective_client_ip;
 use crate::net::headers::no_store;
 use crate::repo::owners;
@@ -56,13 +57,9 @@ pub(super) async fn no_store_response(resp: Response) -> Response {
 
 /// Per-source limit on mint/restore (AC-S5), in its own `session:` limiter
 /// namespace so an unauthenticated flood can never evict mock-plane or share
-/// buckets. Fails open like every limiter call.
-fn rate_limit_session(
-    state: &AppState,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    headers: &HeaderMap,
-) -> Result<(), ApiError> {
-    let ip = effective_client_ip(connect_info, headers);
+/// buckets. Fails open like every limiter call. `ip` is the
+/// `effective_client_ip` of the request.
+fn rate_limit_session(state: &AppState, ip: &str) -> Result<(), ApiError> {
     let verdict = state.limiter.check(
         &format!("session:{ip}"),
         state.cfg.session_rate_limit_per_min,
@@ -130,6 +127,28 @@ fn parse_restore_key(body: &[u8]) -> Result<String, ApiError> {
     }
 }
 
+/// The optional mint body: empty (or whitespace) is no fields; anything else
+/// must be JSON (`400 bad_request` / `422 validation_error` otherwise).
+fn parse_session_create(body: &[u8]) -> Result<SessionCreate, ApiError> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        Ok(SessionCreate::default())
+    } else {
+        json_from_slice(body)
+    }
+}
+
+/// The Turnstile gate on a first mint: a no-op (body ignored, as before)
+/// when verification is disabled; otherwise the body's `turnstile_token`
+/// must pass siteverify for `ip` (`403 turnstile_failed` if absent/failing).
+async fn require_human(state: &AppState, body: &[u8], ip: &str) -> Result<(), ApiError> {
+    let Some(verifier) = state.turnstile.as_deref() else {
+        return Ok(());
+    };
+    let SessionCreate { turnstile_token } = parse_session_create(body)?;
+    let token = turnstile_token.unwrap_or_default();
+    verifier.verify(&token, ip.parse::<IpAddr>().ok()).await
+}
+
 /// The owner behind an already-present, valid session cookie.
 async fn cookie_owner(state: &AppState, headers: &HeaderMap) -> Result<Option<String>, ApiError> {
     match read_session_cookie(headers, &state.cfg) {
@@ -140,18 +159,23 @@ async fn cookie_owner(state: &AppState, headers: &HeaderMap) -> Result<Option<St
 
 // --- POST /api/session ---------------------------------------------------------
 
-/// Mint a fresh anonymous owner + primary endpoint (body ignored). A caller
-/// that already holds a valid cookie gets its existing summary instead.
+/// Mint a fresh anonymous owner + primary endpoint. A caller that already
+/// holds a valid cookie gets its existing summary instead (no Turnstile
+/// token needed); a first mint must pass `require_human`. Body (optional):
+/// `{"turnstile_token": "<widget token>"}`.
 pub(super) async fn create_session(
     _csrf: CsrfGuard,
     State(state): State<AppState>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Result<Response, ApiError> {
-    rate_limit_session(&state, connect_info, &headers)?;
+    let ip = effective_client_ip(connect_info, &headers);
+    rate_limit_session(&state, &ip)?;
     if let Some(owner_id) = cookie_owner(&state, &headers).await? {
         return Ok(Json(summary(&state, &owner_id).await?).into_response());
     }
+    require_human(&state, &body, &ip).await?;
     let key = gen_owner_secret(state.cfg.owner_secret_bytes);
     let owner_id = gen_owner_id();
     owners::insert(&state.pool, &owner_id, &hash_secret(&key)).await?;
@@ -171,7 +195,7 @@ pub(super) async fn restore_session(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    rate_limit_session(&state, connect_info, &headers)?;
+    rate_limit_session(&state, &effective_client_ip(connect_info, &headers))?;
     let key = parse_restore_key(&body)?;
     let owner_id = owner_for_key(&state.pool, &key)
         .await?
@@ -249,6 +273,26 @@ mod tests {
         assert!(!is_key_shape(&"a".repeat(129)));
         assert!(!is_key_shape(&format!("{}=", "a".repeat(30))));
         assert!(!is_key_shape(&format!("{} ", "a".repeat(30))));
+    }
+
+    #[test]
+    fn mint_body_is_optional_json() {
+        for empty in [&b""[..], b"  \n"] {
+            assert!(parse_session_create(empty)
+                .unwrap()
+                .turnstile_token
+                .is_none());
+        }
+        let body = parse_session_create(br#"{"turnstile_token":"t"}"#).unwrap();
+        assert_eq!(body.turnstile_token.as_deref(), Some("t"));
+        assert!(parse_session_create(b"{}")
+            .unwrap()
+            .turnstile_token
+            .is_none());
+        assert_eq!(
+            parse_session_create(b"nope").unwrap_err().code,
+            "bad_request"
+        );
     }
 
     #[test]

@@ -116,6 +116,20 @@ describe('session routes', () => {
     ])
   })
 
+  it('sends the Turnstile token as the mint body only when one is given', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse(SUMMARY, 201))
+
+    await api.createSession('cf-token-1')
+    await api.createSession()
+
+    const [withToken, withoutToken] = fetchMock.mock.calls.map(([, init]) => init as RequestInit)
+    expect(withToken.method).toBe('POST')
+    expect(withToken.body).toBe(JSON.stringify({ turnstile_token: 'cf-token-1' }))
+    expect(withToken.headers).toMatchObject({ 'X-HookBox': '1', 'Content-Type': 'application/json' })
+    expect(withoutToken.body).toBeUndefined()
+    expect(withoutToken.headers).not.toHaveProperty('Content-Type')
+  })
+
   it('accepts a null primary in the session summary', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ owner_id: 'o', endpoints: [], primary: null }))
     await expect(api.getSession()).resolves.toEqual({ owner_id: 'o', endpoints: [], primary: null })

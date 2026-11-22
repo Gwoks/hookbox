@@ -15,7 +15,7 @@ use crate::net::headers::try_header;
 mod api_json;
 mod code;
 
-pub use api_json::ApiJson;
+pub use api_json::{json_from_slice, ApiJson};
 pub use code::ErrorCode;
 
 /// Internal error type, converted to the flat JSON envelope on response.
@@ -73,6 +73,17 @@ impl ApiError {
             StatusCode::UNAUTHORIZED,
             ErrorCode::InvalidKey,
             "That recovery key is not valid.",
+        )
+    }
+
+    /// `403 turnstile_failed` — the first anonymous mint without a passing
+    /// Cloudflare Turnstile token. One generic body for every failure cause
+    /// (missing, rejected, unverifiable), so nothing about why leaks.
+    pub fn turnstile_failed() -> Self {
+        ApiError::new(
+            StatusCode::FORBIDDEN,
+            ErrorCode::TurnstileFailed,
+            "We couldn't confirm you're human. Please try again.",
         )
     }
 
@@ -200,6 +211,19 @@ mod tests {
         let e = ApiError::invalid_key();
         assert_eq!(e.status, StatusCode::UNAUTHORIZED);
         assert_eq!(e.code, "invalid_key");
+    }
+
+    #[test]
+    fn turnstile_failed_is_a_flat_403() {
+        let e = ApiError::turnstile_failed();
+        assert_eq!(e.status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            e.body(),
+            json!({
+                "error": "turnstile_failed",
+                "detail": "We couldn't confirm you're human. Please try again.",
+            })
+        );
     }
 
     #[test]

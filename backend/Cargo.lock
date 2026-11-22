@@ -667,6 +667,7 @@ dependencies = [
  "base64",
  "chrono",
  "dashmap",
+ "dotenvy",
  "futures-util",
  "hex",
  "http-body-util",

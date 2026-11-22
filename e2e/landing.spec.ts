@@ -12,6 +12,7 @@ import {
   OWNER_ID,
   SECRET,
   TOKEN,
+  TURNSTILE_TOKEN,
 } from "./mock-backend";
 
 function legacyValues(page: import("@playwright/test").Page) {
@@ -41,6 +42,52 @@ test.describe("landing gate (AC-J1)", () => {
     );
     await nudge.getByRole("button", { name: "Dismiss" }).click();
     await expect(page.getByText("Save your recovery key")).toHaveCount(0);
+  });
+
+  test("the mint waits for the Turnstile check and sends its token (action session_mint)", async ({
+    page,
+  }) => {
+    const mintBodies: unknown[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && new URL(request.url()).pathname === "/api/session") {
+        mintBodies.push(request.postDataJSON());
+      }
+    });
+    const store = await installMockBackend(page);
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Get my endpoint" }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/d/${TOKEN}$`));
+    expect(mintBodies).toEqual([{ turnstile_token: TURNSTILE_TOKEN }]);
+    expect(store.mintTokens).toEqual([TURNSTILE_TOKEN]);
+    const params = await page.evaluate(
+      () => (window as unknown as { __hookboxTurnstileParams?: unknown }).__hookboxTurnstileParams,
+    );
+    expect(params).toMatchObject({ action: "session_mint", appearance: "interaction-only" });
+  });
+
+  test("a failed Turnstile check shows the friendly alert, stays put and re-arms the widget", async ({
+    page,
+  }) => {
+    const store = await installMockBackend(page, { turnstileFails: true });
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "Get my endpoint" }).click();
+
+    await expect(page.getByRole("alert")).toHaveText("We couldn't confirm you're human — please try again.");
+    await expect(page).toHaveURL(/\/$/);
+    expect(store.authed).toBe(false);
+    // The spent token was dropped and the widget reset; the stub re-solves,
+    // so the button comes back with a fresh token.
+    await expect(page.getByRole("button", { name: "Get my endpoint" })).toBeEnabled();
+    const resets = await page.evaluate(
+      () => (window as unknown as { __hookboxTurnstileResets?: number }).__hookboxTurnstileResets,
+    );
+    expect(resets).toBeGreaterThanOrEqual(1);
+
+    await page.getByRole("button", { name: "Get my endpoint" }).click();
+    await expect.poll(() => store.mintTokens).toEqual([TURNSTILE_TOKEN, TURNSTILE_TOKEN]);
   });
 
   test("a valid recovery key restores access and opens the dashboard", async ({ page }) => {

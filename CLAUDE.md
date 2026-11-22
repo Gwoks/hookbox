@@ -84,7 +84,10 @@ UPDATE_GOLDEN=1 cargo test --test wire_contract   # ONLY for an intentional wire
   `src/net/`, identity in `src/auth/` + `src/session/`.
 - **Identity** — anonymous owner key in an HttpOnly `SameSite=Strict` cookie
   (Bearer still accepted for scripts/CLI); cookie calls need `X-HookBox: 1` +
-  same-origin. See `docs/features/anonymous-cookie-identity/decision.md`.
+  same-origin. A *new* mint (`POST /api/session`) also needs a Cloudflare
+  Turnstile token when `TURNSTILE_SECRET_KEY` is set (secrets live in the
+  git-ignored root `.env`; see `.env.example`). See
+  `docs/features/anonymous-cookie-identity/decision.md`.
 - **src/** — Vite + React SPA. `src/api/` (owner client, public client,
   zod schemas, session store/bootstrap), `src/feed/` (live feed), `src/app/`
   (layouts), `src/screens/<feature>/` (one folder per screen).

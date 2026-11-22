@@ -20,4 +20,5 @@ mod api {
     mod share_leaks;
     mod share_owner;
     mod share_public;
+    mod turnstile;
 }

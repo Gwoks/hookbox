@@ -64,6 +64,15 @@ pub struct SessionSummary {
     pub primary: Option<EndpointSummary>,
 }
 
+/// `POST /api/session` body — optional; an empty body means no fields.
+#[derive(Debug, Default, Deserialize)]
+pub struct SessionCreate {
+    /// The Cloudflare Turnstile widget token (required only for a first
+    /// mint while Turnstile is enabled).
+    #[serde(default)]
+    pub turnstile_token: Option<String>,
+}
+
 /// `POST /api/session/restore` body.
 #[derive(Debug, Deserialize)]
 pub struct RestoreBody {

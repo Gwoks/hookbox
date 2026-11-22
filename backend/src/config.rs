@@ -6,6 +6,10 @@
 //! Default serve port is `8080` (OQ-4, supersedes the Python `8000`).
 
 use std::collections::HashSet;
+use std::fmt;
+
+/// Cloudflare's siteverify endpoint (overridden only by tests).
+const TURNSTILE_VERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
 /// Reads one raw setting by name; `None` when unset (or not valid unicode).
 type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -58,6 +62,73 @@ fn app_hosts(app_host: &str, mock_domain: &str) -> HashSet<String> {
         hosts.insert(mock_domain.to_string());
     }
     hosts
+}
+
+/// A configured secret. `Debug` prints `[redacted]`, so a logged `Config`
+/// never leaks it; read the value only via `expose`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Secret(value.into())
+    }
+
+    /// The raw secret — for the one outbound call that needs it.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
+/// An optional secret: unset or blank (docker-compose passes `""` for an
+/// unset variable) is `None`.
+fn secret_env(lookup: Lookup<'_>, name: &str) -> Option<Secret> {
+    lookup(name)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(Secret)
+}
+
+/// The Turnstile hostname allowlist: comma-separated, trimmed, lowercased,
+/// empties dropped. Unset, blank, or nothing left after parsing → `[app_host]`.
+fn turnstile_hostnames(raw: &str, app_host: &str) -> Vec<String> {
+    let parsed: Vec<String> = raw
+        .split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect();
+    if parsed.is_empty() {
+        vec![app_host.to_ascii_lowercase()]
+    } else {
+        parsed
+    }
+}
+
+/// The siteverify URL (`TURNSTILE_VERIFY_URL`). The secret is POSTed there,
+/// so only `https://` — or `http://` to a loopback host (tests) — is
+/// accepted; anything else falls back to Cloudflare's endpoint.
+fn turnstile_verify_url(raw: &str) -> String {
+    let is_safe = url::Url::parse(raw).is_ok_and(|u| match u.scheme() {
+        "https" => true,
+        "http" => {
+            matches!(u.host(), Some(url::Host::Domain("localhost")))
+                || matches!(u.host(), Some(url::Host::Ipv4(ip)) if ip.is_loopback())
+                || matches!(u.host(), Some(url::Host::Ipv6(ip)) if ip.is_loopback())
+        }
+        _ => false,
+    });
+    if is_safe {
+        raw.to_string()
+    } else {
+        tracing::warn!("ignoring unsafe TURNSTILE_VERIFY_URL; using Cloudflare's siteverify");
+        TURNSTILE_VERIFY_URL.to_string()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +216,15 @@ pub struct Config {
     pub share_rate_limit_per_min: i64,
     /// Instance-wide ceiling on the public share resolver (AC-S15, AC-113).
     pub share_rate_limit_global_per_min: i64,
+
+    // --- Cloudflare Turnstile on the first anonymous mint ---
+    /// `TURNSTILE_SECRET_KEY`; `None` (unset/blank) disables verification.
+    pub turnstile_secret: Option<Secret>,
+    /// Lowercased hostnames a passing token may be issued for
+    /// (`TURNSTILE_HOSTNAMES`, default `[APP_HOST]`).
+    pub turnstile_hostnames: Vec<String>,
+    /// The siteverify URL (`TURNSTILE_VERIFY_URL`; overridden only by tests).
+    pub turnstile_verify_url: String,
 }
 
 impl Config {
@@ -177,6 +257,9 @@ impl Config {
             "SESSION_COOKIE_SECURE",
             public_base_url.to_ascii_lowercase().starts_with("https://"),
         );
+
+        let turnstile_hostnames =
+            turnstile_hostnames(&str_env(lookup, "TURNSTILE_HOSTNAMES", ""), &app_host);
 
         Config {
             mock_domain,
@@ -242,6 +325,12 @@ impl Config {
                 "SHARE_RATE_LIMIT_GLOBAL_PER_MIN",
                 1200,
             ),
+
+            turnstile_hostnames,
+            turnstile_secret: secret_env(lookup, "TURNSTILE_SECRET_KEY"),
+            turnstile_verify_url: turnstile_verify_url(
+                str_env(lookup, "TURNSTILE_VERIFY_URL", TURNSTILE_VERIFY_URL).trim(),
+            ),
         }
     }
 
@@ -263,7 +352,77 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use super::{Secret, TURNSTILE_VERIFY_URL};
     use crate::testing::config_from;
+
+    #[test]
+    fn turnstile_is_disabled_without_a_secret() {
+        assert!(config_from(&[]).turnstile_secret.is_none());
+        assert!(config_from(&[("TURNSTILE_SECRET_KEY", "")])
+            .turnstile_secret
+            .is_none());
+        assert!(config_from(&[("TURNSTILE_SECRET_KEY", "  ")])
+            .turnstile_secret
+            .is_none());
+        let on = config_from(&[("TURNSTILE_SECRET_KEY", " s3cret ")]);
+        assert_eq!(on.turnstile_secret, Some(Secret::new("s3cret")));
+        assert_eq!(on.turnstile_verify_url, TURNSTILE_VERIFY_URL);
+    }
+
+    #[test]
+    fn turnstile_secret_debug_is_redacted() {
+        let cfg = config_from(&[("TURNSTILE_SECRET_KEY", "hunter2-secret")]);
+        let dumped = format!("{cfg:?}");
+        assert!(!dumped.contains("hunter2-secret"));
+        assert!(dumped.contains("[redacted]"));
+        assert_eq!(format!("{:?}", Secret::new("x")), "[redacted]");
+    }
+
+    #[test]
+    fn turnstile_hostnames_parse_trim_and_lowercase() {
+        let cfg = config_from(&[("TURNSTILE_HOSTNAMES", " A.example ,, b.example ,")]);
+        assert_eq!(cfg.turnstile_hostnames, vec!["a.example", "b.example"]);
+    }
+
+    #[test]
+    fn turnstile_hostnames_default_to_app_host_when_unset_or_empty() {
+        let host = ("APP_HOST", "Hookbox.Example.com");
+        let expected = vec!["hookbox.example.com".to_string()];
+        assert_eq!(config_from(&[host]).turnstile_hostnames, expected);
+        for blank in ["", "   ", " , ,"] {
+            let cfg = config_from(&[host, ("TURNSTILE_HOSTNAMES", blank)]);
+            assert_eq!(cfg.turnstile_hostnames, expected, "{blank:?}");
+        }
+        assert_eq!(config_from(&[]).turnstile_hostnames, vec!["localhost"]);
+    }
+
+    #[test]
+    fn turnstile_verify_url_is_overridable() {
+        let cfg = config_from(&[("TURNSTILE_VERIFY_URL", "http://127.0.0.1:9/v")]);
+        assert_eq!(cfg.turnstile_verify_url, "http://127.0.0.1:9/v");
+        for ok in [
+            "https://verify.example/v",
+            "http://localhost:9/v",
+            "http://[::1]:9/v",
+        ] {
+            let cfg = config_from(&[("TURNSTILE_VERIFY_URL", ok)]);
+            assert_eq!(cfg.turnstile_verify_url, ok);
+        }
+    }
+
+    #[test]
+    fn turnstile_verify_url_rejects_cleartext_remote_or_garbage() {
+        // The secret is POSTed here: never over plain http to a remote host.
+        for bad in [
+            "http://verify.example/v",
+            "ftp://127.0.0.1/v",
+            "not a url",
+            "",
+        ] {
+            let cfg = config_from(&[("TURNSTILE_VERIFY_URL", bad)]);
+            assert_eq!(cfg.turnstile_verify_url, TURNSTILE_VERIFY_URL, "{bad:?}");
+        }
+    }
 
     #[test]
     fn session_cookie_secure_follows_https_base_url_unless_overridden() {
