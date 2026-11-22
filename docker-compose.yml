@@ -10,7 +10,11 @@
 
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Public Turnstile site key, baked into the SPA bundle at build time.
+        VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY:-}
     environment:
       # --- durable store (one WAL SQLite file on the named volume) -----------
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/app.db}
@@ -38,6 +42,9 @@ services:
       LATENCY_MAX_MS: ${LATENCY_MAX_MS:-10000}
       RATE_LIMIT_MAX_PER_MIN: ${RATE_LIMIT_MAX_PER_MIN:-100000}
       MAX_INGEST_BODY_BYTES: ${MAX_INGEST_BODY_BYTES:-1000000}
+      # --- Cloudflare Turnstile on first session mint (empty secret = off) ---
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      TURNSTILE_HOSTNAMES: ${TURNSTILE_HOSTNAMES:-}
     ports:
       # host:container — the container always listens on 8080 (see the note
       # above); change the host side to relocate the published port.

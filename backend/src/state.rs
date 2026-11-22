@@ -5,13 +5,15 @@
 //! frozen shape from architecture.md. The scaffold (hookbox-sks.11) defines the
 //! struct and minimal placeholder components; the rule cache (sks.15), limiter
 //! (sks.20), feed hub (sks.21) and tunnel registry (sks.23) tasks flesh out the
-//! behavior of their respective modules behind these same fields.
+//! behavior of their respective modules behind these same fields. `turnstile`
+//! is the optional Cloudflare Turnstile verifier for the first anonymous mint.
 
 use std::future::Future;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
+use crate::auth::TurnstileVerifier;
 use crate::config::Config;
 use crate::feed::FeedHub;
 use crate::limiter::Limiter;
@@ -30,6 +32,9 @@ pub struct AppState {
     pub feed_hub: Arc<FeedHub>,
     /// In-process tunnel registry (`token -> TunnelConnection`).
     pub tunnels: Arc<TunnelRegistry>,
+    /// Turnstile verifier for the first mint; `None` = verification disabled
+    /// (no `TURNSTILE_SECRET_KEY`).
+    pub turnstile: Option<Arc<TurnstileVerifier>>,
 }
 
 impl AppState {
@@ -37,6 +42,7 @@ impl AppState {
     pub fn new(pool: SqlitePool, cfg: Config) -> Self {
         AppState {
             pool,
+            turnstile: TurnstileVerifier::from_config(&cfg).map(Arc::new),
             cfg: Arc::new(cfg),
             rule_cache: Arc::new(RuleCache::new()),
             limiter: Arc::new(Limiter::new()),

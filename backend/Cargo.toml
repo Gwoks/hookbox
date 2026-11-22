@@ -38,6 +38,7 @@ http-body-util = "0.1"
 dashmap = "6"
 url = "2"
 # util
+dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1"

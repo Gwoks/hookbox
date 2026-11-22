@@ -72,6 +72,12 @@ describe('signInErrorMessage', () => {
     expect(signInErrorMessage(new ApiError('network', 'Network error.', 0))).toBe(t('landing.error.network'))
   })
 
+  it('maps a failed Turnstile check to the friendly human-check copy', () => {
+    expect(signInErrorMessage(new ApiError('turnstile_failed', 'Turnstile verification failed.', 403))).toBe(
+      t('landing.error.turnstile'),
+    )
+  })
+
   it("falls back to the server's detail, then the generic copy", () => {
     expect(signInErrorMessage(new ApiError('csrf_rejected', 'Missing header.', 403))).toBe('Missing header.')
     expect(signInErrorMessage(new Error('boom'))).toBe(t('landing.error.generic'))

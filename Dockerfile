@@ -11,6 +11,9 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
+# Public Turnstile site key (empty = no widget); passed via compose build args.
+ARG VITE_TURNSTILE_SITE_KEY=
+ENV VITE_TURNSTILE_SITE_KEY=$VITE_TURNSTILE_SITE_KEY
 RUN pnpm build
 
 # --- stage 2: backend (cargo --release) --------------------------------------

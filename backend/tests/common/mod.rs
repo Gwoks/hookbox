@@ -55,17 +55,23 @@ impl TestApp {
 
     /// Like `new`, after `tweak` overrides the config.
     pub async fn with_config(tweak: impl FnOnce(&mut Config)) -> Self {
-        let pool = db::pool(":memory:")
-            .await
-            .expect("open in-memory SQLite pool");
-        db::migrate(&pool).await.expect("apply migrations");
-        let mut cfg = test_config();
-        tweak(&mut cfg);
-        let state = AppState::new(pool, cfg);
-        let app = build_app(state.clone());
+        let (app, state) = app_with_config(tweak).await;
         let secret = create_owner(&app).await;
         TestApp { app, state, secret }
     }
+}
+
+/// The app over `test_config()` + `tweak`, with NO owner minted — for
+/// configs (e.g. Turnstile enabled) under which a body-less mint fails.
+pub async fn app_with_config(tweak: impl FnOnce(&mut Config)) -> (Router, AppState) {
+    let pool = db::pool(":memory:")
+        .await
+        .expect("open in-memory SQLite pool");
+    db::migrate(&pool).await.expect("apply migrations");
+    let mut cfg = test_config();
+    tweak(&mut cfg);
+    let state = AppState::new(pool, cfg);
+    (build_app(state.clone()), state)
 }
 
 /// The session cookie name under `test_config()` (plain http, no `__Host-`).

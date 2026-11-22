@@ -13,6 +13,10 @@ use hookbox::{db, router, seed};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load a `.env` (searched upward from the cwd, so the repo-root one is
+    // found from `backend/`). Never overrides variables already set.
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -35,6 +39,17 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(
             "SESSION_COOKIE_SECURE=false on a non-localhost APP_HOST — the owner key travels \
              without Secure; only do this on a trusted plain-http network"
+        );
+    }
+
+    if cfg.turnstile_secret.is_none() {
+        tracing::warn!(
+            "TURNSTILE_SECRET_KEY is unset — first-time session mints are NOT bot-protected"
+        );
+    } else {
+        tracing::info!(
+            "Turnstile enabled for first-time session mints (hostnames: {:?})",
+            cfg.turnstile_hostnames
         );
     }
 

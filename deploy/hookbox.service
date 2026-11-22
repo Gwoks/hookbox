@@ -6,6 +6,9 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory={{APP_DIR}}/backend
+# Optional, git-ignored secrets (TURNSTILE_SECRET_KEY, …) — see .env.example.
+# The leading "-" keeps the unit startable when the file is absent.
+EnvironmentFile=-{{APP_DIR}}/.env
 ExecStart={{APP_DIR}}/backend/target/release/hookbox
 Environment="DATABASE_PATH={{APP_DIR}}/data/app.db"
 Environment="STATIC_DIR={{APP_DIR}}/dist"

@@ -5,6 +5,7 @@ use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::de::DeserializeOwned;
+use serde_json::error::Category;
 
 use super::{ApiError, ErrorCode};
 
@@ -29,6 +30,27 @@ where
             Err(rejection) => Err(json_rejection(&rejection)),
         }
     }
+}
+
+/// Parse an already-read JSON body (for handlers whose body is optional and
+/// so take `Bytes`) with `ApiJson`'s mapping: unparseable → 400
+/// `bad_request`, mistyped → 422 `validation_error`. No content-type check.
+pub fn json_from_slice<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(body).map_err(|e| {
+        let (status, code, what) = match e.classify() {
+            Category::Data => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ErrorCode::ValidationError,
+                "Failed to deserialize the JSON body into the target type",
+            ),
+            Category::Syntax | Category::Eof | Category::Io => (
+                StatusCode::BAD_REQUEST,
+                ErrorCode::BadRequest,
+                "Failed to parse the request body as JSON",
+            ),
+        };
+        ApiError::new(status, code, format!("{what}: {e}"))
+    })
 }
 
 fn json_rejection(rejection: &JsonRejection) -> ApiError {
@@ -60,6 +82,23 @@ mod tests {
         ApiJson::<Probe>::from_request(req, &())
             .await
             .map(|ApiJson(p)| p.n)
+    }
+
+    #[test]
+    fn json_from_slice_maps_like_api_json() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Probe {
+            #[allow(dead_code)]
+            n: i64,
+        }
+        assert!(json_from_slice::<Probe>(br#"{"n":1}"#).is_ok());
+        let syntax = json_from_slice::<Probe>(b"{not json").unwrap_err();
+        assert_eq!(syntax.status, StatusCode::BAD_REQUEST);
+        assert_eq!(syntax.code, "bad_request");
+        let typed = json_from_slice::<Probe>(br#"{"n":"x"}"#).unwrap_err();
+        assert_eq!(typed.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(typed.code, "validation_error");
+        assert!(typed.detail.contains("invalid type"), "{}", typed.detail);
     }
 
     #[tokio::test]

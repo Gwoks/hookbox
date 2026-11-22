@@ -17,6 +17,7 @@ pub enum ErrorCode {
     TooManyConnections,
     PayloadTooLarge,
     BadRequest,
+    TurnstileFailed,
     // mock plane (P1)
     UnknownEndpoint,
     EndpointGone,
@@ -28,7 +29,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 18] = [
+    pub const ALL: [ErrorCode; 19] = [
         ErrorCode::Unauthorized,
         ErrorCode::CsrfRejected,
         ErrorCode::InvalidKey,
@@ -40,6 +41,7 @@ impl ErrorCode {
         ErrorCode::TooManyConnections,
         ErrorCode::PayloadTooLarge,
         ErrorCode::BadRequest,
+        ErrorCode::TurnstileFailed,
         ErrorCode::UnknownEndpoint,
         ErrorCode::EndpointGone,
         ErrorCode::NoMatch,
@@ -63,6 +65,7 @@ impl ErrorCode {
             ErrorCode::TooManyConnections => "too_many_connections",
             ErrorCode::PayloadTooLarge => "payload_too_large",
             ErrorCode::BadRequest => "bad_request",
+            ErrorCode::TurnstileFailed => "turnstile_failed",
             ErrorCode::UnknownEndpoint => "unknown_endpoint",
             ErrorCode::EndpointGone => "endpoint_gone",
             ErrorCode::NoMatch => "no_match",
@@ -102,5 +105,6 @@ mod tests {
         assert_eq!(seen.len(), ErrorCode::ALL.len());
         assert_eq!(ErrorCode::EndpointGone.to_string(), "endpoint_gone");
         assert_eq!(ErrorCode::NoTunnel, "no_tunnel");
+        assert_eq!(ErrorCode::TurnstileFailed, "turnstile_failed");
     }
 }

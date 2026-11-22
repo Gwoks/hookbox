@@ -25,3 +25,8 @@ backend/target/
 
 # Local-only Claude Code skills (taste-skill, ~39 MB; install from github.com/leonxlnx/taste-skill)
 .claude/skills/design-taste-frontend/
+
+# Local secrets (Turnstile secret etc.) — never commit; see .env.example
+.env
+.env.*
+!.env.example

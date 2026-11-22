@@ -57,6 +57,9 @@ export interface MockOptions {
   /** Force the public share DETAIL route to this status (404 = "gone", not
    * terminal; anything >=500 = a real error). */
   shareDetailStatus?: number;
+  /** Force a signed-out POST /api/session (the first mint) to fail the
+   * Turnstile check (403 turnstile_failed) even with a token. */
+  turnstileFails?: boolean;
 }
 
 export interface ShareLinkStub {
@@ -67,6 +70,56 @@ export interface ShareLinkStub {
 }
 
 export const DEFAULT_SHARE_CODE = "test-share-code-0123456789abcdef";
+
+/** The token the stubbed Turnstile widget hands out (and re-issues on
+ * every reset). */
+export const TURNSTILE_TOKEN = "e2e-token";
+const TURNSTILE_SCRIPT = "https://challenges.cloudflare.com/turnstile/v0/api.js**";
+
+/** A stand-in for Cloudflare's api.js: the `window.turnstile` surface
+ * @marsidev/react-turnstile drives (render / reset / remove / getResponse /
+ * isExpired / execute). Every render and reset "solves" the challenge on the
+ * next tick with TURNSTILE_TOKEN; the script then fires the `?onload=`
+ * callback the library put in its URL. Test hooks: the last render params
+ * (`__hookboxTurnstileParams`) and the reset count (`__hookboxTurnstileResets`). */
+function turnstileStub(token: string): string {
+  return `(() => {
+  const TOKEN = ${JSON.stringify(token)};
+  const widgets = new Map();
+  let next = 0;
+  window.__hookboxTurnstileResets = 0;
+  const solve = (id) => setTimeout(() => {
+    const widget = widgets.get(id);
+    if (!widget) return;
+    widget.token = TOKEN;
+    if (typeof widget.params.callback === "function") widget.params.callback(TOKEN);
+  }, 0);
+  window.turnstile = {
+    render(_el, params) {
+      const id = "e2e-widget-" + ++next;
+      widgets.set(id, { params, token: "" });
+      window.__hookboxTurnstileParams = { sitekey: params.sitekey, action: params.action, appearance: params.appearance };
+      solve(id);
+      return id;
+    },
+    reset(id) {
+      const widget = widgets.get(id);
+      if (!widget) return;
+      window.__hookboxTurnstileResets += 1;
+      widget.token = "";
+      solve(id);
+    },
+    remove(id) { widgets.delete(id); },
+    getResponse(id) { return widgets.get(id)?.token; },
+    isExpired() { return false; },
+    execute() {},
+    ready(cb) { cb(); },
+  };
+  const src = document.currentScript && document.currentScript.src;
+  const onload = src ? new URL(src).searchParams.get("onload") : null;
+  if (onload && typeof window[onload] === "function") window[onload]();
+})();`;
+}
 
 interface EndpointDetail {
   token: string;
@@ -248,6 +301,8 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
     rotations: 0,
     /** Endpoints minted by POST /api/endpoints. */
     created: [] as EndpointDetail[],
+    /** `turnstile_token` of every signed-out POST /api/session (null = none sent). */
+    mintTokens: [] as (string | null)[],
   };
 
   // Seed the legacy localStorage identity ONCE per tab (sessionStorage
@@ -331,6 +386,11 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
       body: JSON.stringify({ error: code, detail: det }),
     });
 
+  // Never load the real Cloudflare script: serve the always-solving stub.
+  await page.route(TURNSTILE_SCRIPT, (route) =>
+    route.fulfill({ status: 200, contentType: "text/javascript", body: turnstileStub(TURNSTILE_TOKEN) }),
+  );
+
   await page.route("**/api/**", async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -346,8 +406,19 @@ export async function installMockBackend(page: Page, opts: MockOptions = {}) {
       }
 
       // POST /api/session — mint (201) or return the current owner (200).
+      // A signed-out mint must carry a Turnstile token (the server runs
+      // the check only after its cookie early-return); signed-in callers
+      // get 200 regardless.
       if (path === "/api/session" && method === "POST") {
         const existed = store.authed;
+        if (!existed) {
+          const body = (req.postDataJSON() ?? {}) as { turnstile_token?: unknown };
+          const token = typeof body.turnstile_token === "string" ? body.turnstile_token : null;
+          store.mintTokens.push(token);
+          if (!token || opts.turnstileFails) {
+            return err(route, 403, "turnstile_failed", "Turnstile verification failed.");
+          }
+        }
         store.authed = true;
         return json(route, existed ? 200 : 201, sessionSummary());
       }

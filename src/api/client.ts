@@ -40,6 +40,7 @@ import {
   type MockRuleCreate,
   type MockRulePatch,
   type RestoreSession,
+  type SessionCreate,
   type ShareLinkCreate,
 } from './schemas'
 
@@ -104,10 +105,14 @@ export const api = {
     return request(apiPath('session'), { noBounce: true, schema: sessionSummarySchema, signal: opts?.signal })
   },
   /** Mint a new anonymous owner + primary endpoint (or return the current
-   * one when a valid cookie is already present). Sets the cookie. */
-  createSession(opts?: Opts) {
+   * one when a valid cookie is already present). Sets the cookie. When the
+   * server requires a human check, `turnstileToken` (single-use) rides as
+   * `{ turnstile_token }`; without one the request has no body at all. */
+  createSession(turnstileToken?: string, opts?: Opts) {
+    const body: SessionCreate | undefined = turnstileToken ? { turnstile_token: turnstileToken } : undefined
     return request(apiPath('session'), {
       method: 'POST',
+      body,
       noBounce: true,
       schema: sessionSummarySchema,
       signal: opts?.signal,

@@ -23,7 +23,7 @@ still accepted on `/api` (scripts) and is the only credential the tunnel accepts
 
 | Route | Purpose |
 |---|---|
-| `POST /api/session` | mint owner + primary endpoint, set cookie (200 + existing summary if already signed in) |
+| `POST /api/session` | mint owner + primary endpoint, set cookie (200 + existing summary if already signed in); a new mint requires `{turnstile_token}` when Turnstile is configured |
 | `POST /api/session/restore {key}` | restore in another browser (does not rotate) |
 | `GET /api/session` | current owner summary |
 | `POST /api/session/key` | reveal the key (recovery / CLI), `no-store` |
@@ -64,3 +64,12 @@ Browsers from the email era are migrated silently: the SPA restores the legacy
 - Follow-ups filed from the security review: full-origin comparison for the feed
   Origin check, bounded anonymous-owner growth + stale-owner sweep, tunnel CLI key
   via env/stdin and refusing remote `ws://`, per-device revocable sessions.
+- **Turnstile on mint (hookbox-bqq).** A *new* owner mint verifies a Cloudflare
+  Turnstile token (action `session_mint`, hostname allowlist
+  `TURNSTILE_HOSTNAMES`, default `APP_HOST`) server-side via siteverify and
+  fails closed with `403 turnstile_failed`. Already-signed-in callers, restore,
+  endpoint creation and Bearer calls are not challenged. Unset
+  `TURNSTILE_SECRET_KEY` disables it (boot warning). A future strict SPA CSP
+  (`hookbox-19v`) must allow `https://challenges.cloudflare.com` in
+  `script-src` and `frame-src`. This mitigates, but does not replace, a
+  stale-owner sweep.
